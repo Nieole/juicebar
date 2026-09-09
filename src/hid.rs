@@ -14,9 +14,11 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_Device_Interface_ListW, CR_SUCCESS,
 };
 use windows::Win32::Devices::HumanInterfaceDevice::{
-    HIDD_ATTRIBUTES, HIDP_CAPS, HidD_FreePreparsedData, HidD_GetAttributes, HidD_GetFeature,
-    HidD_GetHidGuid, HidD_GetManufacturerString, HidD_GetPreparsedData, HidD_GetProductString,
-    HidD_SetFeature, HidP_GetCaps,
+    HIDD_ATTRIBUTES, HIDP_BUTTON_CAPS, HIDP_CAPS, HIDP_REPORT_TYPE, HIDP_VALUE_CAPS,
+    HidD_FreePreparsedData, HidD_GetAttributes, HidD_GetFeature, HidD_GetHidGuid,
+    HidD_GetManufacturerString, HidD_GetPreparsedData, HidD_GetProductString, HidD_SetFeature,
+    HidP_Feature, HidP_GetButtonCaps, HidP_GetCaps, HidP_GetValueCaps, HidP_Input, HidP_Output,
+    PHIDP_PREPARSED_DATA,
 };
 use windows::Win32::Foundation::{CloseHandle, ERROR_IO_PENDING, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Storage::FileSystem::{
@@ -178,6 +180,106 @@ pub fn enumerate() -> Result<Vec<HidInfo>> {
         .iter()
         .filter_map(|p| describe(p))
         .collect())
+}
+
+/// 一条 collection 在三个报文方向上各自**真正声明**了哪些 Report ID。
+///
+/// 加这个能力是为了回答一个很具体的问题：`HidD_GetFeature` / `HidD_SetFeature` 把缓冲区第 0
+/// 字节当作「我要哪一份 report」的入参。如果传进去的编号在报文描述符里根本不存在，驱动返回
+/// 什么是没有保证的——它可能失败，也可能把上一次的缓冲区残留原样交回来，而后者看起来和一份
+/// 正常回包毫无区别。要排除这种情况，只能回到 preparsed data 里把真实编号枚举出来。
+///
+/// **这一步不向设备发任何字节**，只读本地已经解析好的报文描述符。
+///
+/// 空 `Vec` 表示该方向没有报文；`[0]` 表示该方向是不带编号的报文（描述符里没有 Report ID
+/// 项，此时缓冲区第 0 字节必须填 0）。
+#[derive(Debug, Default, Clone)]
+pub struct ReportIds {
+    pub input: Vec<u8>,
+    pub output: Vec<u8>,
+    pub feature: Vec<u8>,
+}
+
+/// 枚举某个方向上出现过的 Report ID。
+///
+/// 描述符里的编号同时散落在 value caps 和 button caps 两张表里，两边都要扫，否则会漏掉
+/// 只由按钮项构成的 report。
+unsafe fn ids_for(
+    preparsed: PHIDP_PREPARSED_DATA,
+    report_type: HIDP_REPORT_TYPE,
+    n_value: u16,
+    n_button: u16,
+) -> Vec<u8> {
+    let mut ids: Vec<u8> = Vec::new();
+
+    if n_value > 0 {
+        let mut caps = vec![HIDP_VALUE_CAPS::default(); n_value as usize];
+        let mut len = n_value;
+        let status =
+            unsafe { HidP_GetValueCaps(report_type, caps.as_mut_ptr(), &mut len, preparsed) };
+        if status.is_ok() {
+            ids.extend(caps[..len as usize].iter().map(|c| c.ReportID));
+        }
+    }
+
+    if n_button > 0 {
+        let mut caps = vec![HIDP_BUTTON_CAPS::default(); n_button as usize];
+        let mut len = n_button;
+        let status =
+            unsafe { HidP_GetButtonCaps(report_type, caps.as_mut_ptr(), &mut len, preparsed) };
+        if status.is_ok() {
+            ids.extend(caps[..len as usize].iter().map(|c| c.ReportID));
+        }
+    }
+
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// 读出一条 collection 声明的全部 Report ID。纯本地，不碰设备。
+pub fn report_ids(info: &HidInfo) -> Result<ReportIds> {
+    let h = open_for_query(&info.path)?;
+    let out = (|| -> Result<ReportIds> {
+        unsafe {
+            let mut preparsed = Default::default();
+            if !HidD_GetPreparsedData(h, &mut preparsed) {
+                bail!("HidD_GetPreparsedData 失败: {}", std::io::Error::last_os_error());
+            }
+            let mut caps = HIDP_CAPS::default();
+            let status = HidP_GetCaps(preparsed, &mut caps);
+            if status.is_err() {
+                let _ = HidD_FreePreparsedData(preparsed);
+                bail!("HidP_GetCaps 失败: {status:?}");
+            }
+            let out = ReportIds {
+                input: ids_for(
+                    preparsed,
+                    HidP_Input,
+                    caps.NumberInputValueCaps,
+                    caps.NumberInputButtonCaps,
+                ),
+                output: ids_for(
+                    preparsed,
+                    HidP_Output,
+                    caps.NumberOutputValueCaps,
+                    caps.NumberOutputButtonCaps,
+                ),
+                feature: ids_for(
+                    preparsed,
+                    HidP_Feature,
+                    caps.NumberFeatureValueCaps,
+                    caps.NumberFeatureButtonCaps,
+                ),
+            };
+            let _ = HidD_FreePreparsedData(preparsed);
+            Ok(out)
+        }
+    })();
+    unsafe {
+        let _ = CloseHandle(h);
+    }
+    out
 }
 
 /// 一条打开着的、可读写的 HID collection。

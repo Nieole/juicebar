@@ -31,6 +31,20 @@ enum Command {
         all: bool,
     },
 
+    /// 打印一条 collection 声明的 Report ID。纯本地，不向设备发任何字节。
+    Caps {
+        #[arg(long, value_parser = parse_hex_u16)]
+        vid: u16,
+        #[arg(long, value_parser = parse_hex_u16)]
+        pid: u16,
+        /// 缩小到某个 usage page，如 ffff
+        #[arg(long, value_parser = parse_hex_u16)]
+        usage_page: Option<u16>,
+        /// 缩小到某个 usage，如 0002
+        #[arg(long, value_parser = parse_hex_u16)]
+        usage: Option<u16>,
+    },
+
     /// 向指定 collection 发一帧原始数据并打印回包。
     ///
     /// 只发已知含义的读命令——命令表里混着会改设备状态的命令，盲试不可逆。
@@ -62,12 +76,21 @@ enum Command {
         /// 走 feature 报文而不是 output 报文。VGN 键盘的 vendor 通道只有 feature。
         #[arg(long)]
         feature: bool,
+        /// 只 GetFeature、不 SetFeature。用来判断回读内容到底受不受所发命令影响。
+        #[arg(long)]
+        no_write: bool,
     },
 }
 
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Scan { all } => cli::scan::run(all),
+        Command::Caps {
+            vid,
+            pid,
+            usage_page,
+            usage,
+        } => cli::caps::run(vid, pid, usage_page, usage),
         Command::Probe {
             vid,
             pid,
@@ -79,8 +102,10 @@ fn main() -> Result<()> {
             timeout,
             reads,
             feature,
+            no_write,
         } => cli::probe::run(
             vid, pid, usage_page, usage, report_id, &bytes, vgn_crc, timeout, reads, feature,
+            no_write,
         ),
     }
 }

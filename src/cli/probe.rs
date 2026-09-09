@@ -65,6 +65,7 @@ pub fn run(
     timeout_ms: u32,
     reads: u32,
     feature: bool,
+    no_write: bool,
 ) -> Result<()> {
     let candidates: Vec<hid::HidInfo> = hid::enumerate()?
         .into_iter()
@@ -104,14 +105,23 @@ pub fn run(
         "方式  {}",
         if feature { "feature 报文" } else { "output 报文 + input 回包" }
     );
-    println!("发送  [id {report_id:02X}] {}", hex_dump(&frame));
+    if no_write {
+        println!("发送  （跳过，--no-write）");
+    } else {
+        println!("发送  [id {report_id:02X}] {}", hex_dump(&frame));
+    }
 
     if feature {
         let handle = hid::HidHandle::open_sync(&target)?;
-        handle.set_feature(report_id, &frame)?;
+        if !no_write {
+            handle.set_feature(report_id, &frame)?;
+        }
         let buf = handle.get_feature(report_id)?;
         println!("回读  {}", hex_dump(&buf));
     } else {
+        if no_write {
+            bail!("--no-write 只对 --feature 有意义：output 通道不发就没有回包可读");
+        }
         let handle = hid::HidHandle::open(&target)?;
         handle.write_report(report_id, &frame)?;
         for i in 0..reads.max(1) {
