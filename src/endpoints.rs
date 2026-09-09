@@ -93,6 +93,20 @@ impl EndpointKind {
             Self::Ble => "bluetooth",
         }
     }
+
+    /// 块名反查种类，认不出就是 `None`。[`Self::config_key`] 的另一面。
+    ///
+    /// 与它住在一起，理由与"按名字取出来 / 把名字写回去"那两个同一条：这三个字符串只该有
+    /// 一处出处。而这一面**不自己写一个 `match`**，是从 [`Self::PRIORITY`] 上比 `config_key`
+    /// 比出来的——那样正查改一个字、反查跟着改，两面之间没有能漂开的缝。
+    ///
+    /// 谁需要它：状态文件（`crate::state`）把种类按块名写进磁盘，读回来要认回去。配置那一侧
+    /// 用不上它——TOML 的块名在那边是由 serde 按字段名认的。
+    pub fn from_config_key(key: &str) -> Option<Self> {
+        Self::PRIORITY
+            .into_iter()
+            .find(|kind| kind.config_key() == key)
+    }
 }
 
 impl std::fmt::Display for EndpointKind {

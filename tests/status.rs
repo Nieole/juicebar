@@ -23,8 +23,10 @@ use juicebar::clock::Timestamp;
 use juicebar::config::Config;
 use juicebar::endpoints::{EndpointKind, EndpointReading};
 use juicebar::primary::{CandidateReading, PrimaryRule};
+use juicebar::sources::Reading;
 use juicebar::sources::level::{Level, LevelSource};
 use juicebar::staleness::{Freshness, Staleness};
+use juicebar::state::{LastKnown, Provenance};
 
 /// 一份读数在 [`NOW`] 这一刻印成的那一行。
 ///
@@ -35,10 +37,20 @@ use juicebar::staleness::{Freshness, Staleness};
 /// 不是"两个百分比里印哪一个"——后者在 `tests/level.rs` 里单独断言。要按 Device 指定
 /// 来源的用例走下面那个 [`render`]。
 fn line_of(reading: &EndpointReading) -> String {
+    line_of_taken(reading, Provenance::JustRead)
+}
+
+/// 同一份读数，但它是设备失联之后**从状态文件里拿出来的**上次已知值。
+fn last_known_line_of(reading: &EndpointReading) -> String {
+    line_of_taken(reading, Provenance::LastKnown)
+}
+
+fn line_of_taken(reading: &EndpointReading, provenance: Provenance) -> String {
     status::render(
         reading,
         LevelSource::Auto,
         &Staleness::assess(reading, &default_general(), NOW),
+        provenance,
     )
 }
 
@@ -464,6 +476,211 @@ fn the_status_line_marks_a_stale_reading_apart_from_a_fresh_one() {
     assert!(line.contains("2 小时前"), "「多久前」也照印：{line}");
 }
 
+/// 失联的 Device **仍然拿得出上次已知值**，重启不等于失忆。
+///
+/// 票面第 2 条的前一半（后一半"标注成陈旧"在下面那条）。这是这张票的由来：鼠标收进抽屉、
+/// 键盘关了机，这一趟一条 Endpoint 都读不到，而 `status` 刚启动内存里什么都没有——那个
+/// "上次是多少电"只可能来自状态文件。
+#[test]
+fn a_lost_device_still_shows_its_last_known_value() {
+    let device = mouse_with_both_endpoints();
+    // 两条 Endpoint 都在场，回包脚本都空着——相当于两条都超时。
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [
+            (EndpointKind::Wired, vec![]),
+            (EndpointKind::Dongle24G, vec![]),
+        ],
+    );
+    let general = default_general();
+
+    // 手上一份历史值都没有时，仍然是"读不到"加上原因——那句诊断没有被历史值挤掉。
+    assert!(
+        status::read_or_last_known(
+            &device,
+            &endpoints,
+            &mut LastKnown::default(),
+            &general,
+            NOW
+        )
+        .is_err(),
+        "没有历史值就该照旧报失联"
+    );
+
+    // 半小时前读到过一次。
+    let previous = EndpointReading::from_hid(
+        EndpointKind::Wired,
+        Reading {
+            reported_level: 44,
+            charging: Some(true),
+            voltage_mv: Some(3_950),
+        },
+        NOW.minus_secs(1_800),
+    );
+    let mut last_known = LastKnown::default();
+    last_known.record(&device.id, &previous, NOW.minus_secs(1_800));
+
+    let (reading, provenance) =
+        status::read_or_last_known(&device, &endpoints, &mut last_known, &general, NOW)
+            .expect("退得到上次已知值");
+
+    assert_eq!(reading, previous, "拿出来的就是上次那一份");
+    assert_eq!(
+        provenance,
+        Provenance::LastKnown,
+        "并且说得清它是历史值，不是这一趟读到的"
+    );
+}
+
+/// 这一趟读得到的时候，**状态文件里那一份不许插队**。
+///
+/// 历史值只是失联时的退路。让它参与竞争，一份存了半天的读数就可能盖掉当场问出来的那个数
+/// ——而当场问出来的那个才是现状，这条链路上其余每一处（Endpoint 优先级、`Ble` 排最后）
+/// 守的都是同一件事。
+#[test]
+fn a_reading_taken_this_run_wins_over_the_one_in_the_state_file() {
+    let device = mouse_with_both_endpoints();
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [(EndpointKind::Wired, vec![MOUSE_RESTING_FULL.to_vec()])],
+    );
+
+    let mut last_known = LastKnown::default();
+    last_known.record(
+        &device.id,
+        &EndpointReading::from_hid(
+            EndpointKind::Wired,
+            Reading {
+                reported_level: 44,
+                charging: Some(true),
+                voltage_mv: Some(3_950),
+            },
+            NOW.minus_secs(1_800),
+        ),
+        NOW.minus_secs(1_800),
+    );
+
+    let (reading, provenance) = status::read_or_last_known(
+        &device,
+        &endpoints,
+        &mut last_known,
+        &default_general(),
+        NOW,
+    )
+    .expect("Wired 这一趟读得到");
+
+    assert_eq!(
+        reading.reading.reported_level, 100,
+        "印的是这一趟读到的那个数，不是文件里那个 44"
+    );
+    assert_eq!(provenance, Provenance::JustRead);
+}
+
+/// 每一次成功的读数**进状态文件**。
+///
+/// 票面第 1 条。写盘这件事与取数住在一处（`read_or_last_known`）而不是留在 `run` 里：留在
+/// `run` 里它就只能靠读代码来确认，而票 06 的 review 正是在 `run` 里抓到过一个用例一条都
+/// 碰不到的真 bug。
+#[test]
+fn a_successful_reading_is_written_to_the_state_file() {
+    let device = mouse_with_both_endpoints();
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [(EndpointKind::Wired, vec![MOUSE_CHARGING.to_vec()])],
+    );
+    let general = default_general();
+    let mut last_known = LastKnown::default();
+
+    let (reading, _) =
+        status::read_or_last_known(&device, &endpoints, &mut last_known, &general, NOW)
+            .expect("Wired 这一趟读得到");
+
+    assert_eq!(
+        last_known.reading_for(&device.id, &general, NOW),
+        Some(reading),
+        "这一趟读到的那一份该记下来了"
+    );
+}
+
+/// 退到上次已知值的那一趟**一个字都不写**——历史值不会因为被读了一次就续命。
+///
+/// 把拿出来的历史值再写一遍是最自然的写法（"每一趟都把当前状态存下来"），而它会把写盘时刻
+/// 刷成现在，于是那条记录永远到不了 `very_stale_after`：一只收进抽屉半年的鼠标每天被看一眼
+/// 就每天年轻一天。"这个历史值必须会过期"这句话在那种实现下永久落空,而且没有任何症状。
+#[test]
+fn falling_back_to_the_last_known_value_does_not_extend_its_life() {
+    let device = mouse_with_both_endpoints();
+    // 两条 Endpoint 都在场,回包脚本都空着——相当于两条都超时。
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [
+            (EndpointKind::Wired, vec![]),
+            (EndpointKind::Dongle24G, vec![]),
+        ],
+    );
+    let general = default_general();
+
+    // 差一点就到期的一条:缺省 very_stale_after 是一天。
+    let almost_expired = NOW.minus_secs(86_000);
+    let mut last_known = LastKnown::default();
+    last_known.record(
+        &device.id,
+        &EndpointReading::from_hid(
+            EndpointKind::Wired,
+            Reading {
+                reported_level: 44,
+                charging: Some(true),
+                voltage_mv: Some(3_950),
+            },
+            almost_expired,
+        ),
+        almost_expired,
+    );
+    let before = last_known.to_toml().expect("序列化得动");
+
+    status::read_or_last_known(&device, &endpoints, &mut last_known, &general, NOW)
+        .expect("退得到上次已知值");
+
+    assert_eq!(
+        last_known.to_toml().expect("序列化得动"),
+        before,
+        "失联那一趟不该动状态文件里的任何一个字"
+    );
+}
+
+/// 失联时拿出来的上次已知值**一律标注成陈旧**，哪怕它是十秒前取的。
+///
+/// 票面第 2 条。两条断言的是同一份读数：新鲜阈值说它新鲜（缺省 Wired 阈值 90 秒），
+/// 而它此刻是历史值——设备不在了，这个数就不是现状，无论它多新。不标注就正好在最危险的
+/// 方向上撒谎：一个十秒前的 95% 和一个此刻读到的 95% 长得一模一样，而前者说的是一只已经
+/// 收进抽屉的鼠标。
+#[test]
+fn a_last_known_reading_is_marked_stale_even_when_it_was_taken_seconds_ago() {
+    let reading = EndpointReading::from_hid(
+        EndpointKind::Wired,
+        Reading {
+            reported_level: 95,
+            charging: Some(true),
+            voltage_mv: Some(4235),
+        },
+        NOW.minus_secs(10),
+    );
+
+    let live = line_of(&reading);
+    assert!(
+        !live.contains("陈旧"),
+        "当场读到的十秒前读数是新鲜的：{live}"
+    );
+
+    let history = last_known_line_of(&reading);
+    assert!(history.contains("95%"), "历史值照常显示百分比：{history}");
+    assert!(history.contains("已陈旧"), "但一律标注成陈旧：{history}");
+    assert!(
+        history.contains("上次已知值"),
+        "并且说清它是上次已知值，不是这一趟读到的：{history}"
+    );
+}
+
 /// 一台**没有更新时间戳**的蓝牙设备不该看着像刚问出来的。
 ///
 /// `bluetooth.rs` 的原话：`age_secs` 为 `None` 是"这台设备根本没有更新时间戳"。它和
@@ -599,6 +816,7 @@ fn the_ble_age_is_the_number_windows_reported_not_one_recomputed_from_the_clock(
         &reading,
         LevelSource::Auto,
         &Staleness::assess(&reading, &default_general(), later),
+        Provenance::JustRead,
     );
 
     assert!(
@@ -782,6 +1000,7 @@ fn render(device: &juicebar::config::Device, endpoints: &FakeEndpoints) -> Strin
         &reading,
         device.level_source,
         &Staleness::assess(&reading, &default_general(), NOW),
+        Provenance::JustRead,
     )
 }
 

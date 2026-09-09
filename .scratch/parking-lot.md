@@ -616,6 +616,511 @@ Primary 选择遍历的是 `config.devices`，所以未登记的 BLE 设备**天
 那也正是该有的行为（一台没人登记的耳机不该抢走托盘图标）。翻案是把生成那几行的函数
 （`status::unregistered_ble_lines`，纯函数）挪进主循环，关在本票与票 09 之间。
 
+### Q26 —— 取得时刻加成 `EndpointReading.taken_at: Option<Timestamp>`（**票 08 与票 09 都要站在这上面**）
+
+**From:** 票 06（Clock 接缝与陈旧判定）
+
+**票面点名要记的那处岔路。** `Reading` 和 `EndpointReading` 两处文档注释都写着"取得时刻由
+Clock 接缝那一步（票 06）补上"，但加在哪、叫什么、什么类型留给了本票。
+
+**取的路**：`EndpointReading` 多一个字段 `taken_at: Option<Timestamp>`，`Timestamp` 是
+`src/clock.rs` 里一个包着 **Unix 纪元秒**的 newtype（`from_unix_secs` / `as_unix_secs`，
+`const fn`，`Copy` + `Ord`）。两个构造器各多收一个 `now: Timestamp`
+（`from_hid(endpoint, reading, now)`、`from_ble_cache(cached, now)`），`trait Endpoints` 的
+`read_ble` 也跟着多收一个（只有那一级要它，理由见下），`cli::status::read` 多收一个
+`&dyn Clock` 并在整条链路上**只问一次**"现在几点"。
+
+**语义上最要紧的一句：`taken_at` 是"这个数描述的那一刻"，不是"我们跑这次查询的那一刻"。**
+两条 HID 当场往返，两者重合；`Ble` 记的是 `now - cache_age_secs`。按查询时刻记的话 `Ble`
+永远陈旧不了，而 `CONTEXT.md` 偏偏说「只有 Ble 的 Reading 会陈旧到有实际影响」——那句定义会
+当场落空。`cache_age_secs` **原样留着**（Windows 给的原始数字，来源那一段印它），
+`taken_at` 是由它换算出来的规范化字段：**来源那一段印的仍是 `cache_age_secs` 本身**
+（Q21 给本票的原话：Ble 的"多久以前"不经过 Clock），只有两条 HID 那一格的秒数由取得时刻与
+当下相减得来——它们没有"缓存年龄"这回事。
+
+`Option` 而不是裸 `Timestamp`：那台 BLE 设备没有更新时间戳时（`bluetooth.rs` 的原话）就是
+说不出来。拿 `now` 顶上去会让它看着像当场读的——正是本票要防的假的安全感。**`None` 不是
+"新鲜"的同义词**：陈旧判定把这一种判成 `Stale`（见 Q29 末段）。
+
+**另一条路**：不存字段，每次由 `endpoint` + `cache_age_secs` + 当下**推**出来。改动面小得多
+（`read` 不用收时钟，15 处用例一行不动）。**为什么没走**：票 08 要把读数写盘、重启之后读回来
+比较，那时 `cache_age_secs` 相对新的"当下"已经没有意义，推出来的时刻会让一份存了三天的读数
+看着像刚取的。取得时刻必须**存**，不能算。
+
+**推荐**：保持现状。**给票 08**：写盘就写 `as_unix_secs()`，读回来 `from_unix_secs()`，
+`Option` 的两种情形都要能落盘（缺字段 = `None`）。**给票 09**：筛"只有新鲜且可信的参与
+lowest 比较"用 `Staleness::freshness == Freshness::Fresh`，别自己比时刻——本票**故意没有**
+预先加一个 `is_fresh()` 便利方法，因为本票一处都用不上它，而一个没人调的 pub 方法是替下一张
+票做决定。翻案（改名、改类型、改成推导）关在这三张票之间，代价是改一个字段加两个构造器。
+
+**波及面（合并时会撞上）**：`tests/status.rs` 里 17 处 `status::read(…)` 各多一个 `NOW`
+参数，`tests/endpoints.rs` 里 2 处 `from_ble_cache` 各多一个 `NOW`，`tests/common/mod.rs` 的
+假枚举 `read_ble` 跟着改签名，共用的 `NOW` 与 `default_general()` 也落在那个文件里。
+**都是机械改动**，但票 03 若也动了 `tests/status.rs`，那 17 行会逐行冲突。
+
+### Q27 —— Clock 接缝只在链路顶上被问一次，往下只传 `Timestamp`
+
+**From:** 票 06（Clock 接缝与陈旧判定）
+
+**取的路**：`trait Clock { fn now(&self) -> Timestamp; }`，实现 `SystemClock`（一次
+`GetSystemTimeAsFileTime`）。**接缝只出现在 `cli::status::run` 里**——一个 Device 问一次
+时钟，那一个"当下"被取数（`read(device, endpoints, now)`）与陈旧判定
+（`Staleness::assess(&reading, general, now)`）共用。往下全是收 `Timestamp` 的纯函数。
+
+同一条决定的另一半：`render` 的签名由 `render(&EndpointReading)` 变成
+`render(&EndpointReading, &Staleness)`。**判定在上游做完，`render` 退回成纯排版**：不问配置、
+不问时钟。票 09 的 Primary 选择要的也是 `Staleness` 这个值，而不是一行字。
+
+`read_ble` 为什么也要收 `now`：接缝这一侧是唯一知道那份缓存有多旧的地方（Q21 的原话），
+而"多旧"换成绝对时刻就得有个当下。两条 HID 的取得时刻由取数那一步盖，所以 `open_transport`
+不收——这个不对称与 Q21 记的那个同源。
+
+**另一条路（先走了、被 code review 打回来的那条）**：让 `read` 收 `&dyn Clock`，与仓库另两条
+接缝（`Transport`、`Endpoints`）的 `&dyn` 用法齐平，用例注入一个 `FakeClock`。**它是错的，
+不只是啰嗦**：`read` 内部问一次得到 now₁，`run` 回头为了判定又问一次得到 now₂，而几条
+Endpoint 依次试下来会花掉真实时间——spec 记着鼠标超时 3000 ms，两条 HID 各超时一次再落到
+Ble，那一行印出来就不是"0 秒前"而是"6 秒前"，一份当场读到的读数凭空老了六秒。假时钟不走表，
+**两条轴的 review 各自独立抓到了这一处**，而用例一条都没红。
+
+**推荐**：保持现状。一个"当下"是一次取数周期的属性，把它当值传下去，多问一次这件事就**表示
+不出来**。代价是没有任何用例注入 `Clock`——`FakeClock` 因此删掉了，用例直接喂字面量
+`common::NOW`。那不是覆盖上的缺口而是更硬的保证：接缝之下的代码**碰不到系统时钟**，连一个
+假的都不需要。trait 留着是因为常驻轮询（第 7、8 步）与票 08 的持久化都要拿着一个时钟跨周期
+用，那时需要的正是一个能注入的对象。翻案是把 `now: Timestamp` 换回 `&dyn Clock` 并让
+`run` 只问一次，关在本票内。
+
+### Q28 —— "只显示日期"按 UTC 算，不收日期库、不问本机时区
+
+**From:** 票 06（Clock 接缝与陈旧判定）
+
+**取的路**：`Timestamp::utc_date_text()`，Howard Hinnant 的 `civil_from_days` 十来行整数
+运算，印 `YYYY-MM-DD`。**不收 `chrono` / `time`**，也不走 `windows` crate 已有的
+`GetLocalTime` / `SystemTimeToTzSpecificLocalTime`。
+
+**另一条路（两条）**：收一个日期库；或者用 Win32 换成**本机时区**的日期。后者是更贴用户的
+那一个——日期是日历上的事，UTC+8 的人在本地 00:30 会看到"昨天"。
+
+**推荐**：保持现状，但这一条是三条里最该被翻的。理由是这个日期**只在读数超过
+`very_stale_after`（缺省一天）时才印得出来**，那时它要传达的是"这个数不是现在的"，差一天
+相对于那个信号是噪声；换来的是它是纯函数，用例断言得到确切字符串（`1970-01-01`、
+`2026-03-15`），不问系统时区、不多一个依赖。托盘那一步若要把日期印在气泡里给人读，
+那时本地时区就值那点代价了。翻案是换掉一个函数体（外加一条"用例改成断言形状而不是断言
+确切日期"的连带），关在本票内。
+
+### Q29 —— 两条 HID 没有 VeryStale 这一档，且"说不出取得时刻"落在 Stale
+
+**From:** 票 06（Clock 接缝与陈旧判定）
+
+**取的路**：`StalenessPolicy { stale_after_secs, very_stale_after_secs: Option<u64> }`。
+HID 的 `very_stale_after_secs` 是 `None`——**那一档在两条 HID 上不存在**。票面只给了 HID
+一个阈值（3 × 轮询间隔），`config.example.toml` 也写明那两个配置项只对 Ble 生效。
+
+**另一条路**：给 HID 也编一个第二档（比如 30 × 间隔）。三级 Endpoint 的呈现于是齐整，
+而票 08 那份持久化读数（重启后读回来的有线读数可能是几天前的）也会被同一条规则挡住。
+
+**推荐**：保持现状。拿 3 × 间隔当第二档是不能的：一份 91 秒前、间隔 30 秒的有线读数会立刻
+只剩一个日期，而它其实是一分半钟前当场问出来的。另编一个倍数就是**引入一个票面和配置都
+没有的数**。**给票 08**：它的验收框里"超过 `very_stale_after` 的持久化读数被丢弃"是在
+读回来那一步丢，不是在这里判——所以旧到那个地步的 HID 读数根本活不到 `render`，这一档
+在 HID 上确实用不着。翻案是给 `from_poll_interval` 填一个 `Some(...)`，一行。
+
+（`render` 里那个 `match` 起初写了 `_` 通配分支，等于让上面这句"波及一个 match"的承诺落空
+——加一档时编译器不会指过来。code review 的标准轴抓到了，现在三档各写一支。）
+
+**同一处的第二个旋钮**：`verdict(None, now)` 交 `Stale`，而不是 `Fresh`、也不是第四个变体。
+`Fresh` 是明确的说谎（替设备编一个它没给的时间戳）；第四个变体（`Undated`？）站得住，
+但 `VeryStale` 那一档的表现是"印日期"，而这一种恰恰**连日期都说不出来**，所以它天然属于
+"照印数字 + 明确标注"那一档。翻案是加一个变体，波及 `render` 的一个 `match`。
+
+### Q30 —— `stale_after` 注释里的"标灰"在 CLI 里落成一句文字标注
+
+**From:** 票 06（Clock 接缝与陈旧判定）
+
+**取的路**：`config.example.toml` 写的是"`stale_after = 3600` # 超过标灰"。`status` 是一行
+纯文本，于是"标灰"落成末尾一句 `已陈旧`（第二档 `已陈旧，不显示百分比`，多的半句交代那个
+百分比去哪了）。**没有引入 ANSI 颜色。**
+
+**另一条路**：用 ANSI 转义真的把那一段变暗。视觉上更接近注释里的原话，也更不占宽度。
+
+**推荐**：保持现状。`status` 的输出会被重定向、会被别的东西 grep，嵌一串转义码是在为一个
+终端的样子牺牲输出的可用性；而"标灰"那句话本来是对着**托盘图标**说的（那是它真正的归宿），
+不是对着这一行。措辞按 `CONTEXT.md` 的 Stale 走，两档共用同一个"陈旧"——那一条的 _Avoid_
+正是"过期、失效"。翻案是改一个返回 `&'static str` 的函数，关在本票内。
+
+### Q36 —— 状态文件是 `state.toml`，放在配置文件旁边，一个 Device 一条记录，外加一格 Primary 记忆（**票 07 与票 11 都要读它**）
+
+**From:** 票 08（上次已知值持久化）
+
+**票面点名要记的那处岔路。**票面只说"`%APPDATA%` 下的状态文件"，格式、位置、粒度三件都留给
+本票。
+
+**取的路**：`toml` + serde（**不是 `toml_edit`**），文件名 `state.toml`，位置是
+`cli::state_path_beside_config(&已解析的配置路径)` —— 也就是缺省
+`%APPDATA%\juicebar\state.toml`，与 `config.toml` 同一个目录。文件长这样：
+
+```toml
+last_primary = "dragonfly3"
+
+[last_known.dragonfly3]
+endpoint = "wired"
+reported_level = 95
+charging = true
+voltage_mv = 4235
+taken_at = 1774396800
+stored_at = 1774396800
+
+[last_known."my mouse.2"]
+endpoint = "bluetooth"
+reported_level = 50
+stored_at = 1774396800
+```
+
+一条记录六个字段就是全部：`endpoint` 写的是 `EndpointKind::config_key()`（`wired` /
+`wireless_24g` / `bluetooth`，反查是 `EndpointKind::from_config_key`，它从 `PRIORITY` 那张
+全变体清单上比 `config_key` 比出来，所以正查反查不会漂），`taken_at` / `stored_at` 是
+`Timestamp::as_unix_secs()` 的十进制整数，`charging` / `voltage_mv` / `taken_at` 三项
+**缺席即 `None`**（`skip_serializing_if`，见第二条记录）。`cache_age_secs` 不落盘、
+`stored_at` 只给过期判定用，理由分别在 Q39 与 Q38。
+
+顶上那个 `last_primary` 是**上次按规则选出来的 Primary Device id**，缺席 = 没有"上次"。
+它排在两张表之前不是随意的：TOML 里顶层的裸键必须排在任何表之前，而 serde 按字段声明顺序
+序列化，挪到后面写出来的就是一份自己都解析不动的文件。键名是 `last_primary` 而不是 `primary`
+——后者在 `config.toml` 里已经有主，而它那一格装的是**规则或者一个钉死的 id**，两份文件里
+同名不同义正是票 09 的 Q41 点名要防的混淆。
+
+三件事各自的理由：
+
+- **格式**：这份文件程序自己写自己读、用户不该编辑（票面第 4 条），所以既不需要格式保留也
+  不需要注释——`toml_edit` 那套的全部价值是保住用户写下的东西，这里没有用户写下的东西。
+  换 JSON 要收一个新依赖，而 `toml` 已经在了。
+- **位置**：**跟着 `--config` 走，不钉死在 `%APPDATA%`**。拿一份临时配置跑一次 `status`
+  不该往用户真正在用的那份缓存上盖——那里面是他真设备的历史值。缺省路径因此仍是 spec 说的
+  `%APPDATA%\juicebar\` 下。名字与 `default_config_path` 分开（`docs/adr/0003` 划的界）。
+- **粒度**：一个 Device 一条，键是 `id`。`id` 是用户可改的自由文本（Q47 记过），改了 id
+  旧记录变孤儿、丢一次历史值，可以接受；**不可接受的是把 A 的历史值配给 B**，所以键就是
+  `id` 本身、不做任何模糊匹配（`tests/state.rs` 里
+  `a_renamed_device_id_loses_its_history_instead_of_inheriting_another_devices` 钉住这一条）。
+  孤儿记录**不清理**：清理要拿"当前这份配置里有哪些 id"当判据，而一份临时配置跑一次就会把
+  别的 Device 的历史值抹掉。
+
+**另一条路（三条，各自都站得住）**：JSON（收一个依赖，换来的是没有 TOML 的键名引号问题
+——不过 serde 已经把带空格带点的 id 正确引起来了）；钉死在 `%APPDATA%`（更贴 spec 的字面，
+但一次 `--config` 试跑就会污染真缓存）；一个 Device 一个文件（免掉整份重写，换来的是一个
+目录和一批孤儿文件）。
+
+**推荐**：保持现状。**给票 07**：你要的"暂停期间保留最后读数"就从这个文件来，接口是 Q37。
+翻案代价：格式与文件名各是一处改动，状态文件本身可以直接丢（它是缓存，重建只要一次成功的
+读数），所以全关在本票内。
+
+**`last_primary` 这一格不在票 08 的票面上**，是编排者在本票实现中途派进来的，依据是票 09 的
+Q41（那张票的第 4 条验收框"全都不可信时保持上次的选择"要一个跨调用的记忆，而 `status` 是
+一次性命令、手上没有"上次"；Q41 论证了它的家是这份文件而不是 `config.toml`，因为回写会把
+`primary = "lowest"` 这条规则本身洗掉）。**本票只落地这一格与它的读写接口**（形状见 Q37）：
+把它接到 `primary_lines` 里那个恒为 `None` 的 `previous` 上，要动的是票 09 落地的
+`src/cli/status.rs`——本票的分支上还没有那个函数，所以那一步留给合并。**号段 Q36–Q40 在这一格
+派进来时已经用满**，所以它记在这里而不是自己一条。
+
+### Q37 —— 读回来的接口：`LastKnown` 那几个方法 + `status::read_or_last_known` 这个接缝（**票 07 与票 11 要用**）
+
+**From:** 票 08（上次已知值持久化）
+
+**取的路**：`juicebar::state::LastKnown`，几个方法围着一个"读进来 → 改 → 整份写回"的循环：
+
+```rust
+LastKnown::load(&state_path) -> Self                 // 读不到 / 坏了都当"没有已知值"，不返回 Result
+    .reading_for(&device.id, &general, now) -> Option<EndpointReading>   // 过期的不交出去
+    .record(&device.id, &reading, now)               // 盖掉上一条，now 即写盘时刻
+    .last_primary() -> Option<&str>                  // 上次选出来的 Primary Device id
+    .remember_primary(&device.id)                    // 只有"设"，没有"清"
+    .save(&state_path) -> Result<()>                 // 整份重写；序列化失败也不写
+    .parse(text) / .to_toml() -> Result<String>      // 纯文本那一段，用例走它
+```
+
+**交出来的就是 `EndpointReading` 本身**，不是一个新类型：`render` 已经收它，票 09 的 Primary
+筛选也收它，多一个类型意味着那两处各多一条转换。`parse` / `to_toml` 也是 `pub`，纯文本那一段
+因此不碰磁盘就能断言（10 条用例里 8 条走的是它们）。
+
+`reading_for` 收 `&General` 而不是一个裸 `u64`：那个结构里有两个长得一样的阈值，把
+`stale_after`（3600）当成丢弃期限会让每一份隔夜的历史值悄悄消失。类型不让调用方选错。
+`now` 收的是**值**，不是 `&dyn Clock`——与 Q27 同一条规矩，这一层往下没有一处问系统时钟。
+
+**同一条决定的另一半**：`cli::status::read_or_last_known(device, endpoints, last_known,
+general, now) -> Result<(EndpointReading, Provenance)>` 也放成 `pub`。它把"这一趟读不到"和
+"连历史值都没有"分开，是票面第 2 条整条的落点。放成 `pub` 的理由与 Q17 给 `read` / `render`
+的那一条相同：票 06 的 review 抓到过一个只活在 `run` 里、用例一条都碰不到的真 bug（时钟问了
+两次），而这条路径错一步的症状是"重启就失忆"，没有任何报错。
+
+**另一条路**：把这几步都留在 `run` 里，只把 `LastKnown` 放出来。改动面更小，`status` 少一个
+pub 函数。**为什么没走**：那样票面第 2 条的前一半（"失联的 Device 仍显示上次已知值"）就只能
+靠读代码来确认，而它正是这张票的由来。
+
+**中途长出来的三样**（都在本票内，都有用例）：
+
+- `record` 多收一个 `now`（写盘时刻，Q38），`to_toml` 交 `Result<String>`（把序列化失败咽成
+  一个空字符串，`save` 就会拿那个空串覆盖文件——一次"不会发生"的失败变成一次静默的全量删除；
+  code review 的标准轴抓到的）。
+- `read_or_last_known` 收 `&mut LastKnown` 并**自己记账**：读到了就写进去，退到历史值那一支
+  一个字都不写。原先记账留在 `run` 里，而那是一个用例碰不到的分支——票 06 的 review 正是在
+  `run` 里抓到过一个这样的真 bug，spec 轴这次也指了同一处。
+- `last_primary()` / `remember_primary(id)`：上次选出来的 Primary Device id。**只有"设"没有
+  "清"**——这一格存在的全部理由是"全都不可信时保持上次的选择"，而一个能清空它的方法恰好能让
+  那句话落空。它交 `&str` 而不是 `String`，因为票 09 的 `primary::select` 的 `previous`
+  参数收的就是 `Option<&str>`；**它不会过期**（一个 id 没有年龄，让它失效的是那台设备从配置
+  里消失，而那件事由 `select` 拿候选名单一比就知道）。**给票 11**：菜单里的手动切换回写
+  `config.toml`（ADR-0003），不是往这一格写。
+
+**还有一处考虑过没做**：`reading_for` 收 `&str` 而不是 `&Device`，所以它不校验记录里那条
+Endpoint 是否**仍然**配置在这个 Device 上——用户删掉 `[device.bluetooth]` 之后，旧记录还会
+印一行"来自 Ble"。收 `&Device` 一比就能挡住（`is_configured_in` 现成的）。没做的理由：那一行
+说的是一件**真事**（那份读数当时确实来自 Ble），而且已经标着"上次已知值"，所以它不是谎；
+而删掉一整块 Endpoint 之后那条记录也会在 `very_stale_after` 内自己过期。翻案是把参数从
+`&str` 换成 `&Device`，波及票 07 的调用点，关在这两张票之间。
+
+**推荐**：保持现状。**给票 07**：暂停一条 Endpoint 时你要的就是
+`last_known.reading_for(&device.id, &general, now)`，拿到 `Option<EndpointReading>` 之后按
+`Provenance::LastKnown` 交给 `render`——它会把那一行标注成"已陈旧，上次已知值"。你多半还要
+一个第三种 `Provenance`（"暂停中"读起来和"失联"不是一回事），加一个变体会让 `stale_marker`
+那个对两维穷举的 `match` 当场把你指到该改的那一行。翻案（改方法名、把 `read_or_last_known`
+收回 `run`）关在票 07 与本票之间。
+
+### Q38 —— 记录里另存一个**写盘时刻**，好让取得时刻说不出来的历史值也会过期
+
+**From:** 票 08（上次已知值持久化）
+
+`taken_at` 缺席是"那台 BLE 设备根本没有更新时间戳"（`bluetooth.rs` 的原话，Q26 末段专门交代过
+它不是"新鲜"的同义词）。这种记录**算不出年龄**，于是"超过 `very_stale_after` 就丢"这条规则对
+它无从适用。
+
+**先走的那条路（本票中途翻掉了）**：留着不丢。它照旧走陈旧判定落在 `Stale`（Q29 末段），那一行
+同时印"无时间戳"和"已陈旧，上次已知值"，也就是我们真正知道的全部；理由是这个仓库通篇的规矩
+是"`None` 是一句实话，不是缺陷"，丢掉它等于把唯一还成立的事实抹掉。
+
+**为什么翻了**：那条路上这种记录**永远不过期**——一个六个月前的 50% 可以一直挂在那儿，而这张
+票的标题句正是"这个历史值必须会过期——它不能伪装成现状"。两个标注拦得住"伪装成现状"，拦不住
+"永远挂着"。code review 的 spec 轴独立指到同一处，而先前那条记录自己就写着"这一条是本票三条里
+最该被翻的"。
+
+**取的路（现状）**：`Record` 多一个 `stored_at`（Unix 纪元秒，**不是 `Option`**，程序自己一定
+说得出来）。丢弃判定取 `taken_at.unwrap_or(stored_at)`：取得时刻优先，因为它必然不晚于写盘
+时刻，拿它判是两者中更严的那一侧；说不出取得时刻的记录就按"在文件里躺了多久"算。缺席时
+`stored_at` 取 0（纪元）→ 立刻过期，那不是一个看着合理的假数字（1970 不像任何一份读数的时刻），
+而是失败方向上保守的那一侧。
+
+**先前反对加这个字段的理由不成立**：那条记录写着它"会给下游多一个要分辨的东西"。不会——
+`to_reading` 不把它放进 `EndpointReading`，它一个字都不出这个模块。**也不印给用户看**：它答的
+是"这条记录躺了多久"，而那一行要说的是"这个数是什么时候的"，后者对这种记录恰恰答不出来，
+那一行照旧印"无时间戳"。把写盘时刻印成取得时刻就是替设备编一个它没给的时间戳，正是
+`taken_at` 那个 `Option` 一路守着不做的事。
+
+**同一处的第二个后果**：退到历史值的那一趟**一个字都不写**（`read_or_last_known` 只在取数
+成功那一支里 `record`）。把拿出来的历史值再写一遍会刷新写盘时刻，于是那条记录永远到不了
+`very_stale_after`——一只收进抽屉半年的鼠标每天被看一眼就每天年轻一天，而这张票的标题句
+永久落空、没有任何症状。`tests/status.rs` 里
+`falling_back_to_the_last_known_value_does_not_extend_its_life` 就是拿"文件内容一个字节都没变"
+钉住这一条的。
+
+**推荐**：现状。翻案代价：去掉一个私有字段加一处 `unwrap_or`，关在本票内。
+
+### Q39 —— `cache_age_secs` 不落盘、读回来重算；`Provenance` 是 `render` 的第四个参数
+
+**From:** 票 08（上次已知值持久化）
+
+同一处的两个旋钮，都是"这个事实住在哪"的问题。
+
+**`cache_age_secs`：取的路**是不写盘，读回来时由 `now - taken_at` 重算（只对 `Ble`，另两级恒为
+`None`）。理由：那个字段答的是"这份缓存多久之前更新过"，是个**相对量**。写盘那一刻 Windows 报
+的"5 分钟之前"，三小时之后就不成立了——照原样存回来，一份放了三天的缓存会一直自称五分钟前的，
+而来源那一段印的就是它（Q21）。这正是票 06 拒绝"每次推算取得时刻"时点名的那个错（Q26），
+方向相反而已：绝对量该存，相对量该算。**另一条路**是原样存回来并接受它会漂（改动更小），或者
+读回来一律给 `None`——后者会让来源那一段印出"无时间戳"，而那是句假话（记录里明明有时刻）。
+**推荐**：保持现状。重算出来的数不是编的：那个百分比描述的时刻没变，它离现在确实又远了三小时。
+翻案是改 `Record::to_reading` 的一个 `match`，关在本票内。
+
+**`Provenance`：取的路**是 `state` 模块里一个两变体的 `pub enum`，作为 `render` 的第四个参数
+传进去，`stale_marker` 对 `(provenance, freshness)` 两维穷举。理由：**一份十秒前取到的读数是
+新鲜的，而同一份读数在设备失联之后拿出来就不是现状**——"这个数多新"和"设备此刻在不在"是两个
+独立的事实，陈旧判定只答得了前一个。只看阈值，那一行会给一只已经收进抽屉的鼠标印一个不带任何
+标注的 95%。**另一条路（两条）**：塞进 `EndpointReading` 多一个字段（那个结构描述的是"设备说了
+什么"，而这一维说的是"这个数从哪儿来的"，不同源；而且它会波及票 09 手上的每一处构造）；或者
+让 `run` 在 `render` 的返回值后面自己拼一句（VeryStale 那一档会印出两次"已陈旧"，而
+`render` 里那个 `match` 也就不再对"加一种来路"报错了）。**推荐**：保持现状。翻案是把参数
+搬个家，波及 `render` 的签名与 `stale_marker` 的 `match`。
+
+**波及面（合并时会撞上）**：`render` 的签名从三个参数变成四个。调用点共四处：
+`src/cli/status.rs` 里一处，`tests/status.rs` 里三处（`line_of_taken` 这个新 helper、
+`the_ble_age_is_…` 那条用例、文件末尾的 `render` helper）。都是机械改动。票 09 已经合并，
+它的 Primary 标注**没有进 `render`**（落在 Device 名字那一格，它的 Q44），所以这一处不与它撞。
+
+**code review 的标准轴在这里指了一处 Data Clump**：`(reading, staleness, provenance)` 现在
+一路同行，而 `render` 已经四个参数。把三样捆成一个类型站得住（票 09 的 `DeviceRow` 就是同一
+条理由的产物），没做是因为那个类型的正确形状取决于托盘那一步要什么，而现在猜它等于替第 7、8
+步做决定。翻案是引入一个结构体，波及 `render` 的签名与四处调用点。
+
+**另一处指了 `render` 在 `Provenance::LastKnown` 时仍印"充电中 / 4235 mV"**：`VeryStale` 那一
+档把这几样整段换掉，理由是"『充电中』是同一句假话的另一半"，而同一条理由对一只收进抽屉的鼠标
+同样成立——那是一句现在时断言，只靠行尾一句标注兜着。**本票没有动它**，因为那是电量/充电态/
+电压那一段（票 03 与票 06 的地盘），而本票的界是"只碰陈旧标注那一段"。留给下一张碰那一段的票，
+它值一条自己的记录。
+
+### Q40 —— 拿出上次已知值的那一行**不印失联原因**
+
+**From:** 票 08（上次已知值持久化）
+
+**取的路**：`read_or_last_known` 退到历史值时，取数那一趟攒下的失败原因（"全部 Endpoint 都没
+读到 —— Wired: …；Dongle24G: …"）被丢掉，那一行只有读数加"已陈旧，上次已知值"。
+
+**另一条路**：两样都印。那句诊断有真实价值（Q19 / Q23 两条记录都是在打磨它）。
+
+**推荐**：保持现状。手上有历史值就意味着这套配置**曾经读通过**，所以那句话要指的方向
+（"设备没插？配置写错了？跑 `juicebar scan`"）已经不成立了；这一支里的原因几乎必然是"关了机 /
+收进抽屉 / 拔了接收器"，而"上次已知值"这半句已经说清设备此刻不在。反过来，配置真写错的
+Device 一次也没读通过、压根没有记录，那句诊断因此**正好留在需要它的那一支里**。两样都印会让
+每一行长出一截噪音，而 Q49 记过同一件事的教训：常态化的提醒会把真正该看的那句一起淹掉。
+翻案是在那一支里把 `lost` 拼进去，一行，关在本票内。**给票 07**：厂商上位机占着通路是个例外
+——那时用户该被告知的正是"上位机在跑"，所以你那一维大概要自己说一句，而不是沿用这里的沉默。
+
+### Q41 —— "上次自动选出来的是谁"落在票 08 的状态文件，不落 `config.toml`（**票 11 要读**）
+
+**From:** 票 09（Primary Device 选择）
+
+**票面第 4 条要一个跨调用的记忆，而 `status` 没有"上次"**：它是一次性命令——枚举、取数、
+印几行、退出。记忆有两个可能的家（票 08 的 `%APPDATA%` 状态文件、或者 `config.toml`），
+而 ADR-0003 把界划在"用户可见的配置选择"与"纯运行时缓存"之间。
+
+**取的路**：本票只实现纯函数那一半——`primary::select(rule, candidates, previous)` 收一个
+`previous: Option<&str>`，`cli::status::run` 传 `None` 并在那一行注释里点名这条记录。
+判断是：**它属于运行时缓存，家在票 08 的状态文件**。
+
+决定性的理由不是分类学，是**回写会把规则本身洗掉**：`primary` 这一项里只有一个格子，
+`"lowest"`（一条规则）和一个 Device id（一个具体选择）共用它。把自动选出来的 id 写回去，
+`primary = "lowest"` 就变成 `primary = "dragonfly3"`——那条规则**不见了**，工具从此永久钉在
+那一台上，而用户从没要求过。ADR-0003 说得也是这个：状态文件放"上次已知读数"这类纯运行时
+缓存，而自动选出来的那个 id 正是从读数推出来的。
+
+**另一条路**：也写回 `config.toml`，理由是 ADR-0003 把 `primary` 明列为"程序自己管的字段"，
+而单一事实来源那句话正是它的核心。
+
+**推荐**：现状。ADR-0003 里那句"程序自己管的字段（`primary`…）"说的是**托盘菜单里的手动
+切换**——那是一个用户做出的选择，写回去正是让配置成为单一事实来源；自动选出来的那个 id
+不是用户的选择，它每一轮都可能变。翻案代价：把 `previous` 的来源从状态文件换成配置读取，
+`select` 一个字不用改。
+
+**给票 08**：状态文件里请多留一格"上次选出的 Primary Device id"（一个字符串，缺席 = `None`）。
+它与"上次已知读数"是同一类东西，都是从读数推出来的运行时缓存。
+
+**这一格现在无主，编排者要派一下。** 票 08 的票面上只有"上次已知读数"，而它正在并行实现，
+本票没有去改它的票面（那是另一个 agent 正在写的文件）。所以在有人把这一格接上之前，
+`Selection::HeldOver` 在成品二进制里走不到，而 `config.example.toml` 已经把"全都不可信时保持
+上次的选择"写给用户了——code review 的 spec 轴把这一条判成"验收框 4 没真正挣到"，判得对。
+
+**给票 11**：你的验收框「Primary Device 的运行时选择回写 `config.toml`」指的是**菜单里的手动
+选择**，回写时 `primary` 从 `"lowest"` 变成一个 Device id 是对的（用户就是要钉死它）。
+**不要把 `lowest` 自动选出来的结果回写**——那会把 `"lowest"` 这条规则本身洗掉。
+
+### Q42 —— 写错的 `primary` id 不让整份配置读不动，与 Q15 对 `level_source` 的处置相反
+
+**From:** 票 09（Primary Device 选择）
+
+**取的路**：`PrimaryRule` 的 `Deserialize` 只认一个字面量 `"lowest"`，**别的任何字符串一律
+当 Device id 收下**，配置照样读得动。"这个 id 不在册"留到选的时候才说——那时手上才有 Device
+名单，于是 `Selection::PinnedNotFound(id)` 让 `status` 印一句"配置里 primary 钉的 id
+"dragonfly4" 不在登记的 Device 里，所以一行都没标"。
+
+**另一条路**：照 Q15 对 `level_source` 的处置，认不出就让 `Config::parse` 失败，一处笔误
+让整份配置读不动、`status` 一个 Device 都不印。
+
+**推荐**：现状。Q15 立的规矩有一句明写的前提——"`level_source` **只有两个合法值**，不存在
+将来才实现的来源"。`primary` 不满足这个前提：它的合法值里有一个是**任意 Device id**，而 id
+是自由文本。`"dragonfly4"` 在解析那一刻**分辨不出**是笔误还是一台用户打算稍后登记的设备，
+拿它把整份配置判死，代价是"改一个字母 → 全部设备都看不见了"。而 Q15 真正在防的那件事
+（用户以为钉住了、其实没有）这里由 `PinnedNotFound` 挡住了：它不静默退回 `lowest`，它一行
+都不标并且把那个 id 原样印出来。翻案是把那一支从"当 id 收下"改成 `Err`，关在
+`primary::from_config_value` 一个函数里。
+
+**副作用一句**：id 恰好叫 `"lowest"` 的 Device 钉不住。这条留着不管——`config.example.toml`
+和自举草稿都把 `"lowest"` 写成那条规则，取这个 id 的人是在跟自己的配置文件过不去。
+
+### Q43 —— Primary 选择要的 `Level` 由 `run()` 再调一次 `level_for` 得来，Q14 的推荐再次推迟
+
+**From:** 票 09（Primary Device 选择）
+
+**Q14 点名要本票重新看一眼的那处。** 它给了两条路，并**推荐后者**：把 `Level` 提进
+`EndpointReading` 让全流程共用一个，理由是"这台设备当下的电量是多少"应当只有一处答案。
+
+**取的路**：前者。`cli::status::run` 在排完那一行之后再调一次 `level_for(&reading.reading,
+device.level_source)`，把结果装进 `primary::CandidateReading`。`EndpointReading` 一个字段
+都没加。
+
+**另一条路**：Q14 推荐的那条——`EndpointReading` 多一个 `level: Level`，两个构造器各多收一个
+`LevelSource`，`render` 改成收成品。
+
+**推荐**：现状，而且**这一次的理由比 Q14 当时更硬**。Q14 没这么做只是因为 `EndpointReading`
+正被三张票同时改着；此刻票 08 正在把这个结构**写进磁盘**，给它加一个字段等于同时改一份落盘
+格式，而那个字段是从另外两个字段派生出来的（存派生值会让"改了 `level_source` 之后旧文件里的
+值是错的"变成一个真问题）。至于"只有一处答案"——`level_for` 是纯函数，同样的入参必然同样的
+输出，`run()` 里传下去的 `level_source` 与 `render` 收到的是同一个值，两处**不可能**分岔。
+真正会分岔的是把结果**存**起来，而那恰恰是另一条路要做的事。翻案代价与 Q14 说的一样，
+关在 `EndpointReading` 加一个字段加两个构造器。
+
+**顺带答一句 Q26 留给本票的问题**：`is_fresh()` **没有加**。本票只有 `primary::comparable`
+一处要判"新鲜"，而那里写的是对 `Freshness` 穷举的 `match`（不是 `== Fresh`）——加一档陈旧时
+编译器会把人指到那里问一句"这一档参与比较吗"。一个便利方法会把那个提问吞掉，所以它不该有。
+
+### Q44 —— Primary 标注落在 Device 名字那一格，不进 `cli::status::render`
+
+**From:** 票 09（Primary Device 选择）
+
+**取的路**：`Selection::label(&Device)` 交出那一行开头的名字，选中的那一个后面多一句
+`（Primary Device）`，别的原样。`render()` 一个字没动，`run()` 里那句 `println!` 从
+`device.name` 换成 `selection.label(device)`。
+
+**另一条路**：在 `render()` 里加第五段（它现在是百分比 / 充电态+电压 / 来源 / 陈旧标注四段
+拼起来的），多收一个 `is_primary: bool`。
+
+**推荐**：现状，而且这一条**不只是为了避开票 08**（它此刻正在改 `render` 的陈旧标注那一段）。
+`render` 排版的是一份 Reading，而**一台失联的 Device 照样可以是 Primary Device**——钉死的
+那一种，或者保持上次的选择。那一行走的是 `run()` 里 `Err` 那一支，印的是"读不到 —— …"，
+`render` 根本没被调用。标注放进 `render`，最需要它的那一行恰好标不出来。翻案是把那半句从
+`label` 挪进 `render`，关在本票内。
+
+**副作用**：`run()` 从"读一台印一台"改成"先把全部读完，再一起印"——`lowest` 得看过这一轮
+全部读数才知道该标哪一行。读的次序、印的次序都还是配置里的书写顺序，一台设备仍然只取一个
+"当下"。**这一处会与票 08 在 `run()` 里撞车**（它要在 `Err` 那一支拿出上次已知值）：合并时
+那一支落在 `rows.push` 之前，交出来的东西同时是那一行的文本**和**一个 `Option<CandidateReading>`
+——拿出来的历史值该不该参与 `lowest`，答案由它的 `Freshness` 自己给（票 08 会把它标成陈旧，
+于是自然不参与）。
+
+### Q45 —— `select` 交的是一个带理由的 `Selection` 枚举，不是 `Option<&str>`
+
+**From:** 票 09（Primary Device 选择）
+
+**取的路**：`Selection` 五个变体——`Pinned` / `Lowest` / `HeldOver` / `PinnedNotFound` /
+`Undecided`。`primary_id()` 交出该标哪一行，`note()` 交出那三种"光看那几行看不出发生了什么"
+的情形要补的一句话。
+
+**另一条路**：`select` 直接返回 `Option<&str>`，`status` 只管标。
+
+**推荐**：现状。三种情形里，用户看到的东西**光凭那几行是解释不通的**：保持上次的选择时标注
+落在一行"已陈旧"或"读不到"上（看着像 bug）；钉的 id 不在册时一行都没标（看着像 bug）；
+一个都选不出来时同样一行都没标。`Option<&str>` 会把这三种压成同一个 `None`，而它们要用户做的
+事完全不同——这与 `cli::status::lost_reason` 分两种说法是同一个理由。措辞跟着产生它的规则住在
+一个文件里，与 `Level` / `EndpointKind` 的 `Display` 同一条。翻案是删掉 `note()` 和两个只为它
+存在的变体，关在本票内。
+
+**得说清一句：票面没有授权这一路。** 票面 6 条和 spec 都没提"钉的 id 写错了"这种情形，spec
+的「收口」只要求一行一个 Device。`PinnedNotFound` 与末尾那句交代都是本票加的，理由是 Q42 那条
+不对称（用户以为钉住了、其实没有）。code review 的 spec 轴把它记成未授权行为但不建议撤，
+同意——真要撤，撤的是 `note()` 和 `PinnedNotFound`，`select` 的其余部分不动。
+
+**顺带记一处词汇缺口，留给 `/domain-modeling`。** 本票引入了三个 `CONTEXT.md` 里没有的词：
+**候选**（`Candidate`：一台正在争 Primary Device 位置的 Device）、**保持上次的选择**
+（`HeldOver`：Primary Device 那一条只认"钉死"和"按规则动态选出"两种，不认这第三种）、以及
+`CandidateReading` ——它拿 **Reading** 这个定义好的词命名了一个投影（词汇表里的 Reading 逐字
+含"电量、充电状态、电压、取得时刻，以及它来自哪条 Endpoint"，而这个结构只有 level 与
+freshness 两样）。三个都是实现层的名字、局部清楚，所以本票没有改；但 `docs/agents/domain.md`
+要求"词汇表里没有的概念要么重新考虑、要么记成一处缺口"，这就是那处缺口。真正值得进词汇表的
+大概是**保持上次的选择**背后那个概念——票 08 和票 11 都要给它起名字。
+
 ### Q46 —— `toml_edit` 在本票就收进来（票 11 的第一条框变成"确认已引入"）
 
 **From:** 票 10（配置自举与 config-refresh）
@@ -815,279 +1320,6 @@ Q18 预告的是 `read()` 那一处，这是同一形状的第二处，票 04 �
 返回值上的样子。翻案关在这次合并的范围内。
 
 **Whose call:** 已定，无需结算——记录在此是因为票 11 要动 `config.rs` 的回写，会读到这些调用点。
-
-### Q26 —— 取得时刻加成 `EndpointReading.taken_at: Option<Timestamp>`（**票 08 与票 09 都要站在这上面**）
-
-**From:** 票 06（Clock 接缝与陈旧判定）
-
-**票面点名要记的那处岔路。** `Reading` 和 `EndpointReading` 两处文档注释都写着"取得时刻由
-Clock 接缝那一步（票 06）补上"，但加在哪、叫什么、什么类型留给了本票。
-
-**取的路**：`EndpointReading` 多一个字段 `taken_at: Option<Timestamp>`，`Timestamp` 是
-`src/clock.rs` 里一个包着 **Unix 纪元秒**的 newtype（`from_unix_secs` / `as_unix_secs`，
-`const fn`，`Copy` + `Ord`）。两个构造器各多收一个 `now: Timestamp`
-（`from_hid(endpoint, reading, now)`、`from_ble_cache(cached, now)`），`trait Endpoints` 的
-`read_ble` 也跟着多收一个（只有那一级要它，理由见下），`cli::status::read` 多收一个
-`&dyn Clock` 并在整条链路上**只问一次**"现在几点"。
-
-**语义上最要紧的一句：`taken_at` 是"这个数描述的那一刻"，不是"我们跑这次查询的那一刻"。**
-两条 HID 当场往返，两者重合；`Ble` 记的是 `now - cache_age_secs`。按查询时刻记的话 `Ble`
-永远陈旧不了，而 `CONTEXT.md` 偏偏说「只有 Ble 的 Reading 会陈旧到有实际影响」——那句定义会
-当场落空。`cache_age_secs` **原样留着**（Windows 给的原始数字，来源那一段印它），
-`taken_at` 是由它换算出来的规范化字段：**来源那一段印的仍是 `cache_age_secs` 本身**
-（Q21 给本票的原话：Ble 的"多久以前"不经过 Clock），只有两条 HID 那一格的秒数由取得时刻与
-当下相减得来——它们没有"缓存年龄"这回事。
-
-`Option` 而不是裸 `Timestamp`：那台 BLE 设备没有更新时间戳时（`bluetooth.rs` 的原话）就是
-说不出来。拿 `now` 顶上去会让它看着像当场读的——正是本票要防的假的安全感。**`None` 不是
-"新鲜"的同义词**：陈旧判定把这一种判成 `Stale`（见 Q29 末段）。
-
-**另一条路**：不存字段，每次由 `endpoint` + `cache_age_secs` + 当下**推**出来。改动面小得多
-（`read` 不用收时钟，15 处用例一行不动）。**为什么没走**：票 08 要把读数写盘、重启之后读回来
-比较，那时 `cache_age_secs` 相对新的"当下"已经没有意义，推出来的时刻会让一份存了三天的读数
-看着像刚取的。取得时刻必须**存**，不能算。
-
-**推荐**：保持现状。**给票 08**：写盘就写 `as_unix_secs()`，读回来 `from_unix_secs()`，
-`Option` 的两种情形都要能落盘（缺字段 = `None`）。**给票 09**：筛"只有新鲜且可信的参与
-lowest 比较"用 `Staleness::freshness == Freshness::Fresh`，别自己比时刻——本票**故意没有**
-预先加一个 `is_fresh()` 便利方法，因为本票一处都用不上它，而一个没人调的 pub 方法是替下一张
-票做决定。翻案（改名、改类型、改成推导）关在这三张票之间，代价是改一个字段加两个构造器。
-
-**波及面（合并时会撞上）**：`tests/status.rs` 里 17 处 `status::read(…)` 各多一个 `NOW`
-参数，`tests/endpoints.rs` 里 2 处 `from_ble_cache` 各多一个 `NOW`，`tests/common/mod.rs` 的
-假枚举 `read_ble` 跟着改签名，共用的 `NOW` 与 `default_general()` 也落在那个文件里。
-**都是机械改动**，但票 03 若也动了 `tests/status.rs`，那 17 行会逐行冲突。
-
-### Q27 —— Clock 接缝只在链路顶上被问一次，往下只传 `Timestamp`
-
-**From:** 票 06（Clock 接缝与陈旧判定）
-
-**取的路**：`trait Clock { fn now(&self) -> Timestamp; }`，实现 `SystemClock`（一次
-`GetSystemTimeAsFileTime`）。**接缝只出现在 `cli::status::run` 里**——一个 Device 问一次
-时钟，那一个"当下"被取数（`read(device, endpoints, now)`）与陈旧判定
-（`Staleness::assess(&reading, general, now)`）共用。往下全是收 `Timestamp` 的纯函数。
-
-同一条决定的另一半：`render` 的签名由 `render(&EndpointReading)` 变成
-`render(&EndpointReading, &Staleness)`。**判定在上游做完，`render` 退回成纯排版**：不问配置、
-不问时钟。票 09 的 Primary 选择要的也是 `Staleness` 这个值，而不是一行字。
-
-`read_ble` 为什么也要收 `now`：接缝这一侧是唯一知道那份缓存有多旧的地方（Q21 的原话），
-而"多旧"换成绝对时刻就得有个当下。两条 HID 的取得时刻由取数那一步盖，所以 `open_transport`
-不收——这个不对称与 Q21 记的那个同源。
-
-**另一条路（先走了、被 code review 打回来的那条）**：让 `read` 收 `&dyn Clock`，与仓库另两条
-接缝（`Transport`、`Endpoints`）的 `&dyn` 用法齐平，用例注入一个 `FakeClock`。**它是错的，
-不只是啰嗦**：`read` 内部问一次得到 now₁，`run` 回头为了判定又问一次得到 now₂，而几条
-Endpoint 依次试下来会花掉真实时间——spec 记着鼠标超时 3000 ms，两条 HID 各超时一次再落到
-Ble，那一行印出来就不是"0 秒前"而是"6 秒前"，一份当场读到的读数凭空老了六秒。假时钟不走表，
-**两条轴的 review 各自独立抓到了这一处**，而用例一条都没红。
-
-**推荐**：保持现状。一个"当下"是一次取数周期的属性，把它当值传下去，多问一次这件事就**表示
-不出来**。代价是没有任何用例注入 `Clock`——`FakeClock` 因此删掉了，用例直接喂字面量
-`common::NOW`。那不是覆盖上的缺口而是更硬的保证：接缝之下的代码**碰不到系统时钟**，连一个
-假的都不需要。trait 留着是因为常驻轮询（第 7、8 步）与票 08 的持久化都要拿着一个时钟跨周期
-用，那时需要的正是一个能注入的对象。翻案是把 `now: Timestamp` 换回 `&dyn Clock` 并让
-`run` 只问一次，关在本票内。
-
-### Q28 —— "只显示日期"按 UTC 算，不收日期库、不问本机时区
-
-**From:** 票 06（Clock 接缝与陈旧判定）
-
-**取的路**：`Timestamp::utc_date_text()`，Howard Hinnant 的 `civil_from_days` 十来行整数
-运算，印 `YYYY-MM-DD`。**不收 `chrono` / `time`**，也不走 `windows` crate 已有的
-`GetLocalTime` / `SystemTimeToTzSpecificLocalTime`。
-
-**另一条路（两条）**：收一个日期库；或者用 Win32 换成**本机时区**的日期。后者是更贴用户的
-那一个——日期是日历上的事，UTC+8 的人在本地 00:30 会看到"昨天"。
-
-**推荐**：保持现状，但这一条是三条里最该被翻的。理由是这个日期**只在读数超过
-`very_stale_after`（缺省一天）时才印得出来**，那时它要传达的是"这个数不是现在的"，差一天
-相对于那个信号是噪声；换来的是它是纯函数，用例断言得到确切字符串（`1970-01-01`、
-`2026-03-15`），不问系统时区、不多一个依赖。托盘那一步若要把日期印在气泡里给人读，
-那时本地时区就值那点代价了。翻案是换掉一个函数体（外加一条"用例改成断言形状而不是断言
-确切日期"的连带），关在本票内。
-
-### Q29 —— 两条 HID 没有 VeryStale 这一档，且"说不出取得时刻"落在 Stale
-
-**From:** 票 06（Clock 接缝与陈旧判定）
-
-**取的路**：`StalenessPolicy { stale_after_secs, very_stale_after_secs: Option<u64> }`。
-HID 的 `very_stale_after_secs` 是 `None`——**那一档在两条 HID 上不存在**。票面只给了 HID
-一个阈值（3 × 轮询间隔），`config.example.toml` 也写明那两个配置项只对 Ble 生效。
-
-**另一条路**：给 HID 也编一个第二档（比如 30 × 间隔）。三级 Endpoint 的呈现于是齐整，
-而票 08 那份持久化读数（重启后读回来的有线读数可能是几天前的）也会被同一条规则挡住。
-
-**推荐**：保持现状。拿 3 × 间隔当第二档是不能的：一份 91 秒前、间隔 30 秒的有线读数会立刻
-只剩一个日期，而它其实是一分半钟前当场问出来的。另编一个倍数就是**引入一个票面和配置都
-没有的数**。**给票 08**：它的验收框里"超过 `very_stale_after` 的持久化读数被丢弃"是在
-读回来那一步丢，不是在这里判——所以旧到那个地步的 HID 读数根本活不到 `render`，这一档
-在 HID 上确实用不着。翻案是给 `from_poll_interval` 填一个 `Some(...)`，一行。
-
-（`render` 里那个 `match` 起初写了 `_` 通配分支，等于让上面这句"波及一个 match"的承诺落空
-——加一档时编译器不会指过来。code review 的标准轴抓到了，现在三档各写一支。）
-
-**同一处的第二个旋钮**：`verdict(None, now)` 交 `Stale`，而不是 `Fresh`、也不是第四个变体。
-`Fresh` 是明确的说谎（替设备编一个它没给的时间戳）；第四个变体（`Undated`？）站得住，
-但 `VeryStale` 那一档的表现是"印日期"，而这一种恰恰**连日期都说不出来**，所以它天然属于
-"照印数字 + 明确标注"那一档。翻案是加一个变体，波及 `render` 的一个 `match`。
-
-### Q30 —— `stale_after` 注释里的"标灰"在 CLI 里落成一句文字标注
-
-**From:** 票 06（Clock 接缝与陈旧判定）
-
-**取的路**：`config.example.toml` 写的是"`stale_after = 3600` # 超过标灰"。`status` 是一行
-纯文本，于是"标灰"落成末尾一句 `已陈旧`（第二档 `已陈旧，不显示百分比`，多的半句交代那个
-百分比去哪了）。**没有引入 ANSI 颜色。**
-
-**另一条路**：用 ANSI 转义真的把那一段变暗。视觉上更接近注释里的原话，也更不占宽度。
-
-**推荐**：保持现状。`status` 的输出会被重定向、会被别的东西 grep，嵌一串转义码是在为一个
-终端的样子牺牲输出的可用性；而"标灰"那句话本来是对着**托盘图标**说的（那是它真正的归宿），
-不是对着这一行。措辞按 `CONTEXT.md` 的 Stale 走，两档共用同一个"陈旧"——那一条的 _Avoid_
-正是"过期、失效"。翻案是改一个返回 `&'static str` 的函数，关在本票内。
-
-### Q41 —— "上次自动选出来的是谁"落在票 08 的状态文件，不落 `config.toml`（**票 11 要读**）
-
-**From:** 票 09（Primary Device 选择）
-
-**票面第 4 条要一个跨调用的记忆，而 `status` 没有"上次"**：它是一次性命令——枚举、取数、
-印几行、退出。记忆有两个可能的家（票 08 的 `%APPDATA%` 状态文件、或者 `config.toml`），
-而 ADR-0003 把界划在"用户可见的配置选择"与"纯运行时缓存"之间。
-
-**取的路**：本票只实现纯函数那一半——`primary::select(rule, candidates, previous)` 收一个
-`previous: Option<&str>`，`cli::status::run` 传 `None` 并在那一行注释里点名这条记录。
-判断是：**它属于运行时缓存，家在票 08 的状态文件**。
-
-决定性的理由不是分类学，是**回写会把规则本身洗掉**：`primary` 这一项里只有一个格子，
-`"lowest"`（一条规则）和一个 Device id（一个具体选择）共用它。把自动选出来的 id 写回去，
-`primary = "lowest"` 就变成 `primary = "dragonfly3"`——那条规则**不见了**，工具从此永久钉在
-那一台上，而用户从没要求过。ADR-0003 说得也是这个：状态文件放"上次已知读数"这类纯运行时
-缓存，而自动选出来的那个 id 正是从读数推出来的。
-
-**另一条路**：也写回 `config.toml`，理由是 ADR-0003 把 `primary` 明列为"程序自己管的字段"，
-而单一事实来源那句话正是它的核心。
-
-**推荐**：现状。ADR-0003 里那句"程序自己管的字段（`primary`…）"说的是**托盘菜单里的手动
-切换**——那是一个用户做出的选择，写回去正是让配置成为单一事实来源；自动选出来的那个 id
-不是用户的选择，它每一轮都可能变。翻案代价：把 `previous` 的来源从状态文件换成配置读取，
-`select` 一个字不用改。
-
-**给票 08**：状态文件里请多留一格"上次选出的 Primary Device id"（一个字符串，缺席 = `None`）。
-它与"上次已知读数"是同一类东西，都是从读数推出来的运行时缓存。
-
-**这一格现在无主，编排者要派一下。** 票 08 的票面上只有"上次已知读数"，而它正在并行实现，
-本票没有去改它的票面（那是另一个 agent 正在写的文件）。所以在有人把这一格接上之前，
-`Selection::HeldOver` 在成品二进制里走不到，而 `config.example.toml` 已经把"全都不可信时保持
-上次的选择"写给用户了——code review 的 spec 轴把这一条判成"验收框 4 没真正挣到"，判得对。
-
-**给票 11**：你的验收框「Primary Device 的运行时选择回写 `config.toml`」指的是**菜单里的手动
-选择**，回写时 `primary` 从 `"lowest"` 变成一个 Device id 是对的（用户就是要钉死它）。
-**不要把 `lowest` 自动选出来的结果回写**——那会把 `"lowest"` 这条规则本身洗掉。
-
-### Q42 —— 写错的 `primary` id 不让整份配置读不动，与 Q15 对 `level_source` 的处置相反
-
-**From:** 票 09（Primary Device 选择）
-
-**取的路**：`PrimaryRule` 的 `Deserialize` 只认一个字面量 `"lowest"`，**别的任何字符串一律
-当 Device id 收下**，配置照样读得动。"这个 id 不在册"留到选的时候才说——那时手上才有 Device
-名单，于是 `Selection::PinnedNotFound(id)` 让 `status` 印一句"配置里 primary 钉的 id
-"dragonfly4" 不在登记的 Device 里，所以一行都没标"。
-
-**另一条路**：照 Q15 对 `level_source` 的处置，认不出就让 `Config::parse` 失败，一处笔误
-让整份配置读不动、`status` 一个 Device 都不印。
-
-**推荐**：现状。Q15 立的规矩有一句明写的前提——"`level_source` **只有两个合法值**，不存在
-将来才实现的来源"。`primary` 不满足这个前提：它的合法值里有一个是**任意 Device id**，而 id
-是自由文本。`"dragonfly4"` 在解析那一刻**分辨不出**是笔误还是一台用户打算稍后登记的设备，
-拿它把整份配置判死，代价是"改一个字母 → 全部设备都看不见了"。而 Q15 真正在防的那件事
-（用户以为钉住了、其实没有）这里由 `PinnedNotFound` 挡住了：它不静默退回 `lowest`，它一行
-都不标并且把那个 id 原样印出来。翻案是把那一支从"当 id 收下"改成 `Err`，关在
-`primary::from_config_value` 一个函数里。
-
-**副作用一句**：id 恰好叫 `"lowest"` 的 Device 钉不住。这条留着不管——`config.example.toml`
-和自举草稿都把 `"lowest"` 写成那条规则，取这个 id 的人是在跟自己的配置文件过不去。
-
-### Q43 —— Primary 选择要的 `Level` 由 `run()` 再调一次 `level_for` 得来，Q14 的推荐再次推迟
-
-**From:** 票 09（Primary Device 选择）
-
-**Q14 点名要本票重新看一眼的那处。** 它给了两条路，并**推荐后者**：把 `Level` 提进
-`EndpointReading` 让全流程共用一个，理由是"这台设备当下的电量是多少"应当只有一处答案。
-
-**取的路**：前者。`cli::status::run` 在排完那一行之后再调一次 `level_for(&reading.reading,
-device.level_source)`，把结果装进 `primary::CandidateReading`。`EndpointReading` 一个字段
-都没加。
-
-**另一条路**：Q14 推荐的那条——`EndpointReading` 多一个 `level: Level`，两个构造器各多收一个
-`LevelSource`，`render` 改成收成品。
-
-**推荐**：现状，而且**这一次的理由比 Q14 当时更硬**。Q14 没这么做只是因为 `EndpointReading`
-正被三张票同时改着；此刻票 08 正在把这个结构**写进磁盘**，给它加一个字段等于同时改一份落盘
-格式，而那个字段是从另外两个字段派生出来的（存派生值会让"改了 `level_source` 之后旧文件里的
-值是错的"变成一个真问题）。至于"只有一处答案"——`level_for` 是纯函数，同样的入参必然同样的
-输出，`run()` 里传下去的 `level_source` 与 `render` 收到的是同一个值，两处**不可能**分岔。
-真正会分岔的是把结果**存**起来，而那恰恰是另一条路要做的事。翻案代价与 Q14 说的一样，
-关在 `EndpointReading` 加一个字段加两个构造器。
-
-**顺带答一句 Q26 留给本票的问题**：`is_fresh()` **没有加**。本票只有 `primary::comparable`
-一处要判"新鲜"，而那里写的是对 `Freshness` 穷举的 `match`（不是 `== Fresh`）——加一档陈旧时
-编译器会把人指到那里问一句"这一档参与比较吗"。一个便利方法会把那个提问吞掉，所以它不该有。
-
-### Q44 —— Primary 标注落在 Device 名字那一格，不进 `cli::status::render`
-
-**From:** 票 09（Primary Device 选择）
-
-**取的路**：`Selection::label(&Device)` 交出那一行开头的名字，选中的那一个后面多一句
-`（Primary Device）`，别的原样。`render()` 一个字没动，`run()` 里那句 `println!` 从
-`device.name` 换成 `selection.label(device)`。
-
-**另一条路**：在 `render()` 里加第五段（它现在是百分比 / 充电态+电压 / 来源 / 陈旧标注四段
-拼起来的），多收一个 `is_primary: bool`。
-
-**推荐**：现状，而且这一条**不只是为了避开票 08**（它此刻正在改 `render` 的陈旧标注那一段）。
-`render` 排版的是一份 Reading，而**一台失联的 Device 照样可以是 Primary Device**——钉死的
-那一种，或者保持上次的选择。那一行走的是 `run()` 里 `Err` 那一支，印的是"读不到 —— …"，
-`render` 根本没被调用。标注放进 `render`，最需要它的那一行恰好标不出来。翻案是把那半句从
-`label` 挪进 `render`，关在本票内。
-
-**副作用**：`run()` 从"读一台印一台"改成"先把全部读完，再一起印"——`lowest` 得看过这一轮
-全部读数才知道该标哪一行。读的次序、印的次序都还是配置里的书写顺序，一台设备仍然只取一个
-"当下"。**这一处会与票 08 在 `run()` 里撞车**（它要在 `Err` 那一支拿出上次已知值）：合并时
-那一支落在 `rows.push` 之前，交出来的东西同时是那一行的文本**和**一个 `Option<CandidateReading>`
-——拿出来的历史值该不该参与 `lowest`，答案由它的 `Freshness` 自己给（票 08 会把它标成陈旧，
-于是自然不参与）。
-
-### Q45 —— `select` 交的是一个带理由的 `Selection` 枚举，不是 `Option<&str>`
-
-**From:** 票 09（Primary Device 选择）
-
-**取的路**：`Selection` 五个变体——`Pinned` / `Lowest` / `HeldOver` / `PinnedNotFound` /
-`Undecided`。`primary_id()` 交出该标哪一行，`note()` 交出那三种"光看那几行看不出发生了什么"
-的情形要补的一句话。
-
-**另一条路**：`select` 直接返回 `Option<&str>`，`status` 只管标。
-
-**推荐**：现状。三种情形里，用户看到的东西**光凭那几行是解释不通的**：保持上次的选择时标注
-落在一行"已陈旧"或"读不到"上（看着像 bug）；钉的 id 不在册时一行都没标（看着像 bug）；
-一个都选不出来时同样一行都没标。`Option<&str>` 会把这三种压成同一个 `None`，而它们要用户做的
-事完全不同——这与 `cli::status::lost_reason` 分两种说法是同一个理由。措辞跟着产生它的规则住在
-一个文件里，与 `Level` / `EndpointKind` 的 `Display` 同一条。翻案是删掉 `note()` 和两个只为它
-存在的变体，关在本票内。
-
-**得说清一句：票面没有授权这一路。** 票面 6 条和 spec 都没提"钉的 id 写错了"这种情形，spec
-的「收口」只要求一行一个 Device。`PinnedNotFound` 与末尾那句交代都是本票加的，理由是 Q42 那条
-不对称（用户以为钉住了、其实没有）。code review 的 spec 轴把它记成未授权行为但不建议撤，
-同意——真要撤，撤的是 `note()` 和 `PinnedNotFound`，`select` 的其余部分不动。
-
-**顺带记一处词汇缺口，留给 `/domain-modeling`。** 本票引入了三个 `CONTEXT.md` 里没有的词：
-**候选**（`Candidate`：一台正在争 Primary Device 位置的 Device）、**保持上次的选择**
-（`HeldOver`：Primary Device 那一条只认"钉死"和"按规则动态选出"两种，不认这第三种）、以及
-`CandidateReading` ——它拿 **Reading** 这个定义好的词命名了一个投影（词汇表里的 Reading 逐字
-含"电量、充电状态、电压、取得时刻，以及它来自哪条 Endpoint"，而这个结构只有 level 与
-freshness 两样）。三个都是实现层的名字、局部清楚，所以本票没有改；但 `docs/agents/domain.md`
-要求"词汇表里没有的概念要么重新考虑、要么记成一处缺口"，这就是那处缺口。真正值得进词汇表的
-大概是**保持上次的选择**背后那个概念——票 08 和票 11 都要给它起名字。
 
 ## Settled
 

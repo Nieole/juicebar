@@ -21,6 +21,20 @@ pub fn default_config_path() -> Result<PathBuf> {
     Ok(Path::new(&appdata).join("juicebar").join("config.toml"))
 }
 
+/// 状态文件的位置：**解析出来的配置文件旁边**，`state.toml`。
+///
+/// 缺省因此是 `%APPDATA%\juicebar\state.toml`，也就是 spec 说的「`%APPDATA%\juicebar\` 下的
+/// 状态文件」。它与 [`default_config_path`] 是两回事，所以另起一个名字而不是复用那一个
+/// ——`docs/adr/0003` 专门划了这条界：用户可见的配置选择回写 `config.toml`，这一份只放
+/// 运行时缓存。两者共用一个名字迟早会让人以为它们是同一份文件的两种叫法。
+///
+/// **跟着 `--config` 走而不是钉死在 `%APPDATA%`**：拿一份临时配置跑一次 `status`，缓存该跟着
+/// 那份配置，而不是往用户真正在用的那一份上盖——那一份里存的是他真设备的历史值。代价是同一台
+/// 设备用两份配置跑会各记一份历史，而那正是想要的：两份配置里的同一个 `id` 未必指同一台设备。
+pub fn state_path_beside_config(config_path: &Path) -> PathBuf {
+    config_path.with_file_name("state.toml")
+}
+
 /// 子命令的 `--config` 落到哪个路径上：给了就用给的，没给就用默认位置。
 ///
 /// 和 [`default_config_path`] 同理住在一处：每个吃 `--config` 的子命令都要做这一步，

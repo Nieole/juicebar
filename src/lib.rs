@@ -15,3 +15,4 @@ pub mod hid;
 pub mod primary;
 pub mod sources;
 pub mod staleness;
+pub mod state;
