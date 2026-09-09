@@ -17,8 +17,11 @@ pub mod fixtures;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::rc::Rc;
 
 use anyhow::{Result, bail};
+use juicebar::config::Device;
+use juicebar::endpoints::{EndpointKind, Endpoints};
 use juicebar::sources::Transport;
 
 /// 假 Transport：按脚本交回预先排好的帧，并记下每一次发出去的帧。
@@ -63,4 +66,111 @@ impl Transport for FakeTransport {
     fn report_id(&self) -> u8 {
         self.report_id
     }
+}
+
+/// 假枚举接缝：按脚本说哪些 Endpoint 在场，并给每一条备一个假 Transport。
+///
+/// 有了它，"拔线 → Wired 从枚举里消失 → 同周期降级到 Dongle24G"这条路径不用真的
+/// 拔一次线就能断言——那是实测确认过、也最容易写错的行为。
+///
+/// 它**故意按给定的顺序原样交出在场的 Endpoint**，不替谁排序：优先级住在取数那一步，
+/// 不住在这里，所以用例可以把顺序倒过来，验证取数没有在偷懒地信任枚举给的顺序。
+pub struct FakeEndpoints {
+    present: Vec<(EndpointKind, Rc<FakeTransport>)>,
+}
+
+impl FakeEndpoints {
+    /// 在场的 Endpoint，每一条带一份回包脚本。脚本为空即这条 Endpoint 读不到
+    /// （相当于超时）。
+    ///
+    /// `report_id` 是每条假 Transport 用的报文编号——它参与鼠标的校验和运算，
+    /// 所以断言"发出去的帧与实测逐字节相同"时它必须是真的那一个。
+    pub fn new(
+        report_id: u8,
+        present: impl IntoIterator<Item = (EndpointKind, Vec<Vec<u8>>)>,
+    ) -> Self {
+        Self {
+            present: present
+                .into_iter()
+                .map(|(kind, responses)| (kind, Rc::new(FakeTransport::new(report_id, responses))))
+                .collect(),
+        }
+    }
+
+    /// 某条 Endpoint 上那个假 Transport，用来断言往它发了哪些帧——
+    /// "Wired 在场时不去打扰 Dongle24G"就靠它的 `sent()` 是空的。
+    pub fn transport(&self, endpoint: EndpointKind) -> Rc<FakeTransport> {
+        self.find(endpoint)
+            .unwrap_or_else(|| panic!("{endpoint} 不在这份假枚举里"))
+    }
+
+    fn find(&self, endpoint: EndpointKind) -> Option<Rc<FakeTransport>> {
+        self.present
+            .iter()
+            .find(|(kind, _)| *kind == endpoint)
+            .map(|(_, transport)| transport.clone())
+    }
+}
+
+impl Endpoints for FakeEndpoints {
+    fn present(&self, _device: &Device) -> Vec<EndpointKind> {
+        self.present.iter().map(|(kind, _)| *kind).collect()
+    }
+
+    fn open_transport(
+        &self,
+        _device: &Device,
+        endpoint: EndpointKind,
+    ) -> Result<Box<dyn Transport>> {
+        match self.find(endpoint) {
+            Some(transport) => Ok(Box::new(SharedTransport(transport))),
+            None => bail!("{endpoint} 不在场"),
+        }
+    }
+}
+
+/// 交出去一份、自己手里还留着一份的 [`FakeTransport`]。
+///
+/// `open_transport` 要把 Transport 的所有权交出去，而用例还得回头问它发了哪些帧，
+/// 所以两边共享同一个。孤儿规则不允许直接给 `Rc<FakeTransport>` 实现 `Transport`，
+/// 套一层就够了。
+struct SharedTransport(Rc<FakeTransport>);
+
+impl Transport for SharedTransport {
+    fn exchange(&self, request: &[u8]) -> Result<Vec<u8>> {
+        self.0.exchange(request)
+    }
+
+    fn report_id(&self) -> u8 {
+        self.0.report_id()
+    }
+}
+
+/// 用例里那只鼠标：两条 HID Endpoint 都配齐了，实测的 VID/PID。
+pub fn mouse_with_both_endpoints() -> Device {
+    juicebar::config::Config::parse(
+        r#"
+        [[device]]
+        id = "dragonfly3"
+        name = "Dragonfly 3 Master+"
+        driver = "vgn_mouse"
+
+          [device.wired]
+          vid = 0x391D
+          pid = 0x1005
+          usage_page = 0xFF02
+          usage = 0x0002
+          report_id = 8
+
+          [device.wireless_24g]
+          vid = 0x391D
+          pid = 0x1A05
+          usage_page = 0xFF02
+          usage = 0x0002
+          report_id = 8
+        "#,
+    )
+    .expect("用例里的配置应当解析得动")
+    .devices
+    .remove(0)
 }

@@ -64,3 +64,58 @@ fn the_shipped_example_config_parses() {
     assert_eq!(ids, ["dragonfly3", "neon75"]);
     assert_eq!(config.devices[1].driver, "vgn_keyboard");
 }
+
+/// 插线时才出现的那条 Endpoint 也要读得出来。
+///
+/// `pid` 与 Dongle24G 的 `0x1A05` 只差一个字符，而它们是**两个并存的设备**而不是
+/// 替换关系（见 docs/adr/0001）——这条用例顺带把两个 pid 钉在一起对照。
+#[test]
+fn reads_a_device_wired_endpoint() {
+    let config = Config::parse(
+        r#"
+        [[device]]
+        id = "dragonfly3"
+        name = "Dragonfly 3 Master+"
+        driver = "vgn_mouse"
+
+          [device.wired]
+          vid = 0x391D
+          pid = 0x1005
+          usage_page = 0xFF02
+          usage = 0x0002
+          report_id = 8
+
+          [device.wireless_24g]
+          vid = 0x391D
+          pid = 0x1A05
+          usage_page = 0xFF02
+          usage = 0x0002
+          report_id = 8
+        "#,
+    )
+    .unwrap();
+
+    let device = &config.devices[0];
+    let wired = device.wired.as_ref().expect("应当有 Wired");
+    assert_eq!(wired.vid, 0x391D);
+    assert_eq!(wired.pid, 0x1005);
+    assert_eq!(wired.report_id, 8);
+    assert_eq!(device.dongle_24g.as_ref().unwrap().pid, 0x1A05);
+}
+
+/// 没插线时 `[device.wired]` 是缺席的——自举扫不到它，缺一条 Endpoint 不该让整份
+/// 配置读不动。
+#[test]
+fn a_device_may_have_no_wired_endpoint() {
+    let config = Config::parse(
+        r#"
+        [[device]]
+        id = "dragonfly3"
+        name = "Dragonfly 3 Master+"
+        driver = "vgn_mouse"
+        "#,
+    )
+    .unwrap();
+
+    assert!(config.devices[0].wired.is_none());
+}

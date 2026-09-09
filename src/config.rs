@@ -33,6 +33,12 @@ pub struct Device {
     /// （样例配置就写着 `vgn_keyboard`），那该是取数时报一行"尚未实现"，
     /// 而不是让整份配置读不动。
     pub driver: String,
+    /// Device 通过 USB 线直连时出现的 Endpoint。
+    ///
+    /// 它有**独立于 Dongle24G 的另一组 VID/PID**，插线时作为一个额外的设备被枚举
+    /// 出来，而不是替换掉 Dongle24G（见 `docs/adr/0001`）。所以这一块在自举时通常
+    /// 缺席——只有插着线才扫得到。
+    pub wired: Option<HidEndpoint>,
     /// 经 2.4G 接收器的 Endpoint。接收器自己有一组 VID/PID，与 Device 本体不同。
     #[serde(rename = "wireless_24g")]
     pub dongle_24g: Option<HidEndpoint>,
