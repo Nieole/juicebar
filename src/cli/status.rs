@@ -8,13 +8,14 @@ use std::path::PathBuf;
 use anyhow::{Result, anyhow};
 
 use crate::bluetooth::{self, BleBattery};
-use crate::cli::{config_refresh, resolve_config_path};
+use crate::cli::{config_refresh, resolve_config_path, state_path_beside_config};
 use crate::clock::{Clock, SystemClock, Timestamp};
-use crate::config::{Config, Device};
+use crate::config::{Config, Device, General};
 use crate::endpoints::{EndpointKind, EndpointReading, Endpoints, SystemEndpoints};
 use crate::sources::level::{LevelSource, level_for};
 use crate::sources::{Reading, Transport, driver_for};
 use crate::staleness::{Freshness, Staleness};
+use crate::state::{LastKnown, Provenance};
 
 pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     let path = resolve_config_path(config_path)?;
@@ -28,6 +29,10 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     // 枚举一次，全部 Device 共用：一次枚举要打开本机每一条 HID collection。
     let endpoints = SystemEndpoints::enumerate()?;
     let clock = SystemClock;
+    // 上次已知的读数。**读不到、或者读到的东西坏了，都当成没有已知值**，不影响下面那几行
+    // （票面第 5 条）——它是缓存，不是用户的数据。
+    let state_path = state_path_beside_config(&path);
+    let mut last_known = LastKnown::load(&state_path);
     // 一个 Device 都没配不是就此收摊：**那正是最需要下面那段未登记名单的时刻**（本机扫到的
     // 每一台 BLE 设备都还没登记，而 MAC 就在那几行里等着抄）。所以这里不再提前 return。
     if config.devices.is_empty() {
@@ -37,14 +42,17 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
         // 一个 Device 一个"当下"，取数与陈旧判定共用它。几台设备依次读下来会花掉真实
         // 时间，所以这个值在循环里取而不在循环外——但**一台设备只取一次**。
         let now = clock.now();
-        let line = match read(device, &endpoints, now) {
-            Ok(reading) => {
-                let staleness = Staleness::assess(&reading, &config.general, now);
-                render(&reading, device.level_source, &staleness)
-            }
-            // 一台读不到不该拖累别的 Device，把原因印在它自己那一行上。
-            Err(e) => format!("读不到 —— {e:#}"),
-        };
+        let line =
+            match read_or_last_known(device, &endpoints, &mut last_known, &config.general, now) {
+                // 读到的那一份已经由 `read_or_last_known` 记进 `last_known` 了（票面第 1 条），
+                // 写盘在这一趟的末尾一次写完：几台设备的记录住在同一份文件里。
+                Ok((reading, provenance)) => {
+                    let staleness = Staleness::assess(&reading, &config.general, now);
+                    render(&reading, device.level_source, &staleness, provenance)
+                }
+                // 一台读不到不该拖累别的 Device，把原因印在它自己那一行上。
+                Err(e) => format!("读不到 —— {e:#}"),
+            };
         println!("{}  {line}", device.name);
     }
 
@@ -57,6 +65,12 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
         for line in unregistered {
             println!("  {line}");
         }
+    }
+
+    // 写盘放在最后，一趟一次。**写不进去只在 stderr 上说一句，不让整条命令失败**：上面
+    // 那几行已经印出去了，而用户要的东西就是那几行。丢的是下一趟的记忆，不是这一趟的输出。
+    if let Err(e) = last_known.save(&state_path) {
+        eprintln!("记不下这一趟的读数（下次启动就没有上次已知值了）—— {e:#}");
     }
     Ok(())
 }
@@ -170,6 +184,49 @@ pub fn read(device: &Device, endpoints: &dyn Endpoints, now: Timestamp) -> Resul
     Err(lost_reason(device, &failures))
 }
 
+/// 这一趟拿得出来的读数：先按优先级取一次，取不到就退到状态文件里的上次已知值。
+///
+/// **"失联"与"没有已知值"是两回事，这个函数把它们分开。**设备收进抽屉、关了机、接收器拔了
+/// ——这一趟确实读不到，但用户仍然该看见"上次是多少电"（票面第 2 条）。只有连历史值都没有
+/// （或者它已经过了 `very_stale_after`）才是那句"读不到"。
+///
+/// 交出来的 [`Provenance`] 是**下游要分辨的那一维**：[`render`] 拿它标注（一份十秒前的历史值
+/// 照样不是现状）。把它塞进 [`EndpointReading`] 是另一条路，但那个结构描述的是"设备说了
+/// 什么"，而这一维说的是"这个数从哪儿来的"，两者不同源（parking lot Q39）。
+///
+/// **记账也在这里：读到了就写进 `last_known`，退到历史值那一支一个字都不写。**两件事合在
+/// 一个函数里不是图省事——"每次成功的 Reading 写入状态文件"和"失联时拿出上次已知值"是同一
+/// 个决定的两面，分开写就出现一个只活在 [`run`] 里、用例碰不到的分支。把拿出来的历史值再
+/// 写一遍会刷新写盘时刻，于是那条记录永远到不了 `very_stale_after`：一只收进抽屉半年的鼠标
+/// 每天被看一眼就每天年轻一天，而"这个历史值必须会过期"这句话永久落空、没有任何症状。
+///
+/// 退不到历史值时交出来的错误是**取数那一趟的原因**，不是"文件里没有"：用户要修的是设备
+/// 那一头，而不是一个他不该知道存在的缓存文件。
+///
+/// `pub` 与 [`read`] / [`render`] 同理：这一维是 `status` 的外部行为——一次真机上的失联要靠
+/// 拔线或者等设备睡着才复现一次，而这条路径上错一步的症状是"重启就失忆"，没有任何报错。
+pub fn read_or_last_known(
+    device: &Device,
+    endpoints: &dyn Endpoints,
+    last_known: &mut LastKnown,
+    general: &General,
+    now: Timestamp,
+) -> Result<(EndpointReading, Provenance)> {
+    match read(device, endpoints, now) {
+        Ok(reading) => {
+            last_known.record(&device.id, &reading, now);
+            Ok((reading, Provenance::JustRead))
+        }
+        // 历史值只在这一支里被问到：读得到的时候它不参与竞争。让它参与，一份存了半天的
+        // 读数就可能盖掉当场问出来的那个数——而这条链路上其余每一处守的都是相反的规矩
+        // （Endpoint 优先级、`Ble` 排最后）。
+        Err(lost) => last_known
+            .reading_for(&device.id, general, now)
+            .map(|last| (last, Provenance::LastKnown))
+            .ok_or(lost),
+    }
+}
+
 /// 一条 Endpoint 都没读到时印出去的那句话。
 ///
 /// 分两种说法，因为它们要用户做的事完全不同：一条都不在场多半是设备没插或配置写错，
@@ -238,6 +295,7 @@ pub fn render(
     sourced: &EndpointReading,
     level_source: LevelSource,
     staleness: &Staleness,
+    provenance: Provenance,
 ) -> String {
     let EndpointReading {
         endpoint: _,
@@ -280,23 +338,37 @@ pub fn render(
     format!(
         "{measured}  {}{}",
         source_of(sourced, staleness),
-        stale_marker(staleness.freshness),
+        stale_marker(staleness.freshness, provenance),
     )
 }
 
-/// 陈旧标注：新鲜的读数什么都不加，另两档都以"已陈旧"开头。
+/// 陈旧标注：新鲜、这一趟读到的读数什么都不加，其余每一种都以"已陈旧"开头。
 ///
-/// 两档共用同一个词是有意的：`CONTEXT.md` 只给了一个 **Stale**，而用户要分辨的也只有
+/// 几档共用同一个词是有意的：`CONTEXT.md` 只给了一个 **Stale**，而用户要分辨的也只有
 /// "能不能当现状"这一件事。给第二档另造一个词（"极旧"？"失效"？）只会多一个
 /// `CONTEXT.md` 里没有的说法，而 Stale 那一条的 _Avoid_ 恰恰就是"过期、失效"。
 ///
-/// 第二档多的半句是**交代那个百分比去哪了**：前面那一段已经换成了一个日期，不说一句
+/// "不显示百分比"那半句是**交代那个百分比去哪了**：前面那一段已经换成了一个日期，不说一句
 /// 用户会以为读数没读到——而它读到了，只是旧得不该再当数字报出来。
-fn stale_marker(freshness: Freshness) -> &'static str {
-    match freshness {
-        Freshness::Fresh => "",
-        Freshness::Stale => "  已陈旧",
-        Freshness::VeryStale => "  已陈旧，不显示百分比",
+///
+/// **上次已知值一律带标注，新鲜那一档也带**（[`Provenance`] 上写了理由）：阈值答的是
+/// "这个数多新"，而历史值的问题是设备此刻不在，一份十秒前的读数照样不是现状。多的那半句
+/// "上次已知值"是这一维自己要说的话——一份当场读到的陈旧读数（Windows 缓存里两小时前的
+/// 那个数）和一份失联后从磁盘上捞出来的读数，用户要做的事不同：前者等一等会自己变新，
+/// 后者得先把设备找出来。
+///
+/// **对两维都穷举、不写通配分支**，理由与 parking lot Q29 那一条相同：加一档（或者加第三种
+/// 来路）时编译器会把人指到这里来，而一个 `_` 会让那句承诺落空。
+fn stale_marker(freshness: Freshness, provenance: Provenance) -> &'static str {
+    match (provenance, freshness) {
+        (Provenance::JustRead, Freshness::Fresh) => "",
+        (Provenance::JustRead, Freshness::Stale) => "  已陈旧",
+        (Provenance::JustRead, Freshness::VeryStale) => "  已陈旧，不显示百分比",
+        (Provenance::LastKnown, Freshness::Fresh | Freshness::Stale) => "  已陈旧，上次已知值",
+        // 走不到：超过 `very_stale_after` 的历史值在 `LastKnown::reading_for` 那一步就被
+        // 丢掉了，而两条 HID 压根没有这一档（Q29）。留着这一支是因为类型要交代一句，
+        // 而**交代的话得是实话**——那时前面那一段已经换成了一个日期。
+        (Provenance::LastKnown, Freshness::VeryStale) => "  已陈旧，上次已知值，不显示百分比",
     }
 }
 

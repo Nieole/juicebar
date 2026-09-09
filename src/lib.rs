@@ -14,3 +14,4 @@ pub mod endpoints;
 pub mod hid;
 pub mod sources;
 pub mod staleness;
+pub mod state;
