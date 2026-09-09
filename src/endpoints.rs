@@ -10,22 +10,25 @@
 
 use anyhow::{Result, anyhow};
 
-use crate::config::{Device, HidEndpoint};
+use crate::bluetooth::{self, BleBattery};
+use crate::config::{BluetoothEndpoint, Device, HidEndpoint};
 use crate::hid::{self, HidInfo};
 use crate::sources::hid_transport::{FeatureReportTransport, OutputReportTransport};
 use crate::sources::{Reading, ReportKind, Transport, driver_for};
 
 /// 一个 Device 上一条能取到读数的通路的种类。
 ///
-/// `Ble` 是票 05 的活。它**不经过协议驱动**（走 `bluetooth.rs` 的 Windows 属性读取，
-/// 不是一次 HID 往返），所以取数那一步对这个枚举 `match` 到底、不写通配分支——
-/// 加进第三种时编译器会把人指到那一行去，而不是让 Ble 悄悄走上 HID 那条路。
+/// `Ble` **不经过协议驱动**（走 `bluetooth.rs` 的 Windows 属性读取，不是一次 HID
+/// 往返），所以取数那一步对这个枚举 `match` 到底、不写通配分支——加第四种时编译器会把
+/// 人指到那一行去，而不是让新来的悄悄走上别人那条路。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndpointKind {
     /// Device 通过 USB 线直连时出现的 Endpoint。
     Wired,
     /// 经 2.4G 接收器的 Endpoint。
     Dongle24G,
+    /// 经蓝牙的 Endpoint。数据取自 Windows 缓存而非当场问设备，因此天然可能陈旧。
+    Ble,
 }
 
 impl EndpointKind {
@@ -35,18 +38,41 @@ impl EndpointKind {
     /// 设备不再经 2.4G 传数据，此刻能读到数的只有 Wired。不读有线，充电中的鼠标
     /// 就没有任何数据源，只能显示离线——而那是明确的误报（见 `docs/adr/0001`）。
     ///
-    /// 它同时是**唯一的全变体清单**：要遍历所有种类的地方（列出配置过哪几条、
-    /// 筛出哪几条在场）都走这里，于是加一种 Endpoint 只改这一行。
-    pub const PRIORITY: [Self; 2] = [Self::Wired, Self::Dongle24G];
-
-    /// 这个 Device 上这条 Endpoint 的配置块，没配就是 `None`。
+    /// `Ble` 排在最后是因为它读的是缓存：当场问得出来的时候，一个可能是几个月前的
+    /// 数字不该抢在前面（`CONTEXT.md` 说它「天然可能陈旧」）。反过来，两条 HID 都
+    /// 不可用时（设备关机、收进抽屉、接收器拔了）它是唯一还答得出话的一级。
     ///
-    /// 返回 `HidEndpoint` 是因为现有两种都是 HID。票 05 的 `Ble` 配的是
-    /// `[device.bluetooth]` 里一个蓝牙地址，不是这个类型——它要另一条路。
-    pub fn config_in(self, device: &Device) -> Option<&HidEndpoint> {
+    /// 它同时是**唯一的全变体清单**：要遍历所有种类的地方（列出配置过哪几条、
+    /// 筛出哪几条在场）都走这里，不各自维护一份名单。
+    ///
+    /// 它管的只是**名单**，不是每一种的行为：怎么配、怎么算在场、怎么取一次数、来源那一段
+    /// 怎么印，都是逐种类不同的事，各自写成对这个枚举穷举的 `match`（都不写通配分支，
+    /// 于是加一种时编译器会把人一个个指过去）。加一种 Endpoint 要改的是这一行**加上**那几处
+    /// 编译器指出来的地方。
+    pub const PRIORITY: [Self; 3] = [Self::Wired, Self::Dongle24G, Self::Ble];
+
+    /// 这个 Device 上这条 **HID** Endpoint 的配置块，没配就是 `None`。
+    ///
+    /// 名字里的 `hid` 是认真的：**对 `Ble` 永远是 `None`**，它配的是 `[device.bluetooth]`
+    /// 里一个蓝牙地址，根本不是这个类型。所以这个方法答不了"配没配"——那件事问
+    /// [`Self::is_configured_in`]。
+    pub fn hid_config_in(self, device: &Device) -> Option<&HidEndpoint> {
         match self {
             Self::Wired => device.wired.as_ref(),
             Self::Dongle24G => device.dongle_24g.as_ref(),
+            Self::Ble => None,
+        }
+    }
+
+    /// 这个 Device 配了这条 Endpoint 吗。
+    ///
+    /// 与 [`Self::hid_config_in`] 分开，是因为那个方法对 `Ble` 恒为 `None`：拿它当"配没配"
+    /// 的判据，会把蓝牙从"这个 Device 配了哪几条"的名单里漏掉——而那份名单正是一条都
+    /// 不在场时印给用户看的东西，漏一条就等于让用户去找一个根本不在名单上的原因。
+    pub fn is_configured_in(self, device: &Device) -> bool {
+        match self {
+            Self::Wired | Self::Dongle24G => self.hid_config_in(device).is_some(),
+            Self::Ble => device.bluetooth.is_some(),
         }
     }
 }
@@ -57,6 +83,7 @@ impl std::fmt::Display for EndpointKind {
         f.write_str(match self {
             Self::Wired => "Wired",
             Self::Dongle24G => "Dongle24G",
+            Self::Ble => "Ble",
         })
     }
 }
@@ -73,6 +100,60 @@ pub struct EndpointReading {
     pub endpoint: EndpointKind,
     /// 驱动解析出来的那部分。
     pub reading: Reading,
+    /// Windows 那份缓存的更新时刻距今多少秒。
+    ///
+    /// **只有 `Ble` 会有值。**两条 HID 是当场往返，根本没有缓存这回事，恒为 `None`；
+    /// `Ble` 这一侧的 `None` 是另一个意思——`bluetooth.rs` 的原话：这台设备根本没有
+    /// 更新时间戳。哪一种由 `endpoint` 区分。
+    ///
+    /// 本票只把它带出来、印在来源那一段里，**不据它做任何陈旧判定**：阈值
+    /// （`stale_after` / `very_stale_after`）、变灰、只显示日期，连同 Clock 接缝
+    /// 都是票 06 的活。
+    pub cache_age_secs: Option<u64>,
+}
+
+impl EndpointReading {
+    /// 一次 HID 往返读到的读数。当场问出来的，没有缓存年龄可言。
+    pub fn from_hid(endpoint: EndpointKind, reading: Reading) -> Self {
+        Self {
+            endpoint,
+            reading,
+            cache_age_secs: None,
+        }
+    }
+
+    /// 把本机扫到的一台 BLE 设备读成一份读数。
+    ///
+    /// 纯函数，不碰 Windows：一台设备怎么变成一份 Reading 因此在不接蓝牙的机器上也
+    /// 断言得到，而"本机有哪些 BLE 设备"那一步才是躲不开真系统的（那正是这条接缝
+    /// 存在的理由）。假枚举走的也是这个函数，好让它交出的东西与真枚举同形。
+    ///
+    /// `charging` 与 `voltage_mv` 一律 `None`，理由与键盘那两项同一条（parking lot
+    /// Q7/Q8）：Windows 的电量属性里**根本没有**这两项，`None` 是"这条通路说不出来"，
+    /// 不是"没在充电"、也不是"0 mV"。填一个值出去，下游就再也分不清两者。
+    pub fn from_ble_cache(cached: &BleBattery) -> Result<Self> {
+        // level 缺席的设备在 `bluetooth::enumerate` 那一步就被滤掉了，走到这里仍要
+        // 交代一句：没有电量属性不是"电量为 0"，那是这条通路这一次读不到。
+        let reported_level = cached.level.ok_or_else(|| {
+            anyhow!(
+                "BLE 设备 {} 没有电量属性",
+                if cached.friendly_name.is_empty() {
+                    cached.address.as_str()
+                } else {
+                    cached.friendly_name.as_str()
+                }
+            )
+        })?;
+        Ok(Self {
+            endpoint: EndpointKind::Ble,
+            reading: Reading {
+                reported_level,
+                charging: None,
+                voltage_mv: None,
+            },
+            cache_age_secs: cached.age_secs,
+        })
+    }
 }
 
 /// 枚举接缝。
@@ -83,33 +164,75 @@ pub trait Endpoints {
     /// 配置里没有这一块、或者配了但设备没插，都算不在场。
     fn present(&self, device: &Device) -> Vec<EndpointKind>;
 
-    /// 打开一条在场的 Endpoint，拿到往返用的 Transport。
+    /// 打开一条在场的 **HID** Endpoint，拿到往返用的 Transport。
     ///
     /// 失败即"这条 Endpoint 这一次用不上"，与读不到是同一件事，调用方接着试下一条。
     /// 最常见的失败是厂商上位机正占着这条通路（票 07 会把它变成"暂停"而不是失败）。
     ///
-    /// 现在只造 output+input 那一种 Transport。键盘的 vendor collection 只有 feature
-    /// 报文、超时也不是 3000 ms，接它的时候这里要按协议家族分支——那是驱动那一维的事，
-    /// 接缝把位置留在这里。
+    /// 拿 `Ble` 来问是一次失败：那一级根本没有 Transport 可交（见
+    /// [`Self::read_ble`]）。这个方法从来不适用于每一种 Endpoint——它造的东西
+    /// （一次字节往返）只有 HID 才有。
     fn open_transport(&self, device: &Device, endpoint: EndpointKind)
     -> Result<Box<dyn Transport>>;
+
+    /// 从 Windows 攒的属性缓存里读一次 `Ble`。
+    ///
+    /// **它和上面那个方法不对称，因为 Ble 和另两级本来就不对称。**Transport 包的是
+    /// "一次到设备的字节往返"，而 Ble 不是往返：没有 report id、没有校验和、没有
+    /// [`ReportKind`]、也不经过协议驱动（配置里的 `driver` 只作用于 HID）。硬给它编一个
+    /// Transport，就得为一条不发字节的通路编造字节。
+    ///
+    /// 所以这一级直接交成品：接缝这一侧是唯一知道那份缓存有多旧的地方，而
+    /// [`EndpointReading::cache_age_secs`] 只有它填得出来。转换本身是
+    /// [`EndpointReading::from_ble_cache`]，纯函数。
+    ///
+    /// 失败与另两级同义："这条 Endpoint 这一次读不到"——没配 `[device.bluetooth]`、
+    /// 本机的 BLE 设备里没有这个地址、或者那台设备没有电量属性。
+    fn read_ble(&self, device: &Device) -> Result<EndpointReading>;
 }
 
-/// 落到真 HID 上的枚举：一次 [`hid::enumerate`] 的快照。
+/// 落到真机上的枚举：一次 [`hid::enumerate`] 加一次 [`bluetooth::enumerate`] 的快照。
 ///
 /// 快照取一次、整个取数周期共用：一次枚举要打开本机每一条 HID collection，不便宜。
 /// 也正因为是快照，"拔线"在一个周期里表现为 `Wired` 从名单上消失——那是**瞬时**的
 /// 不在场，而不是一次三秒的超时，所以同周期降级几乎不要钱。
-pub struct HidEndpoints {
+///
+/// 名字里不再只有 HID：`Ble` 那一级读的是 Windows 的设备属性，两样都是"本机此刻有
+/// 什么"的快照，装在同一个结构里。
+pub struct SystemEndpoints {
     collections: Vec<HidInfo>,
+    ble: Vec<BleBattery>,
 }
 
-impl HidEndpoints {
+impl SystemEndpoints {
     /// 现在枚举一次。
     pub fn enumerate() -> Result<Self> {
         Ok(Self {
             collections: hid::enumerate()?,
+            // 蓝牙枚举失败**不该拖累两条 HID**：那时该表现为"Ble 这一级不在场"，
+            // 而不是整个 status 一行都印不出来。没有蓝牙硬件的机器是常态。
+            ble: bluetooth::enumerate().unwrap_or_default(),
         })
+    }
+
+    /// 这一次枚举扫到的全部带电量的 BLE 设备。
+    ///
+    /// `status` 要用它列出**未登记**的那些（`show_unknown_ble`）。给出快照而不是让它
+    /// 自己再扫一遍：同一次输出里的两处说法该来自同一次枚举，否则"未登记"那一段和
+    /// 上面每一行可能在讲两个不同时刻的本机。
+    pub fn scanned_ble(&self) -> &[BleBattery] {
+        &self.ble
+    }
+
+    /// 本机扫到的设备里地址对得上的那一台。
+    ///
+    /// 不看 `connected`：**设备关机、收进抽屉，正是要退到缓存的那一刻**，而那时
+    /// Windows 里的值照样在（`bluetooth.rs` 开头记着实测见过 2025 年 3 月的读数）。
+    /// 拿在线与否当在场与否，这一级就恰好在最需要它的时候消失。
+    fn find_ble(&self, configured: &BluetoothEndpoint) -> Option<&BleBattery> {
+        self.ble
+            .iter()
+            .find(|found| configured.matches(&found.address))
     }
 
     /// 在本机枚举到的 collection 里找配置指名的那一条，**限于发得出这种报文的**。
@@ -146,17 +269,25 @@ fn can_send(c: &HidInfo, kind: ReportKind) -> bool {
     }
 }
 
-impl Endpoints for HidEndpoints {
+impl Endpoints for SystemEndpoints {
     fn present(&self, device: &Device) -> Vec<EndpointKind> {
-        let Some(report_kind) = Self::report_kind_of(device) else {
-            // 驱动都认不出来，就没有"发得出哪种报文"可言，一条也算不上在场。
-            return Vec::new();
-        };
         EndpointKind::PRIORITY
             .into_iter()
-            .filter(|kind| {
-                kind.config_in(device)
-                    .is_some_and(|endpoint| self.find_collection(endpoint, report_kind).is_some())
+            .filter(|kind| match kind {
+                // 报文种类由驱动来答，所以驱动认不出来时一条 HID 也算不上在场——
+                // 没有"发得出哪种报文"可言，就没法筛 collection。
+                EndpointKind::Wired | EndpointKind::Dongle24G => Self::report_kind_of(device)
+                    .zip(kind.hid_config_in(device))
+                    .is_some_and(|(report_kind, configured)| {
+                        self.find_collection(configured, report_kind).is_some()
+                    }),
+                // **Ble 不经过驱动**，所以那道筛子不适用于它：`driver` 认不出来
+                // （配置里写了本次编译还没实现的驱动名），蓝牙这一级照样在场。
+                EndpointKind::Ble => device
+                    .bluetooth
+                    .as_ref()
+                    .and_then(|configured| self.find_ble(configured))
+                    .is_some(),
             })
             .collect()
     }
@@ -166,8 +297,10 @@ impl Endpoints for HidEndpoints {
         device: &Device,
         endpoint: EndpointKind,
     ) -> Result<Box<dyn Transport>> {
+        // Ble 落到这里是调用错了方法而不是配置的问题：那一级没有 Transport 可交，
+        // 它走 `read_ble`。`hid_config_in` 对它恒为 None，所以这一句自然就挡住了。
         let configured = endpoint
-            .config_in(device)
+            .hid_config_in(device)
             .ok_or_else(|| anyhow!("这个 Device 没有配置 {endpoint}"))?;
         let report_kind = Self::report_kind_of(device)
             .ok_or_else(|| anyhow!("驱动 {} 尚未实现", device.driver))?;
@@ -196,5 +329,23 @@ impl Endpoints for HidEndpoints {
                 configured.report_id,
             )?),
         })
+    }
+
+    fn read_ble(&self, device: &Device) -> Result<EndpointReading> {
+        let configured = device
+            .bluetooth
+            .as_ref()
+            .ok_or_else(|| anyhow!("这个 Device 没有配置 Ble"))?;
+        // 这句话里"带电量属性的"不能省：快照来自 `bluetooth::enumerate`，它只收带电量属性
+        // 的设备。配对着、但 Windows 手上没有它电量的设备同样落到这一支，而对那台设备说
+        // "没配对？"就是把人往错的方向指——它配着对，只是这条通路答不出电量。
+        let cached = self.find_ble(configured).ok_or_else(|| {
+            anyhow!(
+                "本机带电量属性的 BLE 设备里没有地址 {}（没配对？还是这台设备不报电量？\
+                 跑 `juicebar scan` 看本机有哪些）",
+                configured.address
+            )
+        })?;
+        EndpointReading::from_ble_cache(cached)
     }
 }

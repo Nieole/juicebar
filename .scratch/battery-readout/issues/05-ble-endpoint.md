@@ -7,10 +7,10 @@
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Ble 成为优先级最低的第三级 Endpoint
-- [ ] Ble 不经过协议驱动（它是系统属性读取，配置里的 driver 字段只作用于 HID）
-- [ ] 前两级都失败时退到 Ble
-- [ ] `status` 明确标出来源是蓝牙，与 2.4G/有线可区分
-- [ ] 配置里未登记的 BLE 设备是否显示，受 `show_unknown_ble` 控制
+- [x] Ble 成为优先级最低的第三级 Endpoint
+- [x] Ble 不经过协议驱动（它是系统属性读取，配置里的 driver 字段只作用于 HID）
+- [x] 前两级都失败时退到 Ble
+- [x] `status` 明确标出来源是蓝牙，与 2.4G/有线可区分
+- [x] 配置里未登记的 BLE 设备是否显示，受 `show_unknown_ble` 控制

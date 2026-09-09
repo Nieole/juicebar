@@ -59,15 +59,25 @@ pub struct BleBattery {
 }
 
 impl BleBattery {
-    /// 把"多久以前"渲染成人能读的形式。
+    /// 这台设备的 [`age_text`]。留着这个方法是因为 `scan` 在用它，本票不动那个子命令。
     pub fn age_text(&self) -> String {
-        match self.age_secs {
-            None => "无时间戳".into(),
-            Some(s) if s < 90 => format!("{s} 秒前"),
-            Some(s) if s < 5400 => format!("{} 分钟前", s / 60),
-            Some(s) if s < 172800 => format!("{} 小时前", s / 3600),
-            Some(s) => format!("{} 天前", s / 86400),
-        }
+        age_text(self.age_secs)
+    }
+}
+
+/// 把"多久以前"渲染成人能读的形式。
+///
+/// 抽成自由函数是因为 `status` 那一行手上只有秒数：一份读数经枚举接缝交出来时只带走了
+/// 电量和这个秒数，没有整台 [`BleBattery`]（它不是 `Copy`）。两处印的是同一件事，
+/// 措辞得是同一份——`scan` 说"多久前那一列才是它的真实可信度"，`status` 那一行不该
+/// 换个说法。
+pub fn age_text(age_secs: Option<u64>) -> String {
+    match age_secs {
+        None => "无时间戳".into(),
+        Some(s) if s < 90 => format!("{s} 秒前"),
+        Some(s) if s < 5400 => format!("{} 分钟前", s / 60),
+        Some(s) if s < 172800 => format!("{} 小时前", s / 3600),
+        Some(s) => format!("{} 天前", s / 86400),
     }
 }
 

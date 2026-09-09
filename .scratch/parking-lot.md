@@ -407,6 +407,122 @@ collection 实测 `in:0 out:0 feat:65`，被"限于能发输出报文的"那道�
 这一行两个毛病一起消失（驱动名认得、通路也找得到），届时这条记录直接作废。若票 02 迟迟不落地
 而这一行碍事，翻案就是把三行检查搬回 `read()`，关在本票内。
 
+### Q21 —— 第三级 Endpoint 接进枚举接缝的方式：trait 上加第三个方法 `read_ble`
+
+**From:** 票 05（Ble Endpoint 接入）
+
+**票面点名要记的那处岔路。票 06 与票 07 都要站在这个形状上。**
+
+**取的路**：`trait Endpoints` 加第三个方法
+`read_ble(&self, device: &Device) -> Result<EndpointReading>`，取数那一步的 `match` 里 Ble 那一支
+走它。`open_transport` 原封不动，只在文档上写明它从来只适用于 HID。同时
+`EndpointReading` 多一个字段 `cache_age_secs: Option<u64>`，`Ble` 那一级填 Windows 那份缓存的
+更新时刻距今多少秒，两条 HID 恒为 `None`（当场往返，没有缓存这回事）。转换本身是纯函数
+`EndpointReading::from_ble_cache(&BleBattery)`，真枚举和假枚举走的是同一个。
+
+为什么 Ble 那一支交的是**成品** `EndpointReading` 而不是像 HID 那样交半成品：接缝这一侧是
+唯一知道那份缓存有多旧的地方。让它只交 `Reading`，那个秒数就得另开一条路出来，或者干脆丢掉
+——而丢掉它票 06 就得回来把这个方法重新签一次。
+
+**另一条路（票面的路 B）**：把"怎么取一次数"整个抽成第二条接缝，`open_transport` 换成
+`read_once(device, kind) -> Result<Reading>`，HID 那两级在实现内部自己走驱动。那样 trait 的每个
+方法都对每一种 Endpoint 成立，形状最齐整。
+
+代价是**测试会塌掉一半**：现在 `tests/status.rs` 里的假枚举交出的是假 Transport，用例断言的是
+"往这条通路发了哪些字节"——`does_not_disturb_the_dongle_24g_endpoint_while_wired_is_present`
+守的就是"Wired 在场时一个字节都不往 2.4G 发"（那是耗设备电的事）。改成 `read_once` 之后假枚举
+只能凭空造 `Reading`，那条断言连着帧内容的断言一起没了，而它们是这条链路上最贵的回归保护。
+另外票 04 刚定形的接缝要动，票 06/07 还得跟着改一遍。
+
+**推荐**：保持现状（路 A）。理由是这个不对称**不是实现偷懒，是被建模的东西本来就不对称**：
+Transport 包的是"一次到设备的字节往返"，而 Ble 根本不发字节——没有 report id、没有校验和、
+没有 `ReportKind`、也不经过协议驱动。硬把它塞进一个统一方法，就得为一条不发字节的通路编造字节。
+`CONTEXT.md` 把 Ble 定义成"数据取自 Windows 缓存而非当场问设备"，接缝上留着这道缝正是那句定义
+的形状。
+
+**给票 06 和票 07 的两句话**：
+
+- **票 06（Clock 与陈旧判定）**：Ble 的"多久以前"已经从 `cache_age_secs` 带出来了，不必再动接缝。
+  它是 Windows 报的秒数、**不经过 Clock**（那份时间戳是系统攒的，本机时钟只能用来算差值，
+  而 `bluetooth.rs` 已经算过了）。HID 那两级的 `cache_age_secs` 恒为 `None`，它们的新鲜度按
+  spec 是"3 × 轮询间隔"推导，那才是 Clock 的用处。本票只把秒数印在来源那一段里，
+  **一个阈值都没有**。
+- **票 07（厂商上位机暂停）**：`present()` 与"打开"仍然是分开的两个问题（Q16 的形状没变），
+  所以"不打开任何通道就把两条 HID 标成暂停"照旧做得到；而 Ble 走的是另一个方法，
+  暂停 HID 不会顺带停掉它——"暂停期间蓝牙照常更新"在这个形状上是自然的，不需要额外机制。
+
+**另一个没取的旋钮**：`SystemEndpoints::enumerate()` 里蓝牙枚举失败被 `unwrap_or_default()` 咽掉了，
+表现为"Ble 这一级不在场"。另一条路是 `?` 传出去。取现状是因为没有蓝牙硬件的机器是常态，
+而让蓝牙枚举失败去掀翻两条 HID 的输出（`status` 一行都印不出来）是明确的过度反应。
+翻案一个字符。
+
+### Q22 —— `HidEndpoints` 改名 `SystemEndpoints`（**合并时会撞上**）
+
+**From:** 票 05（Ble Endpoint 接入）
+
+**这条主要是给合并的人看的。**
+
+**取的路**：`HidEndpoints` → `SystemEndpoints`。它现在装两份快照：一次 `hid::enumerate` 和一次
+`bluetooth::enumerate`。改名之外还多了一个 `scanned_ble()`，把那份 BLE 快照借给 `status` 去列
+未登记的设备——同一次输出里的两处说法该来自同一次枚举。
+
+**另一条路**：留着 `HidEndpoints` 这个名字。改动面小一格（少动 `cli::status` 一行），
+合并时也不会撞。
+
+**推荐**：保持现状。一个装着 BLE 快照的 `HidEndpoints` 是个会误导下一个人的名字，而票 06/07
+都要读这个结构。**波及面**：`src/cli/status.rs` 里 `HidEndpoints::enumerate()` 那一行，
+仅此一处；`.scratch/parking-lot.md` 的 Q17 里提到的旧名是当时的事实，没动。若别的票在
+`SystemEndpoints` 落地之前也引用了旧名，合并会**编译失败**而不是静默出错——那是这条记录挑的
+方向：宁可撞一下，不要留一个说假话的名字。翻案是一次改名，关在本票内。
+
+### Q23 —— 失联那句话不再点名"输出报文"（Q19 的后续）
+
+**From:** 票 05（Ble Endpoint 接入）
+
+**取的路**：`lost_reason` 里"一条都不在场"那句的后半句由
+「本机枚举不到它们能发输出报文的通路（设备没插？）」改成
+「本机枚举不到它们（设备没插？蓝牙没配对？跑 `juicebar scan` 看本机有什么）」。
+
+**为什么非改不可**：这句话现在要同时对三种 Endpoint 成立，而"输出报文"对另两种都不对——键盘走
+feature 报文（票 02 落地后报文种类成了驱动那一维的事），`Ble` 压根不是 HID，它不在场是因为本机
+的 BLE 设备里没有配置写的那个地址。留着原话，键盘和蓝牙都会读到一句关于输出报文的话，
+而那不是它们不在场的原因。
+
+**另一条路**：按 `configured` 里的种类分支，给 HID 和 Ble 各说一句。措辞能更贴，代价是一个
+只为措辞存在的分支，而三条 Endpoint 的组合有七种。
+
+**推荐**：保持现状。Q19 定的是"话要说到查了什么为止，把原因降格成问句"，这次的改动是同一条原则
+在三种 Endpoint 上的延伸，不是放宽。**Q19 说它等票 02 落地就作废——票 02 已合并，驱动名认得了，
+但那一行仍然先撞上"不在场"**（键盘此刻数据走蓝牙，2.4G dongle 在场却答不出话），所以 Q19 的观察
+还没作废，只是它记的那句原话已经不在代码里了。翻案是改回一句话。
+
+### Q24 —— 未登记的 BLE 设备是一段独立输出，不是 Device（**票 09 要读**）
+
+**From:** 票 05（Ble Endpoint 接入）
+
+**取的路**：`show_unknown_ble` 落在 `[general]`（`Config.general.show_unknown_ble`，缺省 `false`），
+打开时 `status` 在全部 Device 之后另起**一段**列出本机扫到、而配置里没有对应 `[[device]]` 的
+BLE 设备。"登记过没有"按 MAC 判定（`BluetoothEndpoint::matches`，容忍大小写与 `:` / `-`）。
+这些设备**不是 Device**：没有 id、没有 name、不进 `config.devices`。
+
+代码这一侧的名字用的是"未登记"（`status::unregistered_ble_lines`）而**不是** Unknown：
+`CONTEXT.md` 的 Unknown 说的是"一份 Reading 的电量字段无法采信"，是读数的状态，和"这台设备
+配置里没写"是两回事。配置键 `show_unknown_ble` 是用户看得见的名字、样例配置里早就写着，
+不动它——**这条不一致是有意留下的**，两边各自对着自己的读者。
+
+一个 Device 都没配的时候这一段照印（`run()` 里因此不再提前 `return`）：那正是它唯一真正有用
+的时刻——本机扫到的每一台都还没登记，MAC 就在那几行里等着抄。code review 的 spec 轴抓出这一处
+时，它是坏的。
+
+**另一条路**：把它们当成临时 Device 混进主列表，每台一行、标一个"未登记"。托盘将来要显示的是
+同一组信息，混在一起看着更统一。
+
+**推荐**：保持现状。它们缺 Device 的一切（driver、别的 Endpoint、per-device 阈值），
+混进主列表就得给每一处"这个 Device 的 …"都补一条"除了未登记的那些"。**这一条给票 09**：
+Primary 选择遍历的是 `config.devices`，所以未登记的 BLE 设备**天然不参与** `lowest` 比较——
+那也正是该有的行为（一台没人登记的耳机不该抢走托盘图标）。翻案是把生成那几行的函数
+（`status::unregistered_ble_lines`，纯函数）挪进主循环，关在本票与票 09 之间。
+
 ## Settled
 
 <!-- 记录连同它的处置一起挪到这里 -->

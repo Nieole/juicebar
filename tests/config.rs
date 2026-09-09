@@ -119,3 +119,74 @@ fn a_device_may_have_no_wired_endpoint() {
 
     assert!(config.devices[0].wired.is_none());
 }
+
+/// 蓝牙那条 Endpoint 配的是一个 MAC，不是一组 VID/PID —— 它不经过 HID，也不经过驱动。
+#[test]
+fn reads_a_device_bluetooth_endpoint() {
+    let config = Config::parse(
+        r#"
+        [[device]]
+        id = "dragonfly3"
+        name = "Dragonfly 3 Master+"
+        driver = "vgn_mouse"
+
+          [device.bluetooth]
+          address = "e452430072a9"
+        "#,
+    )
+    .unwrap();
+
+    let bluetooth = config.devices[0].bluetooth.as_ref().expect("应当有 Ble");
+    assert_eq!(bluetooth.address, "e452430072a9");
+}
+
+/// 没配蓝牙的 Device 照样读得动 —— 三条 Endpoint 每一条都是可选的。
+#[test]
+fn a_device_may_have_no_bluetooth_endpoint() {
+    let config = Config::parse(ONE_DEVICE).unwrap();
+
+    assert!(config.devices[0].bluetooth.is_none());
+}
+
+/// MAC 有太多种写法：配置里写 `E4:52:43:00:72:A9`，Windows 报的是 `e452430072a9`，
+/// 说的是同一台设备。
+///
+/// 容忍大小写和分隔符不是宽松，是因为认不出来的症状是"蓝牙那一级永远不在场"，
+/// 而它和"设备没配对"长得一模一样——没有任何提示指向那个多写的冒号。
+#[test]
+fn recognizes_a_bluetooth_address_written_with_separators_or_capitals() {
+    let config = Config::parse(
+        r#"
+        [[device]]
+        id = "dragonfly3"
+        name = "Dragonfly 3 Master+"
+        driver = "vgn_mouse"
+
+          [device.bluetooth]
+          address = "E4:52:43:00:72:A9"
+        "#,
+    )
+    .unwrap();
+
+    let bluetooth = config.devices[0].bluetooth.as_ref().unwrap();
+    assert!(bluetooth.matches("e452430072a9"));
+    assert!(bluetooth.matches("E4-52-43-00-72-A9"));
+    assert!(!bluetooth.matches("f4ee2553b27e"));
+}
+
+/// `show_unknown_ble` 缺省是关的：本机扫得到的 BLE 设备里，多数跟键鼠无关
+/// （耳机、手机、手环），默认全列出来只会把两行有用的埋掉。
+#[test]
+fn show_unknown_ble_is_off_unless_the_config_asks_for_it() {
+    let without_general = Config::parse(ONE_DEVICE).unwrap();
+    assert!(!without_general.general.show_unknown_ble);
+
+    let asked_for = Config::parse(
+        r#"
+        [general]
+        show_unknown_ble = true
+        "#,
+    )
+    .unwrap();
+    assert!(asked_for.general.show_unknown_ble);
+}

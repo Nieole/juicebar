@@ -20,8 +20,9 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use anyhow::{Result, bail};
+use juicebar::bluetooth::BleBattery;
 use juicebar::config::Device;
-use juicebar::endpoints::{EndpointKind, Endpoints};
+use juicebar::endpoints::{EndpointKind, EndpointReading, Endpoints};
 use juicebar::sources::Transport;
 
 /// 假 Transport：按脚本交回预先排好的帧，并记下每一次发出去的帧。
@@ -75,12 +76,23 @@ impl Transport for FakeTransport {
 ///
 /// 它**故意按给定的顺序原样交出在场的 Endpoint**，不替谁排序：优先级住在取数那一步，
 /// 不住在这里，所以用例可以把顺序倒过来，验证取数没有在偷懒地信任枚举给的顺序。
+/// （唯一的例外是 `with_ble_cache` 加进来的 `Ble`，它固定排在最前面——理由写在那个方法上，
+/// 同样是为了不让枚举的顺序有机会冒充优先级。）
 pub struct FakeEndpoints {
     present: Vec<(EndpointKind, Rc<FakeTransport>)>,
+    ble: Option<FakeBleCache>,
+}
+
+/// Windows 缓存里那台 BLE 设备，连同它被读过几次。
+///
+/// 没有 Transport、没有回包脚本：Ble 不是一次到设备的往返，它读的是系统攒好的属性。
+struct FakeBleCache {
+    cached: BleBattery,
+    reads: RefCell<usize>,
 }
 
 impl FakeEndpoints {
-    /// 在场的 Endpoint，每一条带一份回包脚本。脚本为空即这条 Endpoint 读不到
+    /// 在场的 HID Endpoint，每一条带一份回包脚本。脚本为空即这条 Endpoint 读不到
     /// （相当于超时）。
     ///
     /// `report_id` 是每条假 Transport 用的报文编号——它参与鼠标的校验和运算，
@@ -94,7 +106,26 @@ impl FakeEndpoints {
                 .into_iter()
                 .map(|(kind, responses)| (kind, Rc::new(FakeTransport::new(report_id, responses))))
                 .collect(),
+            ble: None,
         }
+    }
+
+    /// 再加一条在场的 Ble，交出 Windows 缓存里的这台设备。
+    ///
+    /// 它**故意排在 `present()` 结果的最前面**：优先级住在取数那一步、不住在枚举里，
+    /// 所以一份假枚举不该能靠调换顺序改变先后。排最前，任何"照枚举给的顺序试"的实现
+    /// 都会先撞上缓存——而"当场问得出来的时候不去读缓存"正是这一级最要紧的性质。
+    pub fn with_ble_cache(mut self, cached: BleBattery) -> Self {
+        self.ble = Some(FakeBleCache {
+            cached,
+            reads: RefCell::new(0),
+        });
+        self
+    }
+
+    /// 那份蓝牙缓存被读过几次。"HID 读得到时不去碰缓存"就靠它是 0。
+    pub fn ble_reads(&self) -> usize {
+        self.ble.as_ref().map_or(0, |cache| *cache.reads.borrow())
     }
 
     /// 某条 Endpoint 上那个假 Transport，用来断言往它发了哪些帧——
@@ -114,7 +145,11 @@ impl FakeEndpoints {
 
 impl Endpoints for FakeEndpoints {
     fn present(&self, _device: &Device) -> Vec<EndpointKind> {
-        self.present.iter().map(|(kind, _)| *kind).collect()
+        self.ble
+            .iter()
+            .map(|_| EndpointKind::Ble)
+            .chain(self.present.iter().map(|(kind, _)| *kind))
+            .collect()
     }
 
     fn open_transport(
@@ -126,6 +161,18 @@ impl Endpoints for FakeEndpoints {
             Some(transport) => Ok(Box::new(SharedTransport(transport))),
             None => bail!("{endpoint} 不在场"),
         }
+    }
+
+    /// 交出缓存里那台设备，并记一次读。
+    ///
+    /// 不看 `device` 配的地址：地址怎么比对是 `BluetoothEndpoint::matches` 那一处的事，
+    /// 假枚举再实现一遍就等于把被测逻辑抄进了测试。转换本身走的是真的那一个函数。
+    fn read_ble(&self, _device: &Device) -> Result<EndpointReading> {
+        let Some(cache) = self.ble.as_ref() else {
+            bail!("这台设备不在本机的 BLE 设备里");
+        };
+        *cache.reads.borrow_mut() += 1;
+        EndpointReading::from_ble_cache(&cache.cached)
     }
 }
 
@@ -173,4 +220,60 @@ pub fn mouse_with_both_endpoints() -> Device {
     .expect("用例里的配置应当解析得动")
     .devices
     .remove(0)
+}
+
+/// 用例里那只鼠标的完整形态：两条 HID Endpoint 加一条 Ble，实测的 VID/PID 与 MAC。
+///
+/// 与 [`mouse_with_both_endpoints`] 分开而不是给它加一块蓝牙：那一份是票 04 的用例
+/// 在用的，给它悄悄多一条 Endpoint，会让"配置的 Endpoint 一条都不在场"那句话里多出
+/// 一个名字，而那条用例断言的正是这句话。
+pub fn mouse_with_all_three_endpoints() -> Device {
+    juicebar::config::Config::parse(
+        r#"
+        [[device]]
+        id = "dragonfly3"
+        name = "Dragonfly 3 Master+"
+        driver = "vgn_mouse"
+
+          [device.wired]
+          vid = 0x391D
+          pid = 0x1005
+          usage_page = 0xFF02
+          usage = 0x0002
+          report_id = 8
+
+          [device.wireless_24g]
+          vid = 0x391D
+          pid = 0x1A05
+          usage_page = 0xFF02
+          usage = 0x0002
+          report_id = 8
+
+          [device.bluetooth]
+          address = "e452430072a9"
+        "#,
+    )
+    .expect("用例里的配置应当解析得动")
+    .devices
+    .remove(0)
+}
+
+/// 本机扫到的一台 BLE 设备，字段与 `bluetooth::enumerate` 交出来的那些一致。
+///
+/// `connected` 一律给 `false`：**设备关机、收进抽屉，正是要退到缓存的那一刻**，
+/// 而缓存里的值那时照样在。在场与否不看这一位。
+pub fn scanned_ble(
+    friendly_name: &str,
+    address: &str,
+    level: Option<u8>,
+    age_secs: Option<u64>,
+) -> BleBattery {
+    BleBattery {
+        instance_id: format!("BTHLE\\DEV_{address}\\7&x"),
+        friendly_name: friendly_name.to_string(),
+        address: address.to_string(),
+        level,
+        age_secs,
+        connected: false,
+    }
 }

@@ -1,8 +1,8 @@
 //! `config.toml` 的读取。
 //!
-//! 结构里只有**当前用得上**的字段。TOML 里其余的键（`[general]`、`level_source`、
-//! `[device.bluetooth]` …）会被静默忽略，等要用它们的那一步再加进来——这样用户的
-//! 配置不必随实现进度反复改写，样例配置也可以先于代码写全。
+//! 结构里只有**当前用得上**的字段。TOML 里其余的键（`level_source`、`poll_interval_*`、
+//! `[general]` 里还没人读的那几项 …）会被静默忽略，等要用它们的那一步再加进来——这样
+//! 用户的配置不必随实现进度反复改写，样例配置也可以先于代码写全。
 //!
 //! 字段名沿用 `CONTEXT.md` 的词：配置里的 `wireless_24g` 块在代码里叫
 //! `dongle_24g`，因为它描述的正是 Dongle24G 这条 Endpoint。
@@ -15,9 +15,24 @@ use serde::Deserialize;
 /// 一份配置文件的全部内容。
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    /// 不属于任何单个 Device 的那些选项。`[general]` 整节缺席时全取缺省值。
+    #[serde(default)]
+    pub general: General,
     /// 登记在册的 Device，顺序即配置里的书写顺序。
     #[serde(rename = "device", default)]
     pub devices: Vec<Device>,
+}
+
+/// `[general]` 里**当前用得上**的那几项。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct General {
+    /// 列表里是否显示未在 `[[device]]` 里登记的 BLE 设备。
+    ///
+    /// 说的是本机扫得到、而配置里没有对应 `[[device]]` 的那些。缺省是关的：一台机器
+    /// 上的 BLE 设备多数跟键鼠无关（耳机、手机、手环），默认全列出来只会把两行有用的
+    /// 埋掉。它是一条**独立的输出维度**，不是某个 Device 那一行上的事。
+    #[serde(default)]
+    pub show_unknown_ble: bool,
 }
 
 /// 一个物理外设。它的几条 Endpoint 合在这一条下面。
@@ -42,6 +57,9 @@ pub struct Device {
     /// 经 2.4G 接收器的 Endpoint。接收器自己有一组 VID/PID，与 Device 本体不同。
     #[serde(rename = "wireless_24g")]
     pub dongle_24g: Option<HidEndpoint>,
+    /// 经蓝牙的 Endpoint。**不是 `HidEndpoint`**：它读的是 Windows 攒的设备属性，
+    /// 既没有 collection 可认，也不经过 `driver` 那一维。
+    pub bluetooth: Option<BluetoothEndpoint>,
 }
 
 /// 一条 HID Endpoint 在本机的定位方式。
@@ -55,6 +73,38 @@ pub struct HidEndpoint {
     pub usage: u16,
     /// 报文的 Report ID，不带编号的报文填 0。
     pub report_id: u8,
+}
+
+/// 一条 Ble Endpoint 在本机的定位方式：一个蓝牙地址，别无其它。
+///
+/// 认设备只能靠 MAC。BLE 的 Device Information Service 只缓存了芯片型号，而同一
+/// GUID 下的 VID/PID 在容器节点上实测全是空（见 `bluetooth.rs`）——MAC 是唯一可靠的
+/// 实例标识。
+#[derive(Debug, Clone, Deserialize)]
+pub struct BluetoothEndpoint {
+    /// 设备的蓝牙地址。大小写与 `:` / `-` 分隔随便写，比对时一律归一化。
+    pub address: String,
+}
+
+impl BluetoothEndpoint {
+    /// 配置里写的地址和 Windows 报的地址是不是同一台设备。
+    ///
+    /// 大小写和分隔符都容忍。这不是宽松：MAC 的写法太多（`E4:52:43:00:72:A9` /
+    /// `e4-52-43-00-72-a9` / `e452430072a9` 都是同一台），而写法对不上的症状是
+    /// **蓝牙那一级永远不在场**，它和"设备没配对"长得一模一样——没有任何东西会指向
+    /// 那个多写的冒号。
+    pub fn matches(&self, address: &str) -> bool {
+        normalized_address(&self.address) == normalized_address(address)
+    }
+}
+
+/// 去掉分隔符、统一成小写，好让两种写法的同一个 MAC 比得出相等。
+fn normalized_address(address: &str) -> String {
+    address
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
 }
 
 impl Config {
