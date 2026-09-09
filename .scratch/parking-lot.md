@@ -947,6 +947,148 @@ HID 的 `very_stale_after_secs` 是 `None`——**那一档在两条 HID 上不�
 不是对着这一行。措辞按 `CONTEXT.md` 的 Stale 走，两档共用同一个"陈旧"——那一条的 _Avoid_
 正是"过期、失效"。翻案是改一个返回 `&'static str` 的函数，关在本票内。
 
+### Q41 —— "上次自动选出来的是谁"落在票 08 的状态文件，不落 `config.toml`（**票 11 要读**）
+
+**From:** 票 09（Primary Device 选择）
+
+**票面第 4 条要一个跨调用的记忆，而 `status` 没有"上次"**：它是一次性命令——枚举、取数、
+印几行、退出。记忆有两个可能的家（票 08 的 `%APPDATA%` 状态文件、或者 `config.toml`），
+而 ADR-0003 把界划在"用户可见的配置选择"与"纯运行时缓存"之间。
+
+**取的路**：本票只实现纯函数那一半——`primary::select(rule, candidates, previous)` 收一个
+`previous: Option<&str>`，`cli::status::run` 传 `None` 并在那一行注释里点名这条记录。
+判断是：**它属于运行时缓存，家在票 08 的状态文件**。
+
+决定性的理由不是分类学，是**回写会把规则本身洗掉**：`primary` 这一项里只有一个格子，
+`"lowest"`（一条规则）和一个 Device id（一个具体选择）共用它。把自动选出来的 id 写回去，
+`primary = "lowest"` 就变成 `primary = "dragonfly3"`——那条规则**不见了**，工具从此永久钉在
+那一台上，而用户从没要求过。ADR-0003 说得也是这个：状态文件放"上次已知读数"这类纯运行时
+缓存，而自动选出来的那个 id 正是从读数推出来的。
+
+**另一条路**：也写回 `config.toml`，理由是 ADR-0003 把 `primary` 明列为"程序自己管的字段"，
+而单一事实来源那句话正是它的核心。
+
+**推荐**：现状。ADR-0003 里那句"程序自己管的字段（`primary`…）"说的是**托盘菜单里的手动
+切换**——那是一个用户做出的选择，写回去正是让配置成为单一事实来源；自动选出来的那个 id
+不是用户的选择，它每一轮都可能变。翻案代价：把 `previous` 的来源从状态文件换成配置读取，
+`select` 一个字不用改。
+
+**给票 08**：状态文件里请多留一格"上次选出的 Primary Device id"（一个字符串，缺席 = `None`）。
+它与"上次已知读数"是同一类东西，都是从读数推出来的运行时缓存。
+
+**这一格现在无主，编排者要派一下。** 票 08 的票面上只有"上次已知读数"，而它正在并行实现，
+本票没有去改它的票面（那是另一个 agent 正在写的文件）。所以在有人把这一格接上之前，
+`Selection::HeldOver` 在成品二进制里走不到，而 `config.example.toml` 已经把"全都不可信时保持
+上次的选择"写给用户了——code review 的 spec 轴把这一条判成"验收框 4 没真正挣到"，判得对。
+
+**给票 11**：你的验收框「Primary Device 的运行时选择回写 `config.toml`」指的是**菜单里的手动
+选择**，回写时 `primary` 从 `"lowest"` 变成一个 Device id 是对的（用户就是要钉死它）。
+**不要把 `lowest` 自动选出来的结果回写**——那会把 `"lowest"` 这条规则本身洗掉。
+
+### Q42 —— 写错的 `primary` id 不让整份配置读不动，与 Q15 对 `level_source` 的处置相反
+
+**From:** 票 09（Primary Device 选择）
+
+**取的路**：`PrimaryRule` 的 `Deserialize` 只认一个字面量 `"lowest"`，**别的任何字符串一律
+当 Device id 收下**，配置照样读得动。"这个 id 不在册"留到选的时候才说——那时手上才有 Device
+名单，于是 `Selection::PinnedNotFound(id)` 让 `status` 印一句"配置里 primary 钉的 id
+"dragonfly4" 不在登记的 Device 里，所以一行都没标"。
+
+**另一条路**：照 Q15 对 `level_source` 的处置，认不出就让 `Config::parse` 失败，一处笔误
+让整份配置读不动、`status` 一个 Device 都不印。
+
+**推荐**：现状。Q15 立的规矩有一句明写的前提——"`level_source` **只有两个合法值**，不存在
+将来才实现的来源"。`primary` 不满足这个前提：它的合法值里有一个是**任意 Device id**，而 id
+是自由文本。`"dragonfly4"` 在解析那一刻**分辨不出**是笔误还是一台用户打算稍后登记的设备，
+拿它把整份配置判死，代价是"改一个字母 → 全部设备都看不见了"。而 Q15 真正在防的那件事
+（用户以为钉住了、其实没有）这里由 `PinnedNotFound` 挡住了：它不静默退回 `lowest`，它一行
+都不标并且把那个 id 原样印出来。翻案是把那一支从"当 id 收下"改成 `Err`，关在
+`primary::from_config_value` 一个函数里。
+
+**副作用一句**：id 恰好叫 `"lowest"` 的 Device 钉不住。这条留着不管——`config.example.toml`
+和自举草稿都把 `"lowest"` 写成那条规则，取这个 id 的人是在跟自己的配置文件过不去。
+
+### Q43 —— Primary 选择要的 `Level` 由 `run()` 再调一次 `level_for` 得来，Q14 的推荐再次推迟
+
+**From:** 票 09（Primary Device 选择）
+
+**Q14 点名要本票重新看一眼的那处。** 它给了两条路，并**推荐后者**：把 `Level` 提进
+`EndpointReading` 让全流程共用一个，理由是"这台设备当下的电量是多少"应当只有一处答案。
+
+**取的路**：前者。`cli::status::run` 在排完那一行之后再调一次 `level_for(&reading.reading,
+device.level_source)`，把结果装进 `primary::CandidateReading`。`EndpointReading` 一个字段
+都没加。
+
+**另一条路**：Q14 推荐的那条——`EndpointReading` 多一个 `level: Level`，两个构造器各多收一个
+`LevelSource`，`render` 改成收成品。
+
+**推荐**：现状，而且**这一次的理由比 Q14 当时更硬**。Q14 没这么做只是因为 `EndpointReading`
+正被三张票同时改着；此刻票 08 正在把这个结构**写进磁盘**，给它加一个字段等于同时改一份落盘
+格式，而那个字段是从另外两个字段派生出来的（存派生值会让"改了 `level_source` 之后旧文件里的
+值是错的"变成一个真问题）。至于"只有一处答案"——`level_for` 是纯函数，同样的入参必然同样的
+输出，`run()` 里传下去的 `level_source` 与 `render` 收到的是同一个值，两处**不可能**分岔。
+真正会分岔的是把结果**存**起来，而那恰恰是另一条路要做的事。翻案代价与 Q14 说的一样，
+关在 `EndpointReading` 加一个字段加两个构造器。
+
+**顺带答一句 Q26 留给本票的问题**：`is_fresh()` **没有加**。本票只有 `primary::comparable`
+一处要判"新鲜"，而那里写的是对 `Freshness` 穷举的 `match`（不是 `== Fresh`）——加一档陈旧时
+编译器会把人指到那里问一句"这一档参与比较吗"。一个便利方法会把那个提问吞掉，所以它不该有。
+
+### Q44 —— Primary 标注落在 Device 名字那一格，不进 `cli::status::render`
+
+**From:** 票 09（Primary Device 选择）
+
+**取的路**：`Selection::label(&Device)` 交出那一行开头的名字，选中的那一个后面多一句
+`（Primary Device）`，别的原样。`render()` 一个字没动，`run()` 里那句 `println!` 从
+`device.name` 换成 `selection.label(device)`。
+
+**另一条路**：在 `render()` 里加第五段（它现在是百分比 / 充电态+电压 / 来源 / 陈旧标注四段
+拼起来的），多收一个 `is_primary: bool`。
+
+**推荐**：现状，而且这一条**不只是为了避开票 08**（它此刻正在改 `render` 的陈旧标注那一段）。
+`render` 排版的是一份 Reading，而**一台失联的 Device 照样可以是 Primary Device**——钉死的
+那一种，或者保持上次的选择。那一行走的是 `run()` 里 `Err` 那一支，印的是"读不到 —— …"，
+`render` 根本没被调用。标注放进 `render`，最需要它的那一行恰好标不出来。翻案是把那半句从
+`label` 挪进 `render`，关在本票内。
+
+**副作用**：`run()` 从"读一台印一台"改成"先把全部读完，再一起印"——`lowest` 得看过这一轮
+全部读数才知道该标哪一行。读的次序、印的次序都还是配置里的书写顺序，一台设备仍然只取一个
+"当下"。**这一处会与票 08 在 `run()` 里撞车**（它要在 `Err` 那一支拿出上次已知值）：合并时
+那一支落在 `rows.push` 之前，交出来的东西同时是那一行的文本**和**一个 `Option<CandidateReading>`
+——拿出来的历史值该不该参与 `lowest`，答案由它的 `Freshness` 自己给（票 08 会把它标成陈旧，
+于是自然不参与）。
+
+### Q45 —— `select` 交的是一个带理由的 `Selection` 枚举，不是 `Option<&str>`
+
+**From:** 票 09（Primary Device 选择）
+
+**取的路**：`Selection` 五个变体——`Pinned` / `Lowest` / `HeldOver` / `PinnedNotFound` /
+`Undecided`。`primary_id()` 交出该标哪一行，`note()` 交出那三种"光看那几行看不出发生了什么"
+的情形要补的一句话。
+
+**另一条路**：`select` 直接返回 `Option<&str>`，`status` 只管标。
+
+**推荐**：现状。三种情形里，用户看到的东西**光凭那几行是解释不通的**：保持上次的选择时标注
+落在一行"已陈旧"或"读不到"上（看着像 bug）；钉的 id 不在册时一行都没标（看着像 bug）；
+一个都选不出来时同样一行都没标。`Option<&str>` 会把这三种压成同一个 `None`，而它们要用户做的
+事完全不同——这与 `cli::status::lost_reason` 分两种说法是同一个理由。措辞跟着产生它的规则住在
+一个文件里，与 `Level` / `EndpointKind` 的 `Display` 同一条。翻案是删掉 `note()` 和两个只为它
+存在的变体，关在本票内。
+
+**得说清一句：票面没有授权这一路。** 票面 6 条和 spec 都没提"钉的 id 写错了"这种情形，spec
+的「收口」只要求一行一个 Device。`PinnedNotFound` 与末尾那句交代都是本票加的，理由是 Q42 那条
+不对称（用户以为钉住了、其实没有）。code review 的 spec 轴把它记成未授权行为但不建议撤，
+同意——真要撤，撤的是 `note()` 和 `PinnedNotFound`，`select` 的其余部分不动。
+
+**顺带记一处词汇缺口，留给 `/domain-modeling`。** 本票引入了三个 `CONTEXT.md` 里没有的词：
+**候选**（`Candidate`：一台正在争 Primary Device 位置的 Device）、**保持上次的选择**
+（`HeldOver`：Primary Device 那一条只认"钉死"和"按规则动态选出"两种，不认这第三种）、以及
+`CandidateReading` ——它拿 **Reading** 这个定义好的词命名了一个投影（词汇表里的 Reading 逐字
+含"电量、充电状态、电压、取得时刻，以及它来自哪条 Endpoint"，而这个结构只有 level 与
+freshness 两样）。三个都是实现层的名字、局部清楚，所以本票没有改；但 `docs/agents/domain.md`
+要求"词汇表里没有的概念要么重新考虑、要么记成一处缺口"，这就是那处缺口。真正值得进词汇表的
+大概是**保持上次的选择**背后那个概念——票 08 和票 11 都要给它起名字。
+
 ## Settled
 
 <!-- 记录连同它的处置一起挪到这里 -->

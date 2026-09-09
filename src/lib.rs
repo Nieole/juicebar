@@ -12,5 +12,6 @@ pub mod clock;
 pub mod config;
 pub mod endpoints;
 pub mod hid;
+pub mod primary;
 pub mod sources;
 pub mod staleness;

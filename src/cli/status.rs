@@ -12,6 +12,7 @@ use crate::cli::{config_refresh, resolve_config_path};
 use crate::clock::{Clock, SystemClock, Timestamp};
 use crate::config::{Config, Device};
 use crate::endpoints::{EndpointKind, EndpointReading, Endpoints, SystemEndpoints};
+use crate::primary::{self, Candidate, CandidateReading, PrimaryRule};
 use crate::sources::level::{LevelSource, level_for};
 use crate::sources::{Reading, Transport, driver_for};
 use crate::staleness::{Freshness, Staleness};
@@ -33,19 +34,42 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     if config.devices.is_empty() {
         println!("配置 {} 里一个 Device 都没有。", path.display());
     }
+    // **先把每台都读完，再一起印**：`primary = "lowest"` 得看过这一轮的全部读数才知道
+    // 该标哪一行，而那个标注印在每一行上。读的次序和印的次序都还是配置里的书写顺序。
+    let mut rows: Vec<DeviceRow<'_>> = Vec::new();
     for device in &config.devices {
         // 一个 Device 一个"当下"，取数与陈旧判定共用它。几台设备依次读下来会花掉真实
         // 时间，所以这个值在循环里取而不在循环外——但**一台设备只取一次**。
         let now = clock.now();
-        let line = match read(device, &endpoints, now) {
+        let (line, candidate) = match read(device, &endpoints, now) {
             Ok(reading) => {
                 let staleness = Staleness::assess(&reading, &config.general, now);
-                render(&reading, device.level_source, &staleness)
+                (
+                    render(&reading, device.level_source, &staleness),
+                    // Primary 选择只要两件事：这一行显示的是哪个百分比（`Level::Unknown`
+                    // 即采信不了），以及这份读数还算不算现状。`level_for` 在 `render` 里
+                    // 也调了一次——同一个纯函数、同样的入参，两处必然是同一个答案，
+                    // 所以不必把它提进 `EndpointReading`（parking lot Q43）。
+                    Some(CandidateReading {
+                        level: level_for(&reading.reading, device.level_source),
+                        freshness: staleness.freshness,
+                    }),
+                )
             }
-            // 一台读不到不该拖累别的 Device，把原因印在它自己那一行上。
-            Err(e) => format!("读不到 —— {e:#}"),
+            // 一台读不到不该拖累别的 Device，把原因印在它自己那一行上。**读不到就是
+            // 失联，它不参与 lowest 比较**——那正是这里 `reading` 为 `None` 的意思，
+            // 而失联与 `Level::Unknown` 是两回事（`CONTEXT.md`：Unknown 也不等于设备离线）。
+            Err(e) => (format!("读不到 —— {e:#}"), None),
         };
-        println!("{}  {line}", device.name);
+        rows.push(DeviceRow {
+            device,
+            line,
+            candidate,
+        });
+    }
+
+    for line in primary_lines(&config.general.primary, &rows) {
+        println!("{line}");
     }
 
     // 未登记的 BLE 设备是**另一条输出维度**，不属于上面任何一行：它们是本机扫得到、
@@ -59,6 +83,61 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// 一个 Device 这一轮的成品：那一行印什么，以及它在 Primary 选择里的样子。
+///
+/// 三样捆在一起是因为它们**同时产生、同时被用掉**：`lowest` 得看过全部读数才知道该标哪一行，
+/// 所以那一行的文本必须先攒着。给它一个名字而不是用一个三元组，理由与这个仓库里
+/// [`EndpointReading`] / `Staleness` 同一条——靠位置解构的元组，加第四样时每一处都要改，
+/// 而票 08 正要往这里加东西（parking lot Q44 末段）。
+pub struct DeviceRow<'a> {
+    /// 配置里那个 Device。
+    pub device: &'a Device,
+    /// 这一行 Device 名字**之后**的全部内容，已经排好版（[`render`]，或者读不到时的原因）。
+    pub line: String,
+    /// 它在 Primary 选择里的样子。`None` = 失联，不参与 `lowest` 比较。
+    pub candidate: Option<CandidateReading>,
+}
+
+/// `status` 印出去的那几行：每个 Device 一行，末尾可能多一句交代。
+///
+/// 这一半是纯的，理由与 [`unregistered_ble_lines`] 同一条：选出谁、标在哪一行、要不要补
+/// 那句话，都是 `status` 的外部行为，而"本机有哪些设备"那一步才躲不开真系统。
+///
+/// "上次的选择"在这里恒为 `None`：`status` 是一次性命令——枚举、取数、印几行、退出，
+/// 它手上没有"上次"。那份记忆的家是票 08 的状态文件（parking lot Q41）。
+pub fn primary_lines(rule: &PrimaryRule, rows: &[DeviceRow<'_>]) -> Vec<String> {
+    // 候选就是登记在册的这几台。未登记的 BLE 设备**天然不参与**：它们不是 Device，
+    // 不在 `config.devices` 里，所以压根进不了 `rows`（parking lot Q24）——一台没人登记的
+    // 耳机不该抢走托盘图标。
+    let candidates: Vec<Candidate<'_>> = rows
+        .iter()
+        .map(|row| Candidate {
+            id: &row.device.id,
+            reading: row.candidate,
+        })
+        .collect();
+    let selection = primary::select(rule, &candidates, None);
+    let mut lines: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            format!(
+                "{}  {}",
+                selection.label(&row.device.id, &row.device.name),
+                row.line
+            )
+        })
+        .collect();
+    // 光看那几行看不出发生了什么的时候补一句（保持了上次的选择、钉的 id 不在册、
+    // 一个都选不出来）。**一个 Device 都没有时不补**：那时 `run` 已经印过"一个 Device
+    // 都没有"，把原因说完了，再说一句"选不出 Primary Device"只是同一件事的第二遍。
+    if !rows.is_empty()
+        && let Some(note) = selection.note()
+    {
+        lines.push(note);
+    }
+    lines
 }
 
 /// 本机扫到、而配置里没有登记的那些 BLE 设备，一台一行。

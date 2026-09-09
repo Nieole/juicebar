@@ -25,6 +25,7 @@ use serde::Deserialize;
 
 use crate::endpoints::EndpointKind;
 use crate::hid::HidInfo;
+use crate::primary::PrimaryRule;
 use crate::sources::level::LevelSource;
 
 /// 一份配置文件的全部内容。
@@ -46,6 +47,16 @@ pub struct Config {
 /// 注释是同一份。
 #[derive(Debug, Clone, Deserialize)]
 pub struct General {
+    /// 托盘图标当下画哪个 Device，也就是 Primary Device：`"lowest"` 是当前电量最低的
+    /// 那个，别的任何字符串都是要钉死的那个 Device 的 id（选的规则在 `crate::primary`）。
+    ///
+    /// 缺省是 `"lowest"`——托盘总得画一个，而这是 `config.example.toml` 里写着的推荐值。
+    /// 那份样例里另外两条也是这一项的一部分，代码这边各有归宿：**参与 `"lowest"` 比较的
+    /// 只有新鲜且可信的 Reading**（`crate::primary::select`），以及**这一项程序会回写**
+    /// （票 11，格式保留的回写见 `docs/adr/0003`；回写的只该是菜单里的手动选择，
+    /// 不是 `"lowest"` 自动选出来的结果，见 parking lot Q41）。
+    #[serde(default)]
+    pub primary: PrimaryRule,
     /// 列表里是否显示未在 `[[device]]` 里登记的 BLE 设备。
     ///
     /// 说的是本机扫得到、而配置里没有对应 `[[device]]` 的那些。缺省是关的：一台机器
@@ -106,6 +117,7 @@ impl Default for General {
     /// 函数——两处各写一份缺省是这个结构最容易出的错，共用一份就出不了。
     fn default() -> Self {
         Self {
+            primary: PrimaryRule::default(),
             show_unknown_ble: false,
             poll_interval_wired: default_poll_interval_wired(),
             poll_interval_24g: default_poll_interval_24g(),

@@ -18,11 +18,13 @@ use common::{
     mouse_with_all_three_endpoints, mouse_with_both_endpoints, scanned_ble,
 };
 use juicebar::cli::status;
+use juicebar::cli::status::DeviceRow;
 use juicebar::clock::Timestamp;
 use juicebar::config::Config;
 use juicebar::endpoints::{EndpointKind, EndpointReading};
-use juicebar::sources::level::LevelSource;
-use juicebar::staleness::Staleness;
+use juicebar::primary::{CandidateReading, PrimaryRule};
+use juicebar::sources::level::{Level, LevelSource};
+use juicebar::staleness::{Freshness, Staleness};
 
 /// 一份读数在 [`NOW`] 这一刻印成的那一行。
 ///
@@ -781,4 +783,122 @@ fn render(device: &juicebar::config::Device, endpoints: &FakeEndpoints) -> Strin
         device.level_source,
         &Staleness::assess(&reading, &default_general(), NOW),
     )
+}
+
+// ---------------------------------------------------------------
+// Primary Device 标注（票 09）
+//
+// 选出谁在 `tests/primary.rs` 里断言完了，这里断言的是**那几行印成什么样**：标注落在
+// 哪一行上、末尾那句交代什么时候补。
+// ---------------------------------------------------------------
+
+/// 攒一行：Device 名字之后那一段直接给字面量，因为这几条用例关心的是**标注**，
+/// 而不是那一段怎么排版（那在上面）。
+fn row<'a>(
+    device: &'a juicebar::config::Device,
+    line: &str,
+    level: Option<Level>,
+) -> DeviceRow<'a> {
+    DeviceRow {
+        device,
+        line: line.to_string(),
+        candidate: level.map(|level| CandidateReading {
+            level,
+            freshness: Freshness::Fresh,
+        }),
+    }
+}
+
+/// 票面第 6 条：`status` 标出当前 Primary Device —— 标注真的落在那一行上。
+#[test]
+fn marks_the_primary_device_on_its_own_line() {
+    let mouse = mouse_with_both_endpoints();
+    let keyboard = keyboard_with_dongle_endpoint();
+    let rows = [
+        row(&mouse, "62%（Reported Level）", Some(Level::Reported(62))),
+        row(
+            &keyboard,
+            "28%（Reported Level）",
+            Some(Level::Reported(28)),
+        ),
+    ];
+
+    let lines = status::primary_lines(&PrimaryRule::Lowest, &rows);
+
+    assert_eq!(
+        lines,
+        [
+            "Dragonfly 3 Master+  62%（Reported Level）",
+            "VGN Neon75（Primary Device）  28%（Reported Level）",
+        ]
+    );
+}
+
+/// 一台失联的 Device 照样标得出来 —— 钉死的那一种。
+///
+/// **这一条是把标注放在 Device 名字那一格、而不是放进 `render` 的理由**（parking lot
+/// Q44）：这一行根本没有 Reading，`render` 压根没被调用过。
+#[test]
+fn marks_a_pinned_device_that_could_not_be_read() {
+    let mouse = mouse_with_both_endpoints();
+    let keyboard = keyboard_with_dongle_endpoint();
+    let rows = [
+        row(&mouse, "62%（Reported Level）", Some(Level::Reported(62))),
+        row(&keyboard, "读不到 —— 全部 Endpoint 都没读到", None),
+    ];
+
+    let lines = status::primary_lines(&PrimaryRule::Pinned("neon75".to_string()), &rows);
+
+    assert!(
+        lines[1].starts_with("VGN Neon75（Primary Device）"),
+        "钉死的那台读不到也照旧标着：{:?}",
+        lines[1]
+    );
+    assert!(
+        !lines[0].contains("Primary Device"),
+        "另一台不该被标上：{:?}",
+        lines[0]
+    );
+}
+
+/// 一行都标不出来时，末尾补一句交代 —— 否则"没有标注"看着像 bug。
+#[test]
+fn adds_a_closing_note_when_no_device_got_the_marker() {
+    let mouse = mouse_with_both_endpoints();
+    let rows = [row(&mouse, "读不到 —— 全部 Endpoint 都没读到", None)];
+
+    let lines = status::primary_lines(&PrimaryRule::Lowest, &rows);
+
+    assert_eq!(lines.len(), 2, "一行 Device 加一句交代：{lines:?}");
+    assert!(
+        lines[1].contains("Primary Device"),
+        "末尾那句说的是 Primary Device 这件事：{:?}",
+        lines[1]
+    );
+}
+
+/// 正常选出来时末尾不多话：那一行上的标注已经把话说完了。
+#[test]
+fn adds_no_closing_note_when_the_marker_speaks_for_itself() {
+    let mouse = mouse_with_both_endpoints();
+    let rows = [row(
+        &mouse,
+        "62%（Reported Level）",
+        Some(Level::Reported(62)),
+    )];
+
+    assert_eq!(
+        status::primary_lines(&PrimaryRule::Lowest, &rows).len(),
+        1,
+        "只该有那一行 Device"
+    );
+}
+
+/// 一个 Device 都没配的时候一句话都不补。
+///
+/// `run` 那时已经印过"一个 Device 都没有"，把原因说完了；再补一句"选不出 Primary Device"
+/// 只是同一件事的第二遍。
+#[test]
+fn stays_silent_when_no_device_is_configured() {
+    assert!(status::primary_lines(&PrimaryRule::Lowest, &[]).is_empty());
 }

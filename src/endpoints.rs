@@ -139,8 +139,11 @@ pub struct EndpointReading {
     /// 陈旧，因为说它新鲜就是替设备编一个它没给的时间戳。
     ///
     /// 陈旧判定在 `crate::staleness`。票 08（持久化）要把这个时刻写盘再读回来
-    /// （`Timestamp::as_unix_secs` / `from_unix_secs` 就是为此留的），票 09（Primary 选择）
-    /// 要拿它筛"只有新鲜且可信的参与比较"。
+    /// （`Timestamp::as_unix_secs` / `from_unix_secs` 就是为此留的）。
+    ///
+    /// **Primary 选择（`crate::primary`）不直接读这个字段**，它读的是陈旧判定的成品
+    /// `Staleness::freshness`——"只有新鲜且可信的参与比较"里的"新鲜"是那一档，而不是
+    /// 一次时刻比较（parking lot Q26 给票 09 的原话就是"别自己比时刻"）。
     pub taken_at: Option<Timestamp>,
 }
 
