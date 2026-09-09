@@ -1180,3 +1180,39 @@ driver = "vgn_keyboard"
         pinned.text
     );
 }
+
+/// 厂商上位机那两项读得出来。
+///
+/// 它们以前是被静默忽略的键（草稿和样例里都写着，代码这边没人读），现在暂停那一维
+/// 要用它们了。
+#[test]
+fn reads_the_vendor_hub_switch_and_the_process_names() {
+    let config = Config::parse(
+        r#"
+        [general]
+        pause_when_vendor_hub_running = false
+        vendor_hub_processes = ["VGN VHUB.exe", "OtherHub.exe"]
+        "#,
+    )
+    .unwrap();
+
+    let general = &config.general;
+    assert!(!general.pause_when_vendor_hub_running);
+    assert_eq!(
+        general.vendor_hub_processes,
+        ["VGN VHUB.exe", "OtherHub.exe"]
+    );
+}
+
+/// 缺省是**开着**的，进程名单缺省就是实测过的那一个。
+///
+/// 缺省不能靠 `#[derive(Default)]`：那个派生给的是 `false` 加一份空名单，而两者各自都
+/// 让暂停**永远不触发**——而"没暂停"和"HUB 没在跑"长得一模一样，没有任何东西会指向那个
+/// 缺省。缺省的那两个值与 `config.example.toml` 是同一份。
+#[test]
+fn pauses_for_the_vgn_hub_unless_the_config_says_otherwise() {
+    let general = Config::parse(ONE_DEVICE).unwrap().general;
+
+    assert!(general.pause_when_vendor_hub_running);
+    assert_eq!(general.vendor_hub_processes, ["VGN VHUB.exe"]);
+}

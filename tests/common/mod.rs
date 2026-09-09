@@ -25,6 +25,7 @@ use juicebar::clock::Timestamp;
 use juicebar::config::Device;
 use juicebar::endpoints::{EndpointKind, EndpointReading, Endpoints};
 use juicebar::sources::Transport;
+use juicebar::vendor_hub::{Processes, VendorHub};
 
 /// 假 Transport：按脚本交回预先排好的帧，并记下每一次发出去的帧。
 ///
@@ -82,6 +83,7 @@ impl Transport for FakeTransport {
 pub struct FakeEndpoints {
     present: Vec<(EndpointKind, Rc<FakeTransport>)>,
     ble: Option<FakeBleCache>,
+    opened: RefCell<Vec<EndpointKind>>,
 }
 
 /// Windows 缓存里那台 BLE 设备，连同它被读过几次。
@@ -108,6 +110,7 @@ impl FakeEndpoints {
                 .map(|(kind, responses)| (kind, Rc::new(FakeTransport::new(report_id, responses))))
                 .collect(),
             ble: None,
+            opened: RefCell::new(Vec::new()),
         }
     }
 
@@ -122,6 +125,15 @@ impl FakeEndpoints {
             reads: RefCell::new(0),
         });
         self
+    }
+
+    /// 至今被打开过的那几条 Endpoint，按顺序。
+    ///
+    /// 它比 [`FakeTransport::sent`] 严一格，而票 07 要的正是这一格：**暂停期间一个通道
+    /// 都不该打开**（parking lot Q16 把接缝定成两个方法就是为了让这件事做得到）。
+    /// 只看发出去的帧，一个"开了通道但没发字节"的实现照样是绿的。
+    pub fn opens(&self) -> Vec<EndpointKind> {
+        self.opened.borrow().clone()
     }
 
     /// 那份蓝牙缓存被读过几次。"HID 读得到时不去碰缓存"就靠它是 0。
@@ -158,6 +170,7 @@ impl Endpoints for FakeEndpoints {
         _device: &Device,
         endpoint: EndpointKind,
     ) -> Result<Box<dyn Transport>> {
+        self.opened.borrow_mut().push(endpoint);
         match self.find(endpoint) {
             Some(transport) => Ok(Box::new(SharedTransport(transport))),
             None => bail!("{endpoint} 不在场"),
@@ -323,4 +336,64 @@ pub fn default_general() -> juicebar::config::General {
     juicebar::config::Config::parse("")
         .expect("空配置应当解析得动")
         .general
+}
+
+/// 假进程接缝：说本机在跑这几个进程，并记下它被问过几次。
+///
+/// 有了它，"厂商上位机在跑时让开两条 HID"这条路径不用真去开一次 VGN HUB 就能断言。
+///
+/// **被问过几次必须数得出来**："开关关着时连进程都不枚举"没有别的观察点——不枚举，
+/// 和枚举了但一个都没撞见，产出完全相同。
+pub struct FakeProcesses {
+    running: Vec<String>,
+    fails: bool,
+    enumerations: RefCell<usize>,
+}
+
+impl FakeProcesses {
+    /// 本机此刻在跑这几个进程。
+    pub fn new(running: impl IntoIterator<Item = &'static str>) -> Self {
+        Self {
+            running: running.into_iter().map(str::to_string).collect(),
+            fails: false,
+            enumerations: RefCell::new(0),
+        }
+    }
+
+    /// **问不出来**的那一趟：一次 Win32 失败长这样。
+    ///
+    /// 它和"一个都没在跑"必须分得开——后者什么都不必说，前者该在 stderr 上说一句
+    /// （parking lot Q34）。
+    pub fn failing() -> Self {
+        Self {
+            running: Vec::new(),
+            fails: true,
+            enumerations: RefCell::new(0),
+        }
+    }
+
+    /// 这份名单被问过几次。
+    pub fn enumerations(&self) -> usize {
+        *self.enumerations.borrow()
+    }
+}
+
+impl Processes for FakeProcesses {
+    fn running(&self) -> Result<Vec<String>> {
+        *self.enumerations.borrow_mut() += 1;
+        if self.fails {
+            bail!("假接缝这一趟故意枚举不动");
+        }
+        Ok(self.running.clone())
+    }
+}
+
+/// 撞见了厂商上位机的那一趟。
+///
+/// **走的是真的 `detect`**，不是一个手搓的值：那样用例里印出来的那句"已暂停"就必然与
+/// 名字比对那一段出自同一处，而不是两份各自可能漂开的知识。
+pub fn vendor_hub_running() -> VendorHub {
+    VendorHub::detect(&default_general(), &FakeProcesses::new(["VGN VHUB.exe"]))
+        .expect("假接缝不会枚举失败")
+        .expect("缺省名单里就有 VGN VHUB.exe")
 }

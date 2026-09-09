@@ -90,6 +90,23 @@ pub struct General {
     /// **只对 Ble 生效**；票 08 另拿它当持久化读数的丢弃期限。
     #[serde(default = "default_very_stale_after")]
     pub very_stale_after: u64,
+    /// 检测到厂商上位机在运行时，暂停两条 HID Endpoint（`Ble` 照常）。缺省**开着**。
+    ///
+    /// 这不是防御性设计：键盘 dongle 的 feature 报文是一块保存最近一次应答的共享缓冲区，
+    /// 两个程序同时发命令会互相覆盖对方的应答，双方都读到错数据。谁被暂停、为什么只暂停
+    /// 两条 HID，见 `crate::vendor_hub`。
+    ///
+    /// 关着时**连进程都不去枚举**：一次进程枚举不便宜，而开关关着就意味着用户说了"别管
+    /// 这件事"。那一步在 `crate::vendor_hub::VendorHub::detect` 里。
+    #[serde(default = "default_pause_when_vendor_hub_running")]
+    pub pause_when_vendor_hub_running: bool,
+    /// 哪些进程算"厂商上位机"，按可执行文件名写。缺省是实测过的那一个。
+    ///
+    /// 缺省不是一份空名单：空名单会让暂停**永远不触发**，而那和"HUB 没在跑"长得一模一样
+    /// ——没有任何东西会指向那个缺省。名字怎么比对（大小写、路径末段）见
+    /// `crate::vendor_hub::VendorHub::detect`。
+    #[serde(default = "default_vendor_hub_processes")]
+    pub vendor_hub_processes: Vec<String>,
 }
 
 fn default_poll_interval_wired() -> u64 {
@@ -112,6 +129,15 @@ fn default_very_stale_after() -> u64 {
     86_400
 }
 
+fn default_pause_when_vendor_hub_running() -> bool {
+    true
+}
+
+/// 实测过的那个进程名，原样。大小写与用户在任务管理器里看到的一致。
+fn default_vendor_hub_processes() -> Vec<String> {
+    vec!["VGN VHUB.exe".to_string()]
+}
+
 impl Default for General {
     /// 整节 `[general]` 缺席时的取值。走的是逐字段 `#[serde(default = …)]` 用的同一批
     /// 函数——两处各写一份缺省是这个结构最容易出的错，共用一份就出不了。
@@ -124,6 +150,8 @@ impl Default for General {
             poll_interval_bluetooth: default_poll_interval_bluetooth(),
             stale_after: default_stale_after(),
             very_stale_after: default_very_stale_after(),
+            pause_when_vendor_hub_running: default_pause_when_vendor_hub_running(),
+            vendor_hub_processes: default_vendor_hub_processes(),
         }
     }
 }

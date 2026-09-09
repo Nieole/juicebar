@@ -15,7 +15,7 @@ use common::fixtures::{
 };
 use common::{
     FakeEndpoints, NOW, default_general, keyboard_with_dongle_endpoint,
-    mouse_with_all_three_endpoints, mouse_with_both_endpoints, scanned_ble,
+    mouse_with_all_three_endpoints, mouse_with_both_endpoints, scanned_ble, vendor_hub_running,
 };
 use juicebar::cli::status;
 use juicebar::cli::status::DeviceRow;
@@ -51,6 +51,7 @@ fn line_of_taken(reading: &EndpointReading, provenance: Provenance) -> String {
         LevelSource::Auto,
         &Staleness::assess(reading, &default_general(), NOW),
         provenance,
+        None,
     )
 }
 
@@ -68,7 +69,7 @@ fn reads_from_the_wired_endpoint_when_it_is_present() {
         ],
     );
 
-    let reading = status::read(&mouse_with_both_endpoints(), &endpoints, NOW).unwrap();
+    let reading = status::read(&mouse_with_both_endpoints(), &endpoints, None, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Wired);
     // `Some(true)` 而不是"真值"：票 02 把这两项改成了 Option，因为键盘答不上来。
@@ -91,7 +92,7 @@ fn does_not_disturb_the_dongle_24g_endpoint_while_wired_is_present() {
         ],
     );
 
-    status::read(&mouse_with_both_endpoints(), &endpoints, NOW).unwrap();
+    status::read(&mouse_with_both_endpoints(), &endpoints, None, NOW).unwrap();
 
     assert_eq!(
         endpoints.transport(EndpointKind::Wired).sent(),
@@ -120,7 +121,7 @@ fn prefers_wired_even_when_the_enumeration_lists_dongle_24g_first() {
         ],
     );
 
-    let reading = status::read(&mouse_with_both_endpoints(), &endpoints, NOW).unwrap();
+    let reading = status::read(&mouse_with_both_endpoints(), &endpoints, None, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Wired);
 }
@@ -140,7 +141,7 @@ fn falls_back_to_dongle_24g_when_wired_disappears_from_the_enumeration() {
         ],
     );
     assert_eq!(
-        status::read(&device, &plugged, NOW).unwrap().endpoint,
+        status::read(&device, &plugged, None, NOW).unwrap().endpoint,
         EndpointKind::Wired
     );
 
@@ -150,7 +151,7 @@ fn falls_back_to_dongle_24g_when_wired_disappears_from_the_enumeration() {
         [(EndpointKind::Dongle24G, vec![MOUSE_RESTING_FULL.to_vec()])],
     );
 
-    let reading = status::read(&device, &unplugged, NOW).unwrap();
+    let reading = status::read(&device, &unplugged, None, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Dongle24G);
     assert_eq!(reading.reading.reported_level, 100);
@@ -170,7 +171,7 @@ fn degrades_to_dongle_24g_within_the_same_cycle_when_wired_fails() {
         ],
     );
 
-    let reading = status::read(&mouse_with_both_endpoints(), &endpoints, NOW).unwrap();
+    let reading = status::read(&mouse_with_both_endpoints(), &endpoints, None, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Dongle24G);
     assert_eq!(reading.reading.reported_level, 100);
@@ -195,7 +196,7 @@ fn reports_a_lost_device_only_after_every_endpoint_failed() {
         ],
     );
 
-    let error = status::read(&mouse_with_both_endpoints(), &endpoints, NOW)
+    let error = status::read(&mouse_with_both_endpoints(), &endpoints, None, NOW)
         .unwrap_err()
         .to_string();
 
@@ -231,7 +232,7 @@ fn falls_back_to_the_ble_cache_when_both_hid_endpoints_fail() {
         Some(300),
     ));
 
-    let reading = status::read(&mouse_with_all_three_endpoints(), &endpoints, NOW).unwrap();
+    let reading = status::read(&mouse_with_all_three_endpoints(), &endpoints, None, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Ble);
     assert_eq!(reading.reading.reported_level, 62);
@@ -256,7 +257,7 @@ fn does_not_read_the_ble_cache_while_a_hid_endpoint_works() {
         Some(86_400),
     ));
 
-    let reading = status::read(&mouse_with_all_three_endpoints(), &endpoints, NOW).unwrap();
+    let reading = status::read(&mouse_with_all_three_endpoints(), &endpoints, None, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Wired);
     assert_eq!(reading.reading.reported_level, 95);
@@ -284,7 +285,7 @@ fn prefers_dongle_24g_over_the_ble_cache() {
         Some(86_400),
     ));
 
-    let reading = status::read(&mouse_with_all_three_endpoints(), &endpoints, NOW).unwrap();
+    let reading = status::read(&mouse_with_all_three_endpoints(), &endpoints, None, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Dongle24G);
     assert_eq!(reading.reading.reported_level, 100);
@@ -323,7 +324,7 @@ fn reads_the_ble_cache_even_when_the_driver_is_not_implemented() {
         Some(42),
     ));
 
-    let reading = status::read(&device, &endpoints, NOW).unwrap();
+    let reading = status::read(&device, &endpoints, None, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Ble);
     assert_eq!(reading.reading.reported_level, 71);
@@ -335,7 +336,7 @@ fn reads_the_ble_cache_even_when_the_driver_is_not_implemented() {
 fn says_no_endpoint_is_present_rather_than_that_reading_failed() {
     let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []);
 
-    let error = status::read(&mouse_with_both_endpoints(), &endpoints, NOW)
+    let error = status::read(&mouse_with_both_endpoints(), &endpoints, None, NOW)
         .unwrap_err()
         .to_string();
 
@@ -352,7 +353,7 @@ fn lists_the_ble_endpoint_among_the_ones_this_device_configured() {
     // 一条都不在场：两条 HID 没枚举到，本机的 BLE 设备里也没有这个地址。
     let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []);
 
-    let error = status::read(&mouse_with_all_three_endpoints(), &endpoints, NOW)
+    let error = status::read(&mouse_with_all_three_endpoints(), &endpoints, None, NOW)
         .unwrap_err()
         .to_string();
 
@@ -454,7 +455,7 @@ fn the_status_line_marks_a_stale_reading_apart_from_a_fresh_one() {
         Some(62),
         Some(300),
     ));
-    let reading = status::read(&device, &fresh, NOW).unwrap();
+    let reading = status::read(&device, &fresh, None, NOW).unwrap();
     let line = line_of(&reading);
     assert!(line.contains("62%"), "新鲜的读数照常显示百分比：{line}");
     assert!(
@@ -469,7 +470,7 @@ fn the_status_line_marks_a_stale_reading_apart_from_a_fresh_one() {
         Some(62),
         Some(7_200),
     ));
-    let reading = status::read(&device, &stale, NOW).unwrap();
+    let reading = status::read(&device, &stale, None, NOW).unwrap();
     let line = line_of(&reading);
     assert!(line.contains("62%"), "这一档数字还是照印：{line}");
     assert!(line.contains("陈旧"), "但要明确标注出来：{line}");
@@ -499,6 +500,7 @@ fn a_lost_device_still_shows_its_last_known_value() {
         status::read_or_last_known(
             &device,
             &endpoints,
+            None,
             &mut LastKnown::default(),
             &general,
             NOW
@@ -520,13 +522,13 @@ fn a_lost_device_still_shows_its_last_known_value() {
     let mut last_known = LastKnown::default();
     last_known.record(&device.id, &previous, NOW.minus_secs(1_800));
 
-    let (reading, provenance) =
-        status::read_or_last_known(&device, &endpoints, &mut last_known, &general, NOW)
+    let readout =
+        status::read_or_last_known(&device, &endpoints, None, &mut last_known, &general, NOW)
             .expect("退得到上次已知值");
 
-    assert_eq!(reading, previous, "拿出来的就是上次那一份");
+    assert_eq!(readout.reading, previous, "拿出来的就是上次那一份");
     assert_eq!(
-        provenance,
+        readout.provenance,
         Provenance::LastKnown,
         "并且说得清它是历史值，不是这一趟读到的"
     );
@@ -560,9 +562,10 @@ fn a_reading_taken_this_run_wins_over_the_one_in_the_state_file() {
         NOW.minus_secs(1_800),
     );
 
-    let (reading, provenance) = status::read_or_last_known(
+    let readout = status::read_or_last_known(
         &device,
         &endpoints,
+        None,
         &mut last_known,
         &default_general(),
         NOW,
@@ -570,10 +573,10 @@ fn a_reading_taken_this_run_wins_over_the_one_in_the_state_file() {
     .expect("Wired 这一趟读得到");
 
     assert_eq!(
-        reading.reading.reported_level, 100,
+        readout.reading.reading.reported_level, 100,
         "印的是这一趟读到的那个数，不是文件里那个 44"
     );
-    assert_eq!(provenance, Provenance::JustRead);
+    assert_eq!(readout.provenance, Provenance::JustRead);
 }
 
 /// 每一次成功的读数**进状态文件**。
@@ -591,13 +594,13 @@ fn a_successful_reading_is_written_to_the_state_file() {
     let general = default_general();
     let mut last_known = LastKnown::default();
 
-    let (reading, _) =
-        status::read_or_last_known(&device, &endpoints, &mut last_known, &general, NOW)
+    let readout =
+        status::read_or_last_known(&device, &endpoints, None, &mut last_known, &general, NOW)
             .expect("Wired 这一趟读得到");
 
     assert_eq!(
         last_known.reading_for(&device.id, &general, NOW),
-        Some(reading),
+        Some(readout.reading),
         "这一趟读到的那一份该记下来了"
     );
 }
@@ -638,7 +641,7 @@ fn falling_back_to_the_last_known_value_does_not_extend_its_life() {
     );
     let before = last_known.to_toml().expect("序列化得动");
 
-    status::read_or_last_known(&device, &endpoints, &mut last_known, &general, NOW)
+    status::read_or_last_known(&device, &endpoints, None, &mut last_known, &general, NOW)
         .expect("退得到上次已知值");
 
     assert_eq!(
@@ -697,7 +700,7 @@ fn a_ble_reading_without_a_timestamp_does_not_look_freshly_taken() {
         None,
     ));
 
-    let reading = status::read(&device, &endpoints, NOW).unwrap();
+    let reading = status::read(&device, &endpoints, None, NOW).unwrap();
     let line = line_of(&reading);
 
     assert!(line.contains("无时间戳"), "说清它没有时间戳：{line}");
@@ -716,7 +719,7 @@ fn every_status_line_says_how_long_ago_the_reading_was_taken() {
         MOUSE_REPORT_ID,
         [(EndpointKind::Wired, vec![MOUSE_CHARGING.to_vec()])],
     );
-    let reading = status::read(&device, &wired, NOW).unwrap();
+    let reading = status::read(&device, &wired, None, NOW).unwrap();
     let line = line_of(&reading);
 
     assert!(line.contains("0 秒前"), "当场问出来的也要说一句：{line}");
@@ -745,7 +748,7 @@ fn shows_only_the_date_when_a_reading_is_older_than_very_stale_after() {
         Some(10 * 86_400),
     ));
 
-    let reading = status::read(&device, &endpoints, NOW).unwrap();
+    let reading = status::read(&device, &endpoints, None, NOW).unwrap();
     let line = line_of(&reading);
 
     assert!(!line.contains("95"), "百分比不该再出现：{line}");
@@ -770,7 +773,7 @@ fn a_reading_exactly_at_the_threshold_is_still_current() {
         Some(62),
         Some(3_600),
     ));
-    let reading = status::read(&device, &at_threshold, NOW).unwrap();
+    let reading = status::read(&device, &at_threshold, None, NOW).unwrap();
     let line = line_of(&reading);
     assert!(!line.contains("陈旧"), "整一小时还不算超过：{line}");
 
@@ -781,7 +784,7 @@ fn a_reading_exactly_at_the_threshold_is_still_current() {
         Some(62),
         Some(3_601),
     ));
-    let reading = status::read(&device, &past_threshold, NOW).unwrap();
+    let reading = status::read(&device, &past_threshold, None, NOW).unwrap();
     let line = line_of(&reading);
     assert!(line.contains("已陈旧"), "多一秒就算：{line}");
 }
@@ -806,7 +809,7 @@ fn the_ble_age_is_the_number_windows_reported_not_one_recomputed_from_the_clock(
         Some(62),
         Some(3_000),
     ));
-    let reading = status::read(&device, &endpoints, NOW).unwrap();
+    let reading = status::read(&device, &endpoints, None, NOW).unwrap();
 
     // 取数在 NOW，判定在一千秒之后：此刻这份读数已经四千秒了，超过缺省的 stale_after。
     // 用 as_unix_secs / from_unix_secs 往前挪，而不是给 Timestamp 加一个只有用例用得到的
@@ -817,6 +820,7 @@ fn the_ble_age_is_the_number_windows_reported_not_one_recomputed_from_the_clock(
         LevelSource::Auto,
         &Staleness::assess(&reading, &default_general(), later),
         Provenance::JustRead,
+        None,
     );
 
     assert!(
@@ -985,7 +989,7 @@ fn an_implausible_frame_reads_as_an_anomaly_rather_than_a_number() {
         )],
     );
 
-    let line = status::read(&mouse_with_both_endpoints(), &endpoints, NOW)
+    let line = status::read(&mouse_with_both_endpoints(), &endpoints, None, NOW)
         .unwrap_err()
         .to_string();
 
@@ -995,13 +999,307 @@ fn an_implausible_frame_reads_as_an_anomaly_rather_than_a_number() {
 
 /// 取一次数并印成一行。
 fn render(device: &juicebar::config::Device, endpoints: &FakeEndpoints) -> String {
-    let reading = status::read(device, endpoints, NOW).unwrap();
+    let reading = status::read(device, endpoints, None, NOW).unwrap();
     status::render(
         &reading,
         device.level_source,
         &Staleness::assess(&reading, &default_general(), NOW),
         Provenance::JustRead,
+        None,
     )
+}
+
+// ---------------------------------------------------------------
+// 厂商上位机暂停（票 07）
+//
+// 撞见上位机这件事本身在 `tests/vendor_hub.rs` 里断言完了，这里断言的是**取数那一步
+// 怎么让开**：让开的那几条一个通道都不打开、`Ble` 照常、那一行说的是"暂停"而不是
+// "读不到"。
+// ---------------------------------------------------------------
+
+/// 一份 [`status::RowReading`] 印成的那一行。
+///
+/// 暂停这几条用例都要它，而它比 [`line_of`] 多带两维（来路与暂停），所以另起一个而不是给
+/// 那个加参数——`line_of` 是上面那些用例在用的。
+fn line_of_row(
+    device: &juicebar::config::Device,
+    row: &status::RowReading,
+    general: &juicebar::config::General,
+) -> String {
+    status::render(
+        &row.reading,
+        device.level_source,
+        &Staleness::assess(&row.reading, general, NOW),
+        row.provenance,
+        row.paused_by.as_ref(),
+    )
+}
+
+/// 让开的那几条**一个通道都不打开**，而且那一行说的是暂停，不是失联。
+///
+/// 两件事一条用例：它们是同一个决定的两面。不打开通道是这张票的机械要求（一块共享
+/// 缓冲区，两个程序同时发命令会互相覆盖应答）；说成"暂停"是它的用户可见面——说成失联，
+/// 用户会去找一个不存在的硬件故障，而他真该做的事是关掉那个上位机。
+#[test]
+fn yields_the_two_hid_endpoints_without_opening_them_at_all() {
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [
+            (EndpointKind::Wired, vec![MOUSE_RESTING_FULL.to_vec()]),
+            (EndpointKind::Dongle24G, vec![MOUSE_RESTING_FULL.to_vec()]),
+        ],
+    );
+    let hub = vendor_hub_running();
+
+    let line = status::read(&mouse_with_both_endpoints(), &endpoints, Some(&hub), NOW)
+        .unwrap_err()
+        .to_string();
+
+    assert!(line.contains("暂停"), "那一行要说它暂停了：{line}");
+    assert!(
+        line.contains("VGN VHUB.exe"),
+        "要点名是谁占着通路，那是用户唯一能据以行动的东西：{line}"
+    );
+    assert!(!line.contains("读不到"), "暂停不许说成失联：{line}");
+    assert!(
+        endpoints.opens().is_empty(),
+        "暂停期间一个通道都不该打开，打开了就是{:?}",
+        endpoints.opens()
+    );
+}
+
+/// `Ble` 在暂停期间照常更新（票面第 3 条）。
+///
+/// 它不参与那个竞争：读的是 Windows 攒的属性缓存，压根不往设备发字节。所以让开两条 HID
+/// **不该顺带把它也停掉**——那一刻它恰好是唯一还答得出话的一级。
+#[test]
+fn keeps_reading_the_ble_cache_while_the_two_hid_endpoints_are_paused() {
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [
+            (EndpointKind::Wired, vec![MOUSE_RESTING_FULL.to_vec()]),
+            (EndpointKind::Dongle24G, vec![MOUSE_RESTING_FULL.to_vec()]),
+        ],
+    )
+    .with_ble_cache(scanned_ble(
+        "Dragonfly 3 Master+",
+        "e452430072a9",
+        Some(62),
+        Some(300),
+    ));
+    let hub = vendor_hub_running();
+
+    let reading = status::read(
+        &mouse_with_all_three_endpoints(),
+        &endpoints,
+        Some(&hub),
+        NOW,
+    )
+    .expect("Ble 那一级照常答得出话");
+
+    assert_eq!(reading.endpoint, EndpointKind::Ble);
+    assert_eq!(reading.reading.reported_level, 62);
+    assert!(
+        endpoints.opens().is_empty(),
+        "两条 HID 仍然一个通道都不该打开：{:?}",
+        endpoints.opens()
+    );
+}
+
+/// 暂停期间**保留最后读数而不是清空**（票面第 5 条），并且说得清那是什么。
+///
+/// `status` 是一次性命令，程序刚启动内存里什么都没有，所以那个"最后读数"只可能来自状态
+/// 文件（票 08 的 `reading_for`）。而那一行末尾非说一句不可：这一维的沉默是有理由的
+/// （parking lot Q40：手上有历史值就意味着这套配置曾经读通过，那句失联诊断已经不成立），
+/// **而厂商上位机是那条规则的例外**——用户此刻该被告知的正是"上位机在跑"，因为那是他唯一
+/// 能动手的地方。
+#[test]
+fn keeps_the_last_known_value_while_paused_and_says_which_it_is() {
+    let device = mouse_with_both_endpoints();
+    // 两条 Endpoint 都在场、脚本也都备着回包——它们没被读到是因为让开，不是因为读不到。
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [
+            (EndpointKind::Wired, vec![MOUSE_RESTING_FULL.to_vec()]),
+            (EndpointKind::Dongle24G, vec![MOUSE_RESTING_FULL.to_vec()]),
+        ],
+    );
+    let general = default_general();
+    let hub = vendor_hub_running();
+
+    // 半小时前读到过一次。
+    let taken_at = NOW.minus_secs(1_800);
+    let previous = EndpointReading::from_hid(
+        EndpointKind::Wired,
+        Reading {
+            reported_level: 44,
+            charging: Some(true),
+            voltage_mv: Some(3_950),
+        },
+        taken_at,
+    );
+    let mut last_known = LastKnown::default();
+    last_known.record(&device.id, &previous, taken_at);
+
+    let readout = status::read_or_last_known(
+        &device,
+        &endpoints,
+        Some(&hub),
+        &mut last_known,
+        &general,
+        NOW,
+    )
+    .expect("暂停期间该拿出最后读数，而不是什么都没有");
+
+    assert_eq!(readout.reading, previous, "拿出来的就是上次那一份");
+    assert_eq!(readout.provenance, Provenance::LastKnown);
+
+    let line = line_of_row(&device, &readout, &general);
+    // 3950 mV 在 `auto` 下取的是 Derived Level（63%），不是固件自报的 44——两个百分比里
+    // 印哪一个在 `tests/level.rs` 里单独断言，这里要的只是"那个数还在，没被清空"。
+    assert!(
+        line.contains("63%（Derived Level）"),
+        "那个数要留在那一行上：{line}"
+    );
+    assert!(line.contains("上次已知值"), "它仍然不是现状：{line}");
+    assert!(
+        line.contains("已暂停") && line.contains("VGN VHUB.exe"),
+        "还要说清它为什么没被刷新：{line}"
+    );
+    assert!(
+        endpoints.opens().is_empty(),
+        "拿历史值顶上不代表可以去打开通道：{:?}",
+        endpoints.opens()
+    );
+}
+
+/// `Ble` 顶上的那一行**照样说一句"已暂停"**。
+///
+/// 那一刻没有任何东西读不到，所以不能靠"读不到"来交代——可一个可能是几个月前的缓存数字
+/// 突然顶掉了当场问出来的那个数，用户得知道那是因为上位机在跑，而不是设备出了事。
+#[test]
+fn says_it_paused_even_when_the_ble_cache_answered() {
+    let device = mouse_with_all_three_endpoints();
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [(EndpointKind::Wired, vec![MOUSE_RESTING_FULL.to_vec()])],
+    )
+    .with_ble_cache(scanned_ble(
+        "Dragonfly 3 Master+",
+        "e452430072a9",
+        Some(62),
+        Some(300),
+    ));
+    let general = default_general();
+    let hub = vendor_hub_running();
+
+    let readout = status::read_or_last_known(
+        &device,
+        &endpoints,
+        Some(&hub),
+        &mut LastKnown::default(),
+        &general,
+        NOW,
+    )
+    .expect("Ble 答得出话");
+
+    let line = line_of_row(&device, &readout, &general);
+    assert!(line.contains("来自 Ble"), "这个数来自缓存：{line}");
+    assert!(
+        line.contains("已暂停（VGN VHUB.exe 正在运行）"),
+        "还要说清 Wired 为什么没顶上：{line}"
+    );
+}
+
+/// 只配了 `Ble` 的设备**不因为上位机在跑就被标成暂停**。
+///
+/// 一副耳机压根没有让开的东西：对它说一句"已暂停"是一句与它无关的话，而那种噪音会把
+/// 真正该看的那一行一起淹掉。判据因此是"这个 Device 真有在场的 Endpoint 被让开"，
+/// 不是"本机有上位机在跑"。
+#[test]
+fn does_not_mark_a_ble_only_device_as_paused() {
+    let headset = Config::parse(
+        r#"
+        [[device]]
+        id = "headset"
+        name = "某副耳机"
+        driver = "vgn_mouse"
+
+          [device.bluetooth]
+          address = "f4ee2553b27e"
+        "#,
+    )
+    .expect("用例里的配置应当解析得动")
+    .devices
+    .remove(0);
+    let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []).with_ble_cache(scanned_ble(
+        "某副耳机",
+        "f4ee2553b27e",
+        Some(80),
+        Some(60),
+    ));
+    let general = default_general();
+    let hub = vendor_hub_running();
+
+    let readout = status::read_or_last_known(
+        &headset,
+        &endpoints,
+        Some(&hub),
+        &mut LastKnown::default(),
+        &general,
+        NOW,
+    )
+    .expect("Ble 答得出话");
+
+    assert!(
+        readout.paused_by.is_none(),
+        "它一条 HID 都没有，没有任何东西被让开"
+    );
+    let line = line_of_row(&headset, &readout, &general);
+    assert!(!line.contains("已暂停"), "不该多这一句：{line}");
+}
+
+/// 暂停期间，**没让开的那几条自己的失败原因不能被吞掉**。
+///
+/// 让开两条 HID，而 `Ble` 在场却答不出电量：这一行若只说"关掉它就会恢复"，那是一句假话
+/// ——关掉 HUB，那台设备的蓝牙那一头还是老样子。parking lot Q40 允许沉默的理由是"手上有
+/// 历史值就意味着这套配置曾经读通过"，而这一支连历史值都没有，那句理由不成立。
+#[test]
+fn keeps_the_reason_of_the_endpoints_it_did_try_while_paused() {
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [
+            (EndpointKind::Wired, vec![MOUSE_RESTING_FULL.to_vec()]),
+            (EndpointKind::Dongle24G, vec![MOUSE_RESTING_FULL.to_vec()]),
+        ],
+    )
+    // 在场，但这台设备根本没有电量属性——它被试过了，而且失败了。
+    .with_ble_cache(scanned_ble(
+        "Dragonfly 3 Master+",
+        "e452430072a9",
+        None,
+        Some(300),
+    ));
+    let hub = vendor_hub_running();
+
+    let line = status::read(
+        &mouse_with_all_three_endpoints(),
+        &endpoints,
+        Some(&hub),
+        NOW,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(line.contains("暂停中"), "它仍然是暂停，不是失联：{line}");
+    assert!(
+        line.contains("没有电量属性"),
+        "Ble 自己那条原因不该被吞掉：{line}"
+    );
+    assert!(
+        !line.contains("关掉它就会恢复"),
+        "关掉 HUB 并不会让这一行变好，别许一个做不到的承诺：{line}"
+    );
 }
 
 // ---------------------------------------------------------------

@@ -7,13 +7,13 @@
 同时发命令会互相覆盖对方的应答，双方都读到错数据。HUB 同样驱动有线设备，所以两条 HID Endpoint
 都要停。
 
-**Blocked by:** 04
+**Blocked by:** 04, 05, 08
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 按 `vendor_hub_processes` 配置检测进程
-- [ ] 检测到时暂停 Wired 与 Dongle24G
-- [ ] Ble 在暂停期间照常更新（它是本地属性读取，不参与竞争）
-- [ ] `status` 里暂停态与失联态可区分
-- [ ] 暂停期间保留最后读数而不是清空
-- [ ] `pause_when_vendor_hub_running = false` 时不暂停
+- [x] 按 `vendor_hub_processes` 配置检测进程
+- [x] 检测到时暂停 Wired 与 Dongle24G
+- [x] Ble 在暂停期间照常更新（它是本地属性读取，不参与竞争）
+- [x] `status` 里暂停态与失联态可区分
+- [x] 暂停期间保留最后读数而不是清空
+- [x] `pause_when_vendor_hub_running = false` 时不暂停
