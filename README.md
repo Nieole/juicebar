@@ -64,7 +64,7 @@ ATK、雷柏等后续接入。协议细节见 [`docs/protocol.md`](docs/protocol
 - [x] `probe` 子命令（含 VGN 鼠标校验和、feature 模式）
 - [x] 鼠标经 Dongle24G 取数（Transport 接缝 + `status` 子命令收口）
 - [ ] 鼠标 Wired Endpoint、读数合理性校验与电量来源选择
-- [ ] 键盘 2.4G 驱动
+- [x] 键盘经 Dongle24G 取数（feature 报文 Transport + 驱动 trait）
 - [ ] 设备模型与身份合并
 - [ ] 配置自举
 - [ ] 托盘图标渲染

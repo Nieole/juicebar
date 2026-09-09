@@ -12,8 +12,8 @@ use anyhow::{Result, anyhow};
 
 use crate::config::{Device, HidEndpoint};
 use crate::hid::{self, HidInfo};
-use crate::sources::hid_transport::OutputReportTransport;
-use crate::sources::{Reading, Transport, vgn_mouse};
+use crate::sources::hid_transport::{FeatureReportTransport, OutputReportTransport};
+use crate::sources::{Reading, ReportKind, Transport, driver_for};
 
 /// 一个 Device 上一条能取到读数的通路的种类。
 ///
@@ -112,30 +112,51 @@ impl HidEndpoints {
         })
     }
 
-    /// 在本机枚举到的 collection 里找配置指名的那一条，**限于能发输出报文的**。
+    /// 在本机枚举到的 collection 里找配置指名的那一条，**限于发得出这种报文的**。
     ///
-    /// 名字里的 output 是要紧的：走 feature 报文的通道 `out` 为 0（键盘的 vendor
-    /// collection 实测就是 `in:0 out:0 feat:65`），会被这里筛掉。将来接上那条路时别复用
-    /// 这个函数，否则报出来的是一句误导人的"设备没插"。
-    fn find_output_collection(&self, endpoint: &HidEndpoint) -> Option<&HidInfo> {
+    /// 报文种类这一维躲不掉：键盘的 vendor collection 实测是 `in:0 out:0 feat:65`，
+    /// 只认输出报文就会把它筛成"不在场"，而设备好端端插着——那是一句彻底误导人的
+    /// "设备没插"。种类由驱动来答（[`ReportKind`]），不进配置。
+    fn find_collection(&self, endpoint: &HidEndpoint, kind: ReportKind) -> Option<&HidInfo> {
         self.collections.iter().find(|c| {
             c.vid == endpoint.vid
                 && c.pid == endpoint.pid
                 && c.usage_page == endpoint.usage_page
                 && c.usage == endpoint.usage
-                // out 为 0 的通道发不出命令，不是它。
-                && c.output_len > 0
+                && can_send(c, kind)
         })
+    }
+
+    /// 这个 Device 的驱动声明它走哪种报文。
+    ///
+    /// 认不出驱动名时给 `None`：配置里可以出现本次编译还没实现的驱动名，那该是取数
+    /// 那一行写着"尚未实现"，而不是让这个 Device 的每条 Endpoint 都算不在场。
+    fn report_kind_of(device: &Device) -> Option<ReportKind> {
+        driver_for(&device.driver).map(|driver| driver.report_kind())
+    }
+}
+
+/// 这条 collection 发得出这种报文吗。
+///
+/// 长度为 0 的那一侧根本发不出去，认它就是认错通路。
+fn can_send(c: &HidInfo, kind: ReportKind) -> bool {
+    match kind {
+        ReportKind::OutputAndInput { .. } => c.output_len > 0,
+        ReportKind::Feature => c.feature_len > 0,
     }
 }
 
 impl Endpoints for HidEndpoints {
     fn present(&self, device: &Device) -> Vec<EndpointKind> {
+        let Some(report_kind) = Self::report_kind_of(device) else {
+            // 驱动都认不出来，就没有"发得出哪种报文"可言，一条也算不上在场。
+            return Vec::new();
+        };
         EndpointKind::PRIORITY
             .into_iter()
             .filter(|kind| {
                 kind.config_in(device)
-                    .is_some_and(|endpoint| self.find_output_collection(endpoint).is_some())
+                    .is_some_and(|endpoint| self.find_collection(endpoint, report_kind).is_some())
             })
             .collect()
     }
@@ -148,19 +169,32 @@ impl Endpoints for HidEndpoints {
         let configured = endpoint
             .config_in(device)
             .ok_or_else(|| anyhow!("这个 Device 没有配置 {endpoint}"))?;
-        let collection = self.find_output_collection(configured).ok_or_else(|| {
+        let report_kind = Self::report_kind_of(device)
+            .ok_or_else(|| anyhow!("驱动 {} 尚未实现", device.driver))?;
+        let collection = self.find_collection(configured, report_kind).ok_or_else(|| {
             anyhow!(
-                "本机没有 VID {:04X} PID {:04X} UP {:04X} U {:04X} 这条能发输出报文的通路（设备没插？）",
+                "本机没有 VID {:04X} PID {:04X} UP {:04X} U {:04X} 这条发得出 {} 的通路（设备没插？）",
                 configured.vid,
                 configured.pid,
                 configured.usage_page,
-                configured.usage
+                configured.usage,
+                match report_kind {
+                    ReportKind::OutputAndInput { .. } => "输出报文",
+                    ReportKind::Feature => "feature 报文",
+                }
             )
         })?;
-        Ok(Box::new(OutputReportTransport::open(
-            collection,
-            configured.report_id,
-            vgn_mouse::READ_TIMEOUT_MS,
-        )?))
+        // 超时是**协议**的性质，由驱动经 ReportKind 交出来，不在这里写死某一款设备的值。
+        Ok(match report_kind {
+            ReportKind::OutputAndInput { read_timeout_ms } => Box::new(OutputReportTransport::open(
+                collection,
+                configured.report_id,
+                read_timeout_ms,
+            )?) as Box<dyn Transport>,
+            ReportKind::Feature => Box::new(FeatureReportTransport::open(
+                collection,
+                configured.report_id,
+            )?),
+        })
     }
 }

@@ -33,8 +33,10 @@ fn reads_from_the_wired_endpoint_when_it_is_present() {
     let reading = status::read(&mouse_with_both_endpoints(), &endpoints).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Wired);
-    assert!(reading.reading.charging);
-    assert_eq!(reading.reading.voltage_mv, 4235);
+    // `Some(true)` 而不是"真值"：票 02 把这两项改成了 Option，因为键盘答不上来。
+    // 断言写成 Some 才分得清"确实在充电"和"这条协议说不上来"。
+    assert_eq!(reading.reading.charging, Some(true));
+    assert_eq!(reading.reading.voltage_mv, Some(4235));
 }
 
 /// Wired 在场时**一个字节都不往 Dongle24G 发**。

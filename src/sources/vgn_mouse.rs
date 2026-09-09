@@ -2,7 +2,22 @@
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::sources::{Reading, Transport};
+use crate::sources::{Driver, Reading, ReportKind, Transport, require_frame_len};
+
+/// VGN 鼠标这一族的驱动。配置里写 `driver = "vgn_mouse"` 取到的就是它。
+pub struct VgnMouse;
+
+impl Driver for VgnMouse {
+    fn report_kind(&self) -> ReportKind {
+        ReportKind::OutputAndInput {
+            read_timeout_ms: READ_TIMEOUT_MS,
+        }
+    }
+
+    fn read_battery(&self, transport: &dyn Transport) -> Result<Reading> {
+        read_battery(transport)
+    }
+}
 
 /// 一帧的长度，不含 Report ID。
 pub const FRAME_LEN: usize = 16;
@@ -38,9 +53,7 @@ fn battery_request(report_id: u8) -> [u8; FRAME_LEN] {
 
 /// 解析 cmd 4 的回包。
 fn parse_battery(frame: &[u8]) -> Result<Reading> {
-    if frame.len() < FRAME_LEN {
-        bail!("回包只有 {} 字节，不足一帧的 {FRAME_LEN} 字节", frame.len());
-    }
+    require_frame_len(frame, FRAME_LEN)?;
     // dongle 侧交回来的可能是别的命令留下的应答，不校验 cmd 回显就会把它当成电量。
     if frame[0] != CMD_BATTERY_LEVEL {
         bail!(
@@ -50,8 +63,9 @@ fn parse_battery(frame: &[u8]) -> Result<Reading> {
     }
     Ok(Reading {
         reported_level: frame[5],
-        charging: frame[6] != 0,
-        voltage_mv: u16::from_be_bytes([frame[7], frame[8]]),
+        // 鼠标这一位已校准：实测插线时 `[6]` 由 `00` 翻为 `01`。
+        charging: Some(frame[6] != 0),
+        voltage_mv: Some(u16::from_be_bytes([frame[7], frame[8]])),
     })
 }
 

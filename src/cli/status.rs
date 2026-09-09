@@ -9,7 +9,7 @@ use anyhow::{Result, anyhow, bail};
 
 use crate::config::{Config, Device};
 use crate::endpoints::{EndpointKind, EndpointReading, Endpoints, HidEndpoints};
-use crate::sources::{Reading, Transport, vgn_mouse};
+use crate::sources::{Reading, Transport, driver_for};
 
 pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     let path = match config_path {
@@ -126,10 +126,9 @@ fn read_with_driver(
     transport: &dyn Transport,
 ) -> Result<Reading> {
     // 配置里可以出现本次编译还没实现的驱动名，那该是这一行写着"尚未实现"。
-    if device.driver != "vgn_mouse" {
-        bail!("驱动 {} 尚未实现", device.driver);
-    }
-    vgn_mouse::read_battery(transport)
+    let driver =
+        driver_for(&device.driver).ok_or_else(|| anyhow!("驱动 {} 尚未实现", device.driver))?;
+    driver.read_battery(transport)
 }
 
 /// 电量后面那句 Reported Level 不是啰嗦：项目里还有一个由电压查表算出的
@@ -143,15 +142,21 @@ fn read_with_driver(
 /// `pub` 与 [`read`] 同理：这一行印成什么样是 `status` 的外部行为。
 pub fn render(sourced: &EndpointReading) -> String {
     let EndpointReading { endpoint, reading } = sourced;
+    // 键盘那一位至今没有实测样本，spec 明写「键盘暂不显示充电态」，所以说不上来时
+    // 这一格整个不印——印"未充电"就是替设备做了一个没人验过的断言。
+    let charging = match reading.charging {
+        Some(true) => "  充电中",
+        Some(false) => "  未充电",
+        None => "",
+    };
+    // 键盘的回包里根本没有电压这一项，那一格同样整个不印。印一个 0 mV 会被当成读数。
+    let voltage = match reading.voltage_mv {
+        Some(mv) => format!("  {mv} mV"),
+        None => String::new(),
+    };
     format!(
-        "{}%（Reported Level）  {}  {} mV  来自 {endpoint}",
+        "{}%（Reported Level）{charging}{voltage}  来自 {endpoint}",
         reading.reported_level,
-        if reading.charging {
-            "充电中"
-        } else {
-            "未充电"
-        },
-        reading.voltage_mv
     )
 }
 
