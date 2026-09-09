@@ -31,12 +31,15 @@ cargo build --release
 
 ```
 juicebar status          # 读一次配置里每个 Device 的当前电量，一行一个
+juicebar config-refresh  # 没有配置就生成草稿；有配置就补上此刻在场而空着的 Endpoint 块
 juicebar scan            # 列出所有 HID collection 和带电量属性的 BLE 设备
 juicebar probe ...       # 向指定 collection 发原始帧并打印回包
 juicebar run             # 常驻托盘
 ```
 
 首次运行没有配置文件时会自动扫描并生成一份草稿，能猜的先猜、猜不动的留空并加注释。配置在 `%APPDATA%\juicebar\config.toml`。
+
+草稿里**注释掉的块**是程序猜不动、或者生成那一刻扫不到的东西——最常见的是 `[device.wired]`，它只在插着线时才枚举得到（键盘还要把机身模式开关拨到有线档）。该插的插好之后跑一次 `config-refresh`，那些块会被自动补上；你手写过的值和注释一概不动。
 
 ## 已知限制
 

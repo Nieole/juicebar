@@ -75,6 +75,23 @@ impl EndpointKind {
             Self::Ble => device.bluetooth.is_some(),
         }
     }
+
+    /// 这条 Endpoint 在 TOML 里的块名，即 `[device.<这个>]`。
+    ///
+    /// 与 [`Self::hid_config_in`] / [`Self::is_configured_in`] 是同一份知识的两面——一个
+    /// 按名字取出来，一个把名字写回去（自举草稿和 `config-refresh` 要写），所以住在一起。
+    /// `Display` 印的是 `CONTEXT.md` 的词（`Dongle24G`），给人看；这里印的是配置里的键
+    /// （`wireless_24g`），给文件看，两者不可混用。
+    ///
+    /// `Ble` 也有块名，尽管 `config-refresh` 从不写它（地址猜不出来）：块名是这条
+    /// Endpoint 的固有属性，不因为谁写不写它而改变。
+    pub fn config_key(self) -> &'static str {
+        match self {
+            Self::Wired => "wired",
+            Self::Dongle24G => "wireless_24g",
+            Self::Ble => "bluetooth",
+        }
+    }
 }
 
 impl std::fmt::Display for EndpointKind {

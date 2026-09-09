@@ -8,10 +8,10 @@ Wired Endpoint 只在插线时才枚举得到，自举那一刻通常缺席。�
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 首次运行且无配置时生成带注释的草稿，能猜的先猜、猜不动的留空并注明
-- [ ] 扫不到的 `[device.wired]` 以**注释掉的占位**形式写入，并写明补全办法
-- [ ] `config-refresh` 命令扫描当前在场的 Endpoint 并填充空着的块
-- [ ] `config-refresh` 只填空缺，不动已有内容
-- [ ] 草稿里 `level_source` 显式写出，便于用户看见这个开关的存在
+- [x] 首次运行且无配置时生成带注释的草稿，能猜的先猜、猜不动的留空并注明
+- [x] 扫不到的 `[device.wired]` 以**注释掉的占位**形式写入，并写明补全办法
+- [x] `config-refresh` 命令扫描当前在场的 Endpoint 并填充空着的块
+- [x] `config-refresh` 只填空缺，不动已有内容
+- [x] 草稿里 `level_source` 显式写出，便于用户看见这个开关的存在

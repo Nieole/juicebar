@@ -3,26 +3,22 @@
 //! 这是取数链路的收口：配置 → 驱动 → 设备 → 一行看得懂的字。托盘将来显示的是
 //! 同一组信息。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 
 use crate::bluetooth::{self, BleBattery};
+use crate::cli::{config_refresh, resolve_config_path};
 use crate::config::{Config, Device};
 use crate::endpoints::{EndpointKind, EndpointReading, Endpoints, SystemEndpoints};
 use crate::sources::{Reading, Transport, driver_for};
 
 pub fn run(config_path: Option<PathBuf>) -> Result<()> {
-    let path = match config_path {
-        Some(path) => path,
-        None => default_config_path()?,
-    };
+    let path = resolve_config_path(config_path)?;
     if !path.exists() {
-        bail!(
-            "没找到配置 {}。仓库里的 config.example.toml 是一份带注释的样例，\
-             抄一份过去改改即可。",
-            path.display()
-        );
+        // 首次运行：先给一份扫出来的草稿，而不是打发用户去抄样例。草稿里扫不到的
+        // Endpoint 是注释掉的占位，得他自己看一眼，所以这一趟到此为止、不接着取数。
+        return config_refresh::bootstrap(&path);
     }
     let config = Config::load(&path)?;
 
@@ -263,10 +259,4 @@ fn source_of(endpoint: EndpointKind, cache_age_secs: Option<u64>) -> String {
             bluetooth::age_text(cache_age_secs)
         ),
     }
-}
-
-fn default_config_path() -> Result<PathBuf> {
-    let appdata = std::env::var("APPDATA")
-        .map_err(|_| anyhow!("读不到环境变量 APPDATA，请用 --config 指定配置路径"))?;
-    Ok(Path::new(&appdata).join("juicebar").join("config.toml"))
 }
