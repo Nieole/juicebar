@@ -10,13 +10,13 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `juicebar status` 能从配置读出一个 Device，取一次数，打印名字与电量
-- [ ] 驱动面向 Transport 接缝取数，不直接接触 HID 调用
-- [ ] 存在假 Transport，测试可在不接任何硬件的情况下跑通
-- [ ] 用实测字节做夹具：`08 04 00 00 00 02 64 00 10 5E …` 应解析为 level 100 / 未充电 / 4190 mV
-- [ ] 发出的帧带正确校验和（`0x55 − sum − report_id`），且有测试锁死这一点
-- [ ] 读超时取 3000 ms —— cmd 4 要走一次到设备的空中往返，1000 ms 实测会超时
-- [ ] 只发 cmd 4，不发 cmd 3
-- [ ] probe 子命令与驱动共用同一份校验和实现
+- [x] `juicebar status` 能从配置读出一个 Device，取一次数，打印名字与电量
+- [x] 驱动面向 Transport 接缝取数，不直接接触 HID 调用
+- [x] 存在假 Transport，测试可在不接任何硬件的情况下跑通
+- [x] 用实测字节做夹具：`08 04 00 00 00 02 64 00 10 5E …` 应解析为 level 100 / 未充电 / 4190 mV
+- [x] 发出的帧带正确校验和（`0x55 − sum − report_id`），且有测试锁死这一点
+- [x] 读超时取 3000 ms —— cmd 4 要走一次到设备的空中往返，1000 ms 实测会超时
+- [x] 只发 cmd 4，不发 cmd 3
+- [x] probe 子命令与驱动共用同一份校验和实现

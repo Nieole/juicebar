@@ -7,6 +7,7 @@
 use anyhow::{Result, anyhow, bail};
 
 use crate::hid;
+use crate::sources::vgn_mouse;
 
 /// 十六进制字符串转字节。允许空格和 `0x` 前缀：`04 00 ef` / `0x04,0x00`。
 pub fn parse_hex(s: &str) -> Result<Vec<u8>> {
@@ -16,7 +17,7 @@ pub fn parse_hex(s: &str) -> Result<Vec<u8>> {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join("");
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         bail!("十六进制位数是奇数：{cleaned}");
     }
     (0..cleaned.len())
@@ -26,17 +27,6 @@ pub fn parse_hex(s: &str) -> Result<Vec<u8>> {
                 .map_err(|e| anyhow!("解析 {} 失败: {e}", &cleaned[i..i + 2]))
         })
         .collect()
-}
-
-/// VGN 鼠标那套校验：`crc = 0x55 - sum(帧[0..15])`，再减 Report ID 落到帧[15]。
-/// 全程 u8 回绕，原始 JS 依赖 Uint8Array 赋值的截断。
-pub fn vgn_mouse_crc(frame: &mut [u8], report_id: u8) -> Result<()> {
-    if frame.len() != 16 {
-        bail!("VGN 鼠标帧必须是 16 字节，当前 {}", frame.len());
-    }
-    let sum = frame[..15].iter().fold(0u8, |a, b| a.wrapping_add(*b));
-    frame[15] = 0x55u8.wrapping_sub(sum).wrapping_sub(report_id);
-    Ok(())
 }
 
 fn hex_dump(buf: &[u8]) -> String {
@@ -74,7 +64,13 @@ pub fn run(
         .filter(|d| usage.is_none_or(|u| d.usage == u))
         // 能发命令的通道：output 报文或 feature 报文，至少得有一样。
         // VGN 键盘走的就是后者——它的 vendor collection 输入输出都是 0，只有 feature。
-        .filter(|d| if feature { d.feature_len > 0 } else { d.output_len > 0 })
+        .filter(|d| {
+            if feature {
+                d.feature_len > 0
+            } else {
+                d.output_len > 0
+            }
+        })
         .collect();
 
     let target = match candidates.len() {
@@ -94,7 +90,9 @@ pub fn run(
 
     let mut frame = parse_hex(bytes)?;
     if vgn_crc {
-        vgn_mouse_crc(&mut frame, report_id)?;
+        // 与鼠标驱动共用同一份校验和：两处各存一份，迟早会有一处悄悄改错，
+        // 而校验和错了的帧会被设备静默丢弃，看起来和"设备没反应"一模一样。
+        vgn_mouse::apply_checksum(&mut frame, report_id)?;
     }
 
     println!(
@@ -103,7 +101,11 @@ pub fn run(
     );
     println!(
         "方式  {}",
-        if feature { "feature 报文" } else { "output 报文 + input 回包" }
+        if feature {
+            "feature 报文"
+        } else {
+            "output 报文 + input 回包"
+        }
     );
     if no_write {
         println!("发送  （跳过，--no-write）");

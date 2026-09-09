@@ -21,7 +21,7 @@ license = "MIT"
 # 有类型包装能少写一批 unsafe。
 windows = { version = "0.62.2", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_SystemInformation"] }
 
-# 子命令 scan / probe / run。derive 是为了让子命令定义和帮助文本住在一处。
+# 子命令 status / scan / probe / run。derive 是为了让子命令定义和帮助文本住在一处。
 clap = { version = "4.6.6", features = ["derive"] }
 
 # 配置文件（设备清单、身份合并规则、主设备选择）。选 TOML 是因为配置要人手写、要带注释——

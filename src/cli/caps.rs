@@ -44,7 +44,10 @@ pub fn run(vid: u16, pid: u16, usage_page: Option<u16>, usage: Option<u16>) -> R
                         } else {
                             "  ← 带编号，缓冲区第 0 字节必须填其中之一"
                         };
-                        println!("    {name}  报文长 {len}，Report ID: {}{note}", shown.join(" "));
+                        println!(
+                            "    {name}  报文长 {len}，Report ID: {}{note}",
+                            shown.join(" ")
+                        );
                     }
                 }
             }

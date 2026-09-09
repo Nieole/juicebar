@@ -244,7 +244,10 @@ pub fn report_ids(info: &HidInfo) -> Result<ReportIds> {
         unsafe {
             let mut preparsed = Default::default();
             if !HidD_GetPreparsedData(h, &mut preparsed) {
-                bail!("HidD_GetPreparsedData 失败: {}", std::io::Error::last_os_error());
+                bail!(
+                    "HidD_GetPreparsedData 失败: {}",
+                    std::io::Error::last_os_error()
+                );
             }
             let mut caps = HIDP_CAPS::default();
             let status = HidP_GetCaps(preparsed, &mut caps);

@@ -30,6 +30,7 @@ cargo build --release
 ## 用法
 
 ```
+juicebar status          # 读一次配置里每个 Device 的当前电量，一行一个
 juicebar scan            # 列出所有 HID collection 和带电量属性的 BLE 设备
 juicebar probe ...       # 向指定 collection 发原始帧并打印回包
 juicebar run             # 常驻托盘
@@ -61,7 +62,8 @@ ATK、雷柏等后续接入。协议细节见 [`docs/protocol.md`](docs/protocol
 - [x] 蓝牙数据源（CfgMgr 读 DEVPKEY_Bluetooth_Battery，含新鲜度）
 - [x] `scan` 子命令
 - [x] `probe` 子命令（含 VGN 鼠标校验和、feature 模式）
-- [ ] 鼠标 2.4G 驱动
+- [x] 鼠标经 Dongle24G 取数（Transport 接缝 + `status` 子命令收口）
+- [ ] 鼠标 Wired Endpoint、读数合理性校验与电量来源选择
 - [ ] 键盘 2.4G 驱动
 - [ ] 设备模型与身份合并
 - [ ] 配置自举

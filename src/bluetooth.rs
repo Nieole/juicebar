@@ -12,10 +12,10 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_Device_ID_List_SizeW, CM_Get_Device_ID_ListW, CM_LOCATE_DEVNODE_NORMAL,
     CM_Locate_DevNodeW, CR_SUCCESS,
 };
+use windows::Win32::Devices::Properties::{DEVPKEY_Device_FriendlyName, DEVPROPTYPE};
 use windows::Win32::Foundation::{DEVPROPKEY, FILETIME};
 use windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
 use windows::core::{GUID, PCWSTR};
-use windows::Win32::Devices::Properties::{DEVPKEY_Device_FriendlyName, DEVPROPTYPE};
 
 /// 电量。`{104EA319-6EE2-4701-BD47-8DDBF425BBE5}` PID 2，类型 BYTE，值域 0-100。
 const DEVPKEY_BLUETOOTH_BATTERY: DEVPROPKEY = DEVPROPKEY {
@@ -111,9 +111,8 @@ pub fn instance_ids(enumerator: &str) -> Result<Vec<String>> {
 fn locate(instance_id: &str) -> Option<u32> {
     let id = wide(instance_id);
     let mut dev_inst: u32 = 0;
-    let cr = unsafe {
-        CM_Locate_DevNodeW(&mut dev_inst, PCWSTR(id.as_ptr()), CM_LOCATE_DEVNODE_NORMAL)
-    };
+    let cr =
+        unsafe { CM_Locate_DevNodeW(&mut dev_inst, PCWSTR(id.as_ptr()), CM_LOCATE_DEVNODE_NORMAL) };
     (cr == CR_SUCCESS).then_some(dev_inst)
 }
 
@@ -145,8 +144,10 @@ fn prop_u8(dev_inst: u32, key: &DEVPROPKEY) -> Option<u8> {
 fn prop_string(dev_inst: u32, key: &DEVPROPKEY) -> Option<String> {
     let b = raw_property(dev_inst, key)?;
     let u: Vec<u16> = b
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
         .take_while(|&c| c != 0)
         .collect();
     Some(String::from_utf16_lossy(&u))
