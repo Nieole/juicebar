@@ -13,16 +13,25 @@ use crate::config::known_devices::{KNOWN_DEVICES, is_present};
 use crate::endpoints::EndpointKind;
 use crate::hid::HidInfo;
 
+/// 一条 Endpoint 的块名那一行，缩进两格。
+///
+/// 单独抽出来是因为它有两个写处：[`endpoint_block`] 那几行真块，以及身份表里没有身份时
+/// 那个只剩块名的占位。手抄第二遍就是给"块该长什么样只有一处写法"开一个口子——而那条
+/// 规矩正是 [`blank_endpoint_block`] 的文档立下来的。
+fn block_header(kind: EndpointKind) -> String {
+    format!("  [device.{}]\n", kind.config_key())
+}
+
 /// 一条 Endpoint 的配置块，缩进两格跟在它的 `[[device]]` 下面。
 pub(super) fn endpoint_block(kind: EndpointKind, endpoint: &HidEndpoint) -> String {
     format!(
-        "  [device.{}]\n  \
+        "{}  \
          vid = 0x{:04X}\n  \
          pid = 0x{:04X}\n  \
          usage_page = 0x{:04X}\n  \
          usage = 0x{:04X}\n  \
          report_id = {}\n",
-        kind.config_key(),
+        block_header(kind),
         endpoint.vid,
         endpoint.pid,
         endpoint.usage_page,
@@ -71,13 +80,14 @@ pub fn draft(collections: &[HidInfo]) -> String {
         if explain {
             out.push_str(OPTIONAL_LOW_BATTERY);
         }
+        // **三条 Endpoint 都从这一趟出来**，包括身份表里根本没有身份的 Ble：它以前是一段
+        // 硬写的常量，措辞和排布与另两条各说各话。
         for kind in EndpointKind::PRIORITY {
-            // Ble 在草稿里是一段硬写的注释（地址猜不出来，见 Q50），不从这张表出。
-            let Some(identity) = known.identity(kind) else {
-                continue;
-            };
+            let identity = known.identity(kind);
+            let present = identity.filter(|identity| is_present(identity, collections));
             out.push('\n');
-            if is_present(identity, collections) {
+            // 有身份、而且此刻在场，才写成真块；其余一律是注释掉的占位（Ble 恒走后者）。
+            if let Some(identity) = present {
                 out.push_str(&endpoint_block(kind, identity));
                 // `address` 是 Dongle24G 那张表里的一个可选键，所以它只跟在这一块后面
                 // （TOML 里空行不结束一张表，取消注释后它落在上面那个块里）。
@@ -93,7 +103,6 @@ pub fn draft(collections: &[HidInfo]) -> String {
                 ));
             }
         }
-        out.push_str(BLE_PLACEHOLDER);
     }
     if !wrote_a_device {
         out.push_str(NOTHING_RECOGNISED);
@@ -101,24 +110,6 @@ pub fn draft(collections: &[HidInfo]) -> String {
     out.push_str(&unrecognised_section(collections));
     out
 }
-
-/// Ble 那条 Endpoint 在草稿里的位置。
-///
-/// 它和上面两条不一样，是**硬写的一段注释**，不走 [`EndpointKind`]：那个枚举眼下只有
-/// `Wired` 和 `Dongle24G` 两个变体，Ble 还没落地。等它进了枚举，这一段就该退掉，改由上面
-/// 那个循环连同 `PRIORITY` 一起产出——那时它的"在场"也才真的问得出来。
-///
-/// 在此之前也不能干脆不写：Ble 是三条 Endpoint 之一，一声不吭地不提它，用户就不知道
-/// 自己少了一条。而地址是真的猜不出来——同一只鼠标的 BLE 射频是另一颗芯片，VID 都不同
-/// （dongle `0x391D` / BLE `0x3554`），没有任何字段能把两者缝起来。
-const BLE_PLACEHOLDER: &str = "
-  # 蓝牙那条 Endpoint 要一个 MAC，程序猜不出来：同一只设备的 BLE 射频是另一颗芯片，
-  # 连 VID 都和 dongle 不同，几套身份之间没有能自动缝合的字段。跑 `juicebar scan`，
-  # 看「蓝牙（BLE）电量」那一段，把地址抄到下面来。
-  # 没有蓝牙、或者不想用它，这几行删掉即可。
-  # [device.bluetooth]
-  # address = \"把 scan 里那串 12 位十六进制抄过来\"
-";
 
 /// 草稿开头那段话：这份文件是什么、注释掉的块意味着什么、接下来该做什么。
 ///
@@ -217,8 +208,9 @@ const OPTIONAL_ADDRESS: &str = "\
 const NOTHING_RECOGNISED: &str = "\
 \n# 本机一台认得出来的设备都没扫到，所以这份草稿里没有任何 [[device]]，它还派不上用场。
 #
-# 可能是设备或接收器没插，也可能它根本不在程序认得的那张表里（表在 src/config.rs 的
-# KNOWN_DEVICES）。跑 `juicebar scan` 看本机到底有哪些 HID collection。
+# 可能是设备或接收器没插，也可能它根本不在程序认得的那张表里（表在
+# src/config/known_devices.rs 的 KNOWN_DEVICES）。跑 `juicebar scan` 看本机到底有哪些
+# HID collection。
 #
 # 插好之后**把这个文件删掉**再跑一次 `juicebar config-refresh`，程序会重新扫一遍、生成
 # 一份带 Device 的新草稿。（不是跑 config-refresh 就够：它只往已有的 [[device]] 里补空着
@@ -343,40 +335,102 @@ fn comment_out(text: &str, prefix: &str) -> String {
     out
 }
 
-/// 扫不到的那条 Endpoint 在草稿里的样子：一段说明，加上逐行注释掉的真块。
+/// 一条补不上的 Endpoint 在草稿里要说的那几句话。
 ///
-/// **占位的内容就是 [`endpoint_block`] 的输出逐行加了 `#`**，所以它和程序自己会写的
-/// 那几行之间不会漂：用户把 `#` 去掉，得到的正是真块。
+/// 四样各自具名而不是一个位置元组：每条 `match` 臂都要把它们从头写一遍，元组读到第三个
+/// 逗号才知道那句是 `remedy`。
+struct Unfillable {
+    /// 开头那句里"为什么补不上"的那半句。
+    why: String,
+    /// 下面那几行是什么、可不可信。
+    provenance: String,
+    /// 弄好之后它怎么才能变成一个真块。
+    remedy: String,
+    /// 注释掉之前的那几行 TOML。**逐种类自己交**，不在外面按"有没有身份"再分一次岔：
+    /// 那会是第二个沿同一根轴的开关，而两个开关咬合靠的是一条谁都没写下来的不变式
+    /// ——将来某个既有身份、又有键要人自己抄的变体会被静默丢掉一半。
+    block: String,
+}
+
+/// 补不上的那条 Endpoint 在草稿里的样子：一段说明，加上逐行注释掉的那几行 TOML。
+///
+/// **三条 Endpoint 走的是同一套**——同样的开头、同样的"怎么让它出现"、同样的 `  # ` 缩进。
+/// 逐种类不同的东西全由下面那个穷举 `match` 交出来；身份表里没有身份的那一种走的也是
+/// 这里，不再是另写一段常量。
+///
+/// **但正文必然不同，那不是不一致**：两条 HID 的占位里是一组实测记下来的
+/// VID/PID/usage，而 Ble 没有这样一组身份可写——BLE 射频是另一颗芯片，与 dongle 之间
+/// 没有能缝合的字段（`KnownDevice::identity` 对它恒为 `None` 就是这句话的类型写法）。
+/// 给它凑一组看着像真的身份，正是这一片代码存在的目的所要拒绝的那件事。
 ///
 /// 为什么非要写这一段而不是干脆省掉：一条 Endpoint 悄悄缺席，用户既不知道自己少了什么，
 /// 也不知道该做什么才能补上——而缺的偏偏常常是 Wired，也就是设备插着线充电、最需要看见
 /// 电量的那一刻。
 fn commented_placeholder(
     kind: EndpointKind,
-    endpoint: &HidEndpoint,
+    identity: Option<&HidEndpoint>,
     hint: &str,
     caveat: &str,
 ) -> String {
     let key = kind.config_key();
+    // **这个 `match` 不写通配分支，是本函数存在的一半理由**：加第四种 Endpoint 时编译器
+    // 会把人指到这里，草稿于是不会静默少说一条。以前 Ble 那一段是个硬写的常量、根本不
+    // 经过这里，那正是这道守门缺的那一角。
+    let Unfillable {
+        why,
+        provenance,
+        remedy,
+        block,
+    } = match kind {
+        // 两条 HID 的身份实测记在表里，补不上只是因为**此刻扫不到**——插好之后
+        // `config-refresh` 就能把它填成真块。
+        EndpointKind::Wired | EndpointKind::Dongle24G => Unfillable {
+            why: format!("{kind} 现在扫不到"),
+            // 下面那组身份可不可信，要么说"实测记下来的"，要么把没实测的那一项点出来——
+            // 两句话不能同时出现，否则用户读到的是自相矛盾。
+            provenance: if caveat.is_empty() {
+                "下面那组身份是实测记下来的。".to_string()
+            } else {
+                caveat.to_string()
+            },
+            remedy: format!(
+                "弄好之后跑 `juicebar config-refresh`，程序会扫一遍本机、把真正的\n\
+                 [device.{key}] 写进来（只填空着的块，你写过的值和注释一概不动）。到那时这几行\n\
+                 就只是历史记录了，留着或删掉都行。"
+            ),
+            // 正文是 [`endpoint_block`] 的输出，用户把 `#` 去掉得到的正是程序自己会写的
+            // 那几行，两者之间不会漂。身份表对这两种恒有身份；真落到 `None`，块里退成一个
+            // 光块名，而不是无声无息地少掉一整段。
+            block: identity.map_or_else(|| block_header(kind), |id| endpoint_block(kind, id)),
+        },
+        // Ble 不是"这次扫不到"，是**程序永远不该猜**：身份表里没有 BLE 身份，因为 BLE
+        // 射频是另一颗芯片，与 dongle 之间没有能缝合的字段。
+        //
+        // 这里也**不给草稿加一次 BLE 扫描**：扫出来的地址没有能归属到某一台 Device 的
+        // 字段，只能整份列出来，而那正是 `juicebar scan` 已经在印的东西。
+        EndpointKind::Ble => Unfillable {
+            why: format!("{kind} 要一个蓝牙地址，而程序猜不出来"),
+            provenance: "身份表里没有 BLE 身份，也猜不出来：BLE 射频是另一颗芯片，\n\
+                         连 VID 都和 dongle 不同，几套身份之间没有能自动缝合的字段。"
+                .to_string(),
+            remedy: "`juicebar config-refresh` 也补不上它：跑 `juicebar scan`，看「蓝牙（BLE）\n\
+                     电量」那一段，把地址抄到下面来。没有蓝牙、或者不想用它，这几行删掉即可。"
+                .to_string(),
+            // 它配的不是一组 VID/PID，是一个地址，所以块里只有块名和那一个等人抄的键。
+            block: format!(
+                "{}  address = \"把 scan 里那串 12 位十六进制抄过来\"\n",
+                block_header(kind)
+            ),
+        },
+    };
+
     let mut out = format!(
-        "  # {kind} 现在扫不到，所以下面这一块是**注释**，不是配置。\n\
+        "  # {why}，所以下面这一块是**注释**，不是配置。\n\
          \x20 # 怎么让它出现：{hint}\n"
     );
-    // 下面那组身份可不可信，要么说"实测记下来的"，要么把没实测的那一项点出来——
-    // 两句话不能同时出现，否则用户读到的是自相矛盾。
-    let provenance = if caveat.is_empty() {
-        "下面那组身份是实测记下来的。"
-    } else {
-        caveat
-    };
-    for line in provenance.lines() {
+    for line in provenance.lines().chain(remedy.lines()) {
         out.push_str(&format!("  # {line}\n"));
     }
-    out.push_str(&format!(
-        "  # 弄好之后跑 `juicebar config-refresh`，程序会扫一遍本机、把真正的\n\
-         \x20 # [device.{key}] 写进来（只填空着的块，你写过的值和注释一概不动）。到那时这几行\n\
-         \x20 # 就只是历史记录了，留着或删掉都行。\n"
-    ));
-    out.push_str(&comment_out(&endpoint_block(kind, endpoint), "  # "));
+    out.push_str(&comment_out(&block, "  # "));
     out
 }
