@@ -1,6 +1,6 @@
 //! `config.toml` 的读取。
 //!
-//! 结构里只有**当前用得上**的字段。TOML 里其余的键（`[general]`、`level_source`、
+//! 结构里只有**当前用得上**的字段。TOML 里其余的键（`[general]`、
 //! `[device.bluetooth]` …）会被静默忽略，等要用它们的那一步再加进来——这样用户的
 //! 配置不必随实现进度反复改写，样例配置也可以先于代码写全。
 //!
@@ -11,6 +11,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+
+use crate::sources::level::LevelSource;
 
 /// 一份配置文件的全部内容。
 #[derive(Debug, Clone, Deserialize)]
@@ -33,6 +35,18 @@ pub struct Device {
     /// 那一行报"尚未实现"，而不是让整份配置读不动。认得哪些名字见
     /// `sources::driver_for`。
     pub driver: String,
+    /// 这台设备的电量数值取自哪里，缺省 `"auto"`。
+    ///
+    /// **每个 Device 一项，没有全局默认**（spec「电量数值」）：想切成 `"reported"` 的
+    /// 理由是"某型号固件 level 不准"，那本质上是设备相关的，不该有一个能连带影响其它
+    /// 设备的全局值。
+    ///
+    /// 认不出的值**当场报错**，与上面的 `driver` 相反：那一项留到取数时才报，是因为
+    /// 配置里可以出现本次编译还没实现的驱动名；而这一项只有两个合法值，静默按缺省走
+    /// 意味着用户以为自己钉住了数值来源、其实没有——而他要钉住它的理由，恰恰是"这台
+    /// 设备的另一个来源不可信"。
+    #[serde(default)]
+    pub level_source: LevelSource,
     /// Device 通过 USB 线直连时出现的 Endpoint。
     ///
     /// 它有**独立于 Dongle24G 的另一组 VID/PID**，插线时作为一个额外的设备被枚举

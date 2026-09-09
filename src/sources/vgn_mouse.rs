@@ -2,6 +2,7 @@
 
 use anyhow::{Result, anyhow, bail};
 
+use crate::sources::level::require_plausible;
 use crate::sources::{Driver, Reading, ReportKind, Transport, require_frame_len};
 
 /// VGN 鼠标这一族的驱动。配置里写 `driver = "vgn_mouse"` 取到的就是它。
@@ -39,7 +40,7 @@ const CMD_BATTERY_LEVEL: u8 = 4;
 pub fn read_battery(transport: &dyn Transport) -> Result<Reading> {
     let request = battery_request(transport.report_id());
     let response = transport.exchange(&request)?;
-    parse_battery(&response)
+    parse_battery(&response, transport.report_id())
 }
 
 /// 拼一帧 cmd 4：命令码在 `[0]`，不带参数所以中间全零，校验和落在末字节。
@@ -52,8 +53,23 @@ fn battery_request(report_id: u8) -> [u8; FRAME_LEN] {
 }
 
 /// 解析 cmd 4 的回包。
-fn parse_battery(frame: &[u8]) -> Result<Reading> {
+///
+/// 校验的顺序是**先问这一帧完不完整，再问它是不是本次的应答**：一帧被写坏的回包里，
+/// `[0]` 那个 cmd 回显本身就不可信，拿它报错会把人指向错误的方向。
+fn parse_battery(frame: &[u8], report_id: u8) -> Result<Reading> {
     require_frame_len(frame, FRAME_LEN)?;
+    // 回包也带 CRC，算法与请求相同——`docs/protocol.md` 第 1 节对 `0xAF→0x9E`、
+    // `0xB3→0x9A`、cmd 3 的 `0xA4→0xA9` 都逐帧验算过。协议既然留了这个字节，
+    // "帧结构变了"就有了一个不依赖任何字段语义的判据。
+    let frame: &[u8; FRAME_LEN] = frame[..FRAME_LEN].try_into().expect("上面刚校验过帧长");
+    let expected = checksum(frame, report_id);
+    if frame[FRAME_LEN - 1] != expected {
+        bail!(
+            "读取异常：回包的校验和是 {:#04X}，按 0x55 − sum − report_id 应当是 {expected:#04X} \
+             —— 这一帧不完整",
+            frame[FRAME_LEN - 1]
+        );
+    }
     // dongle 侧交回来的可能是别的命令留下的应答，不校验 cmd 回显就会把它当成电量。
     if frame[0] != CMD_BATTERY_LEVEL {
         bail!(
@@ -61,12 +77,16 @@ fn parse_battery(frame: &[u8]) -> Result<Reading> {
             frame[0]
         );
     }
-    Ok(Reading {
+    let reading = Reading {
         reported_level: frame[5],
         // 鼠标这一位已校准：实测插线时 `[6]` 由 `00` 翻为 `01`。
         charging: Some(frame[6] != 0),
         voltage_mv: Some(u16::from_be_bytes([frame[7], frame[8]])),
-    })
+    };
+    // 帧完整、cmd 回显也对，字段仍可能挪了位：那时上面每一步都过，而按老下标取出来
+    // 的数说不通。校验和与 cmd 回显都认不出这件事，只有值域认得出。
+    require_plausible(&reading)?;
+    Ok(reading)
 }
 
 /// 把校验字节写进帧末字节。

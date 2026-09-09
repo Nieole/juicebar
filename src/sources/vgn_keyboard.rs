@@ -6,6 +6,7 @@
 
 use anyhow::{Result, bail};
 
+use crate::sources::level::require_plausible;
 use crate::sources::{Driver, Reading, ReportKind, Transport, require_frame_len};
 
 /// VGN 键盘这一族的驱动。配置里写 `driver = "vgn_keyboard"` 取到的就是它。
@@ -89,7 +90,7 @@ fn parse_dongle_data(frame: &[u8]) -> Result<Option<Reading>> {
             frame[0]
         );
     }
-    Ok(Some(Reading {
+    let reading = Reading {
         reported_level: frame[1],
         // 充电位在 `[9]`，但**至今没有实测样本**：实测期间电池一直满电，插线只亮了很短
         // 的红灯就转绿，从没抓到过 `!= 0`（`docs/protocol.md` 第 7 节仍把它挂在待实测
@@ -98,7 +99,11 @@ fn parse_dongle_data(frame: &[u8]) -> Result<Option<Reading>> {
         charging: None,
         // 键盘的回包里没有电压。见 `Reading::voltage_mv` 那条文档注释。
         voltage_mv: None,
-    }))
+    };
+    // 就绪标志是这条通路上唯一的**结构性**判据（回包既没有 cmd 回显也没有校验和），
+    // 所以值域这一道不是重复劳动：一帧残留只要 `[0]` 恰好是 `0x01`，就只剩它了。
+    require_plausible(&reading)?;
+    Ok(Some(reading))
 }
 
 /// 拼一帧命令：命令字节原样在前，校验字节紧跟其后，再补零到 [`FRAME_LEN`]。

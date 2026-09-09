@@ -8,15 +8,34 @@
 
 **Blocked by:** 01, 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 电压查表与档间插值实现完整，含表顶 clamp（充电中 99 / 否则 100）与
+- [x] 电压查表与档间插值实现完整，含表顶 clamp（充电中 99 / 否则 100）与
       `level == 0 || level == 15` 时加一的怪癖
-- [ ] `level_source = "auto"` 时，电压 > 4110 mV 用 Reported Level，其余区间用 Derived Level
-- [ ] `level_source = "reported"` 时一律用 Reported Level
-- [ ] 回归用例：4155 mV + 固件 95 在 auto 下产出 95，不是 100
-- [ ] 键盘 `level == 0` 产出 Unknown，绝不映射成 100
-- [ ] 合理性校验：level ∈ 0..=100、voltage ∈ 3050..=4350 mV、cmd 回显一致、校验和一致
-- [ ] 回归用例：4235 mV（充电中实测值）必须通过校验，不被判为帧错乱
-- [ ] 校验不过时 `status` 显示"读取异常"，不显示数字
-- [ ] 不实现 HUB 那套变化率限幅／惰性保持
+- [x] `level_source = "auto"` 时，电压 > 4110 mV 用 Reported Level，其余区间用 Derived Level
+- [x] `level_source = "reported"` 时一律用 Reported Level
+- [x] 回归用例：4155 mV + 固件 95 在 auto 下产出 95，不是 100
+- [x] 键盘 `level == 0` 产出 Unknown，绝不映射成 100
+- [x] 合理性校验：level ∈ 0..=100、voltage ∈ 3050..=4350 mV、cmd 回显一致、校验和一致
+      —— 鼠标那条路四项齐全；**键盘那条路只可能有两项**：`0xF7` 的回包里既没有 cmd 回显也没有
+      校验和（既存 **Q9** 记的正是这件事），挡"这不是本次应答"的是那个严格的就绪标志
+- [x] 回归用例：4235 mV（充电中实测值）必须通过校验，不被判为帧错乱
+- [x] 校验不过时 `status` 显示"读取异常"，不显示数字
+      —— 数字确实一个都不显示；"读取异常"目前落在那一行的**内层原因**里，外层前缀仍是
+      "读不到 —— 全部 Endpoint 都没读到"。让整句改口需要先回答"几条 Endpoint 各失败得
+      不一样时那一行说什么"，而那段代码此刻正被票 05 改着，所以记进 parking lot **Q13**
+- [x] 不实现 HUB 那套变化率限幅／惰性保持
+
+## 落地补记
+
+- **键盘没有电压 → `auto` 退化成 Reported Level**：落成 `level_for` 里 `(Auto, None)`
+  那一条 match 臂，代码里没有任何一处提到"键盘"（parking lot **Q11**）。
+- **表顶 clamp 的 `> 4110` 那一段经 `level_for` 走不到**（`auto` 在那一段已改用 Reported、
+  `reported` 不查表）；走得到的只有 `== 4110` 这一个电压——4110 mV 且充电中就会显示
+  「99%（Derived Level）」。仍按票面把 `voltageToLevel` 实现完整并直接对它断言，理由见 **Q12**
+  （那条记录最初把这件事写错成"两种取法都到不了"，已改）。
+- **撞上原文两个洞**，已补进 `docs/protocol.md`「`voltageToLevel` 完整算法」：
+  `voltage == 4110` 在原文里算出 NaN（已并进 clamp）；那条"加一"怪癖**挡不住 0%**——它比的
+  是取整**之前**的浮点数，3051 mV 插值得 0.0135、取整回到 0。所以 Derived Level 可以是 0，
+  而且那是个测出来的真读数：**"0 当 Unknown"只管固件那个字段**。
+- `docs/protocol.md` 第 7 节那条"查表对、固件错"已按落地后的口径改掉（parking lot Q4 点名）。

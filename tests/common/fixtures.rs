@@ -46,12 +46,31 @@ pub const MOUSE_CHARGING: [u8; FRAME_LEN] = [
 /// 文档里这一帧的可见部分记到 `03 00 00 00 01 00 35 D4 97 …`，末字节另有明记：
 /// 「cmd 3 的回包同样验通（`0xA4→0xA9`）」。
 ///
-/// **末字节必须是真的 `0xA9`。**票 03 会加上"校验和一致"的校验；那时若这里是编的，
-/// `rejects_a_response_left_over_from_another_command` 会因为校验和不过而变绿，
-/// 而不是因为 cmd 回显不对——它宣称守的那件事就没人守了。
+/// **末字节必须是真的 `0xA9`。**票 03 已经加上"校验和一致"的校验；若这里是编的，
+/// `rejects_a_response_left_over_from_another_command` 就会因为校验和不过而变绿，
+/// 而不是因为 cmd 回显不对——它宣称守的那件事就没人守了。那条用例因此多了一句
+/// `!contains("校验和")`，把"倒在哪一步"也钉死。
 pub const MOUSE_CMD3_RESPONSE: [u8; FRAME_LEN] = [
     0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x35, 0xD4, 0x97, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA9,
 ];
+
+/// 拿实测的好帧改掉 level 与电压两处，再用驱动自己的 `apply_checksum` 补上校验和。
+///
+/// **这是本文件唯一一处不是纯实测字节的东西，理由写在这里。**实测帧的电压全都在
+/// 4110 mV 以上（4154–4235），因为我们从没测过一只半空的鼠标——查表那一整段行为在纯
+/// 实测夹具下根本走不到。所以这里造帧，但**只改这两个字段**：其余字节仍是实测那一帧
+/// 的，校验和由**被测代码自己**算，于是造出来的帧在结构上无可指摘，只有那两个数是
+/// 指定的——"固件漂移"正是这个形状。
+///
+/// 要一帧**被写坏**的回包则相反：翻掉末字节、别补校验和，那种用不上这个函数。
+pub fn mouse_frame_with(reported_level: u8, voltage_mv: u16) -> [u8; FRAME_LEN] {
+    let mut frame = MOUSE_RESTING_FULL;
+    frame[5] = reported_level;
+    frame[7..9].copy_from_slice(&voltage_mv.to_be_bytes());
+    juicebar::sources::vgn_mouse::apply_checksum(&mut frame, MOUSE_REPORT_ID)
+        .expect("整帧长度就是驱动要的那一个");
+    frame
+}
 
 /// 键盘那条通路的 Report ID。feature 报文不带编号，实测是 0。
 pub const KEYBOARD_REPORT_ID: u8 = 0;

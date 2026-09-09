@@ -10,9 +10,10 @@
 mod common;
 
 use common::fixtures::{
-    MOUSE_BATTERY_REQUEST, MOUSE_CHARGING, MOUSE_REPORT_ID, MOUSE_RESTING_FULL,
+    KEYBOARD_REPORT_ID, KEYBOARD_RESTING_FULL, MOUSE_BATTERY_REQUEST, MOUSE_CHARGING,
+    MOUSE_REPORT_ID, MOUSE_RESTING_FULL, mouse_frame_with,
 };
-use common::{FakeEndpoints, mouse_with_both_endpoints};
+use common::{FakeEndpoints, keyboard_with_dongle_endpoint, mouse_with_both_endpoints};
 use juicebar::cli::status;
 use juicebar::endpoints::EndpointKind;
 
@@ -199,7 +200,7 @@ fn the_status_line_says_which_endpoint_it_came_from() {
         MOUSE_REPORT_ID,
         [(EndpointKind::Wired, vec![MOUSE_CHARGING.to_vec()])],
     );
-    let line = status::render(&status::read(&device, &wired).unwrap());
+    let line = render(&device, &wired);
     assert!(line.contains("Wired"), "该标出来源 Endpoint：{line}");
     assert!(line.contains("95%"), "电量照常显示：{line}");
     assert!(line.contains("充电中"), "插着线读到的正是充电中：{line}");
@@ -208,7 +209,101 @@ fn the_status_line_says_which_endpoint_it_came_from() {
         MOUSE_REPORT_ID,
         [(EndpointKind::Dongle24G, vec![MOUSE_RESTING_FULL.to_vec()])],
     );
-    let line = status::render(&status::read(&device, &dongle).unwrap());
+    let line = render(&device, &dongle);
     assert!(line.contains("Dongle24G"), "该标出来源 Endpoint：{line}");
     assert!(!line.contains("Wired"), "这一行不是从 Wired 读的：{line}");
+}
+
+/// 那一行要说清这个百分比是两个来源里的哪一个。
+///
+/// 项目里有两个来源不同的百分比（Reported Level 与 Derived Level），它们可能不一致，
+/// 混用过一次就已经导致过一个错误结论。哪一个都不标出来，看的人只能猜。
+///
+/// 实测帧的电压全都在 4110 mV 以上（4154–4235），所以查表那一段在纯实测夹具里走不到
+/// ——半空那一帧的造法和理由见 `fixtures::mouse_frame_with`。
+#[test]
+fn the_status_line_says_which_of_the_two_percentages_it_is() {
+    let device = mouse_with_both_endpoints();
+
+    // 4235 mV 越过查表的表顶，改用固件自报的 95。
+    let above_the_table = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [(EndpointKind::Wired, vec![MOUSE_CHARGING.to_vec()])],
+    );
+    let line = render(&device, &above_the_table);
+    assert!(
+        line.contains("95%") && line.contains("Reported Level"),
+        "表顶以上要标成 Reported Level：{line}"
+    );
+
+    // 3900 mV 落在查表可用的区间，用查表算出的 53，而不是固件报的 20。
+    let inside_the_table = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [(
+            EndpointKind::Wired,
+            vec![mouse_frame_with(20, 3900).to_vec()],
+        )],
+    );
+    let line = render(&device, &inside_the_table);
+    assert!(
+        line.contains("53%") && line.contains("Derived Level"),
+        "表顶以下要标成 Derived Level：{line}"
+    );
+    assert!(!line.contains("20%"), "这一段不该采信固件自报值：{line}");
+}
+
+/// **键盘电量读到 0 时那一行说 Unknown，绝不说 100%。**
+///
+/// 这是本票的另一条招牌回归，而且它端到端：配置里键盘没写 `level_source`（缺省 auto）、
+/// 键盘的回包里没有电压所以 auto 只剩固件自报值、而那个值是 0 —— 于是 Unknown。
+/// 上位机在这里显示 100%（`level == 0 ? 100 : level`），偏偏发生在最该提醒充电的时刻。
+/// **Unknown 也不是 0%**：那同样是个采信不了的数字（`CONTEXT.md`）。
+#[test]
+fn the_status_line_says_unknown_instead_of_calling_a_zero_full() {
+    let mut empty = KEYBOARD_RESTING_FULL;
+    empty[1] = 0;
+    let endpoints = FakeEndpoints::new(
+        KEYBOARD_REPORT_ID,
+        [(EndpointKind::Dongle24G, vec![empty.to_vec()])],
+    );
+
+    let line = render(&keyboard_with_dongle_endpoint(), &endpoints);
+
+    assert!(line.contains("Unknown"), "读不出来就说读不出来：{line}");
+    assert!(!line.contains("100"), "绝不把 0 说成满电：{line}");
+    assert!(!line.contains("0%"), "Unknown 也不等于 0%：{line}");
+}
+
+/// 合理性校验不过时，那一行说"读取异常"，**一个百分比都不给**。
+///
+/// 帧完整、cmd 回显也对，只是里头的电压物理上不可能——固件漂移就是这个形状。这时
+/// 拿那串字节按老下标算出来的任何数字都是编的，所以 `status` 交出去的是原因而不是数。
+///
+/// **守的是 `read()` 交出来的那句原因，不是最终印在屏幕上那一行**：整行由 `run()` 拼
+/// （`读不到 —— {原因}`），而 `run()` 要真去枚举本机 HID，测不到。差的这一截记在
+/// parking lot Q13。
+#[test]
+fn an_implausible_frame_reads_as_an_anomaly_rather_than_a_number() {
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [(
+            EndpointKind::Wired,
+            vec![mouse_frame_with(100, 2000).to_vec()],
+        )],
+    );
+
+    let line = status::read(&mouse_with_both_endpoints(), &endpoints)
+        .unwrap_err()
+        .to_string();
+
+    assert!(line.contains("读取异常"), "要说成读取异常：{line}");
+    assert!(!line.contains('%'), "一个百分比都不该出现：{line}");
+}
+
+/// 取一次数并印成一行。
+fn render(device: &juicebar::config::Device, endpoints: &FakeEndpoints) -> String {
+    status::render(
+        &status::read(device, endpoints).unwrap(),
+        device.level_source,
+    )
 }
