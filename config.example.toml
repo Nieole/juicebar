@@ -1,0 +1,69 @@
+# juicebar 配置样例
+#
+# 首次运行时程序会扫描本机、生成一份带注释的草稿，通常不需要从这份样例抄。
+# 这里保留一份是为了说明每一项的含义。
+
+[general]
+# 托盘图标显示哪个设备。
+#   "lowest"      —— 当前电量最低的那个（默认，也是推荐值）
+#   "<设备 id>"   —— 钉死某个具体设备，取下面 [[device]] 的 id
+primary = "lowest"
+
+# 轮询间隔（秒）。两条来源成本差着几个数量级，所以分开配：
+#   2.4G 要往设备发无线包，省着来；蓝牙是纯本地属性读取，几乎免费。
+poll_interval_24g = 60
+poll_interval_bluetooth = 10
+
+# 低电量阈值（百分比），图标数字变红。
+low_battery = 20
+
+# 数据陈旧阈值（秒）。蓝牙侧读到的是 Windows 缓存，可能过期几个月。
+stale_after = 3600          # 超过标灰
+very_stale_after = 86400    # 超过只显示日期，不显示百分比
+
+# 列表里是否显示未在 [[device]] 中登记的 BLE 设备。
+show_unknown_ble = false
+
+# 检测到厂商上位机在运行时暂停 2.4G 轮询，避免抢同一条 HID 通道。
+pause_when_vendor_hub_running = true
+vendor_hub_processes = ["VGN VHUB.exe"]
+
+
+# ---------------------------------------------------------------
+# 设备。每个物理设备一条，把它的 2.4G 身份和蓝牙身份合并在一起。
+#
+# 为什么必须手写：两套身份之间没有任何字段能自动缝合。鼠标的 dongle
+# 是 VID 0x391D，而它自己的 BLE 射频是 VID 0x3554——两颗不同的芯片，
+# 各有各的 VID，也没有共同的序列号。跑 `juicebar scan` 看候选。
+# ---------------------------------------------------------------
+
+[[device]]
+id = "dragonfly3"
+name = "Dragonfly 3 Master+"
+driver = "vgn_mouse"              # 用哪个协议驱动，见 src/sources/
+
+  [device.wireless_24g]
+  vid = 0x391D
+  pid = 0x1A05
+  usage_page = 0xFF02             # 认 collection 用 usage 而不是 MI_xx 路径，
+  usage = 0x0002                  # 后者在不同机器上可能不一样
+  report_id = 8
+
+  [device.bluetooth]
+  address = "e452430072a9"        # MAC 是唯一可靠的实例标识
+
+
+[[device]]
+id = "neon75"
+name = "VGN Neon75"
+driver = "vgn_keyboard"
+
+  [device.wireless_24g]
+  vid = 0x3151
+  pid = 0x5038
+  usage_page = 0xFFFF             # 待实测：可能是 MI_02 (usage 0x0002)
+  usage = 0x0002                  # 也可能是 MI_01&Col05 (usage 0x0001)
+  report_id = 0
+
+  [device.bluetooth]
+  address = "f4ee2553b27e"

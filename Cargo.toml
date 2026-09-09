@@ -1,0 +1,33 @@
+[package]
+name = "juicebar"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+description = "把无线键鼠的电量常驻在 Windows 任务栏，不必打开厂商 hub"
+license = "MIT"
+
+[dependencies]
+
+# Windows 原生 API，这个项目的两条数据来源都落在它上面：
+#   Win32_Devices_HumanInterfaceDevice —— HidD_* / HidP_*，2.4G 私有协议靠它开 collection、收发报文
+#   Win32_Devices_DeviceAndDriverInstallation —— CM_Get_Device_ID_ListW / CM_Locate_DevNodeW /
+#       CM_Get_DevNode_PropertyW，枚举设备并读蓝牙电量属性。走 Config Manager 而不是 SetupAPI，
+#       是因为前者不用维护 HDEVINFO 句柄，且读 DEVPKEY 时普通用户权限就够（裸注册表的
+#       Properties 子键 ACL 只给 SYSTEM，读不到）
+#   Win32_Devices_Properties —— DEVPROPKEY / DEVPROPTYPE，上一条的入参类型
+#   Win32_Storage_FileSystem + Win32_System_IO + Win32_Security —— CreateFileW/ReadFile/WriteFile
+#       打开并读写 HID 设备句柄
+# 选 windows 而不是 windows-sys：HID 那一层要传 PHIDP_PREPARSED_DATA 这类不透明句柄并配对释放，
+# 有类型包装能少写一批 unsafe。
+windows = { version = "0.62.2", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_SystemInformation"] }
+
+# 子命令 scan / probe / run。derive 是为了让子命令定义和帮助文本住在一处。
+clap = { version = "4.6.6", features = ["derive"] }
+
+# 配置文件（设备清单、身份合并规则、主设备选择）。选 TOML 是因为配置要人手写、要带注释——
+# 首次运行自动生成的草稿里有大量「这一项我猜不出来，你自己填」的提示，JSON 放不下注释。
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.5"
+
+# 错误传播。这是个单人自用工具，调用方只有 main，不需要给错误分类型，anyhow 的上下文链就够。
+anyhow = "1.0.104"
