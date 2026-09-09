@@ -158,8 +158,11 @@ fn degrades_to_dongle_24g_within_the_same_cycle_when_wired_fails() {
 
 /// 在场的 Endpoint **全都**没读到，才算失联。
 ///
-/// 失联那句话要把每一条的原因都带上：只说"读不到"，用户没法知道是两条都哑了，
-/// 还是只有一条哑了而另一条压根没被试。
+/// 试过了都失败的那一种（这里两条都超时）：整句话以「没有可信的读数」开头，而且**只有
+/// 这一个标记**——外面再套一句"读不到"就是同一句话说两遍。
+///
+/// 那句标记要把每一条的原因都带上：只说标记，用户没法知道是两条都哑了，还是只有一条
+/// 哑了而另一条压根没被试。
 #[test]
 fn reports_a_lost_device_only_after_every_endpoint_failed() {
     let endpoints = FakeEndpoints::new(
@@ -175,6 +178,14 @@ fn reports_a_lost_device_only_after_every_endpoint_failed() {
         .to_string();
 
     assert!(
+        error.starts_with("没有可信的读数 —— "),
+        "试过了都失败，标记是中性的那一句：{error}"
+    );
+    assert!(
+        !error.contains("读不到"),
+        "一句标记换掉两个前缀，「读不到」是一条都不在场那一支的话：{error}"
+    );
+    assert!(
         error.contains("Wired"),
         "失联那句话要说清每一条的原因：{error}"
     );
@@ -184,6 +195,44 @@ fn reports_a_lost_device_only_after_every_endpoint_failed() {
     );
     assert_eq!(endpoints.transport(EndpointKind::Wired).sent().len(), 1);
     assert_eq!(endpoints.transport(EndpointKind::Dongle24G).sent().len(), 1);
+}
+
+/// 一条超时、一条回了坏帧时，那句标记**对两者都成立**。
+///
+/// 这是那句总结非中性不可的理由：同一行里两条 Endpoint 失败得不是一回事，任何点名一种
+/// 失败的说法都会对另一条撒谎——"都没读到"对回了坏帧的那条就是假话，我们读到了，只是
+/// 读到的东西不可信。卖掉的那点精确度由每条自己的原因紧跟其后补上。
+#[test]
+fn says_no_trustworthy_reading_when_a_timeout_and_an_anomaly_share_the_line() {
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [
+            // 回包脚本空着，相当于超时。
+            (EndpointKind::Wired, vec![]),
+            // 帧是完整的，只是里头的电压物理上不可能——读取异常。
+            (
+                EndpointKind::Dongle24G,
+                vec![mouse_frame_with(100, 2000).to_vec()],
+            ),
+        ],
+    );
+
+    let line = readout::read(&mouse_with_both_endpoints(), &endpoints, None, NOW)
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        line.starts_with("没有可信的读数 —— "),
+        "一句对两种失败都成立的标记：{line}"
+    );
+    assert!(
+        !line.contains("都没读到"),
+        "Dongle24G 答了话，这一行不许声称都没读到：{line}"
+    );
+    assert!(
+        line.contains("Wired") && line.contains("读取异常"),
+        "两条各自怎么失败的都还在：{line}"
+    );
 }
 
 /// 两条 HID 通路都不可用时（设备关机、收进抽屉了、接收器拔了），退到蓝牙缓存兜底。
@@ -306,6 +355,9 @@ fn reads_the_ble_cache_even_when_the_driver_is_not_implemented() {
 
 /// 一条都不在场是另一回事：多半是设备没插或者配置写错，而不是设备那头哑了。
 /// 这两种说法要用户做的事完全不同，所以话也不同。
+///
+/// 这一种的标记**照旧是"读不到"，一个字没改**（它被打磨过两轮）：一条通路都没枚举到，
+/// 我们确实什么都没读到，这句话在这里是实话。
 #[test]
 fn says_no_endpoint_is_present_rather_than_that_reading_failed() {
     let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []);
@@ -314,8 +366,41 @@ fn says_no_endpoint_is_present_rather_than_that_reading_failed() {
         .unwrap_err()
         .to_string();
 
+    assert!(
+        error.starts_with("读不到 —— "),
+        "一条都不在场那一支的标记照旧：{error}"
+    );
     assert!(error.contains("不在场"), "一条都没枚举到时的说法：{error}");
     assert!(error.contains("Wired") && error.contains("Dongle24G"));
+}
+
+/// 一条 Endpoint 都没配的那个 Device：话说到"你什么都没配"为止，**不去替它猜设备没插**。
+///
+/// 与上面一条同一个标记（"读不到"，我们确实什么都没读到），但后半句完全不同：一份空名单
+/// 摆给用户看只会让他去查一个不存在的连接问题，而这里该改的是配置。
+///
+/// 这一支在本票之前**一条用例都没有**：那句话原先靠失败枚举的 `Display` 补上前缀，整句
+/// 长什么样没有任何东西守着。
+#[test]
+fn says_the_device_configured_no_endpoint_at_all() {
+    let device = Config::parse(
+        r#"
+        [[device]]
+        id = "nothing_configured"
+        name = "一条都没配的那台"
+        driver = "vgn_mouse"
+        "#,
+    )
+    .expect("用例里的配置应当解析得动")
+    .devices
+    .remove(0);
+    let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []);
+
+    let error = readout::read(&device, &endpoints, None, NOW)
+        .unwrap_err()
+        .to_string();
+
+    assert_eq!(error, "读不到 —— 这个 Device 一条 Endpoint 都没配置");
 }
 
 /// 一条都不在场时印出去的那份"这个 Device 配了哪几条"的名单里，**蓝牙不能漏**。
@@ -356,7 +441,8 @@ fn a_lost_device_still_shows_its_last_known_value() {
     );
     let general = default_general();
 
-    // 手上一份历史值都没有时，仍然是"读不到"加上原因——那句诊断没有被历史值挤掉。
+    // 手上一份历史值都没有时，仍然是取数那一趟的原因（这里两条都超时，那句话是"没有可信
+    // 的读数"）——那句诊断没有被历史值挤掉。
     assert!(
         readout::read_or_last_known(
             &device,
@@ -517,9 +603,10 @@ fn falling_back_to_the_last_known_value_does_not_extend_its_life() {
 /// 帧完整、cmd 回显也对，只是里头的电压物理上不可能——固件漂移就是这个形状。这时
 /// 拿那串字节按老下标算出来的任何数字都是编的，所以 `status` 交出去的是原因而不是数。
 ///
-/// **守的是 `read()` 交出来的那句原因，不是最终印在屏幕上那一行**：整行由 `run()` 拼
-/// （`读不到 —— {原因}`），而 `run()` 要真去枚举本机 HID，测不到。差的这一截记在
-/// parking lot Q13。
+/// **守的就是最终印在屏幕上那一行**：`NoReading` 的 `Display` 印出去的正是 Device 名字
+/// 之后的全部内容，`run()` 那一头只剩一句 `println!`。所以"这一行不再声称都没读到"在这里
+/// 断言得到——parking lot Q13 记的"整行在 `run()` 里拼、而 `run()` 要真去枚举本机 HID，
+/// 测不到"那个障碍，已经被后来两张票分两次提掉了。
 #[test]
 fn an_implausible_frame_reads_as_an_anomaly_rather_than_a_number() {
     let endpoints = FakeEndpoints::new(
@@ -536,6 +623,10 @@ fn an_implausible_frame_reads_as_an_anomaly_rather_than_a_number() {
 
     assert!(line.contains("读取异常"), "要说成读取异常：{line}");
     assert!(!line.contains('%'), "一个百分比都不该出现：{line}");
+    assert!(
+        !line.contains("都没读到"),
+        "设备答了话，这一行不许声称都没读到：{line}"
+    );
 }
 
 // ---------------------------------------------------------------

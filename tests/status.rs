@@ -690,6 +690,11 @@ fn does_not_mark_a_ble_only_device_as_paused() {
 
 /// 攒一行：Device 名字之后那一段直接给字面量，因为这几条用例关心的是**标注**，
 /// 而不是那一段怎么排版（那在上面）。
+///
+/// **字面量是替身，措辞变了它们一条都不会红**——所以下面
+/// [`composes_a_lost_row_from_the_real_failure_sentence`] 那一条不用替身：它那一段来自真的
+/// `readout::read`。失联那句措辞改过一次、而这一区五处字面量悄悄跟着过期，就是那一条
+/// 存在的理由。
 fn row<'a>(
     device: &'a juicebar::config::Device,
     line: &str,
@@ -740,7 +745,7 @@ fn marks_a_pinned_device_that_could_not_be_read() {
     let keyboard = keyboard_with_dongle_endpoint();
     let rows = [
         row(&mouse, "62%（Reported Level）", Some(Level::Reported(62))),
-        row(&keyboard, "读不到 —— 全部 Endpoint 都没读到", None),
+        row(&keyboard, "没有可信的读数", None),
     ];
 
     let lines = primary_lines(&PrimaryRule::Pinned("neon75".to_string()), &rows);
@@ -761,7 +766,7 @@ fn marks_a_pinned_device_that_could_not_be_read() {
 #[test]
 fn adds_a_closing_note_when_no_device_got_the_marker() {
     let mouse = mouse_with_both_endpoints();
-    let rows = [row(&mouse, "读不到 —— 全部 Endpoint 都没读到", None)];
+    let rows = [row(&mouse, "没有可信的读数", None)];
 
     let lines = primary_lines(&PrimaryRule::Lowest, &rows);
 
@@ -802,8 +807,8 @@ fn holds_over_the_previous_choice_when_nothing_is_trustworthy_this_round() {
     let keyboard = keyboard_with_dongle_endpoint();
     // 两台都读不到 —— 一轮里没有一个新鲜且可信的读数。
     let rows = [
-        row(&mouse, "读不到 —— 全部 Endpoint 都没读到", None),
-        row(&keyboard, "读不到 —— 全部 Endpoint 都没读到", None),
+        row(&mouse, "没有可信的读数", None),
+        row(&keyboard, "没有可信的读数", None),
     ];
 
     let (lines, chosen) = status::primary_lines(&PrimaryRule::Lowest, &rows, Some("neon75"));
@@ -849,7 +854,7 @@ fn reports_which_device_it_chose_so_the_caller_can_remember_it() {
 #[test]
 fn chooses_nothing_when_there_is_no_candidate_and_no_previous() {
     let mouse = mouse_with_both_endpoints();
-    let rows = [row(&mouse, "读不到 —— 全部 Endpoint 都没读到", None)];
+    let rows = [row(&mouse, "没有可信的读数", None)];
 
     let (_, chosen) = status::primary_lines(&PrimaryRule::Lowest, &rows, None);
 
@@ -863,6 +868,44 @@ fn chooses_nothing_when_there_is_no_candidate_and_no_previous() {
 #[test]
 fn stays_silent_when_no_device_is_configured() {
     assert!(primary_lines(&PrimaryRule::Lowest, &[]).is_empty());
+}
+
+/// 读不出来的那一行**拼起来**读得通：Device 名字，然后**一句**标记加每条 Endpoint 自己的
+/// 原因。
+///
+/// 上面那几条给的是字面量，所以取数那句措辞变了它们一条都不会红——失联那句话改过一次、
+/// 这一区五处字面量悄悄跟着过期，就是这一条存在的理由：**它那一段来自真的 `readout::read`**，
+/// 措辞再动一次它就响。
+///
+/// 顺带守住"一句标记换掉两个前缀"这件事在**整行**上也成立：整行里那句标记只出现一次，
+/// 而"读不到"（那是一条都不在场那一支的话）一次都没有。
+#[test]
+fn composes_a_lost_row_from_the_real_failure_sentence() {
+    let keyboard = keyboard_with_dongle_endpoint();
+    // 在场却答不出：回包脚本空着，相当于超时。
+    let endpoints = FakeEndpoints::new(KEYBOARD_REPORT_ID, [(EndpointKind::Dongle24G, vec![])]);
+    let failure = readout::read(&keyboard, &endpoints, None, NOW)
+        .expect_err("脚本空着，这一趟读不出数来")
+        .to_string();
+
+    let lines = primary_lines(&PrimaryRule::Lowest, &[row(&keyboard, &failure, None)]);
+
+    assert!(
+        lines[0].starts_with("VGN Neon75  没有可信的读数 —— Dongle24G: "),
+        "名字之后紧跟一句标记，再紧跟那一条自己的原因：{:?}",
+        lines[0]
+    );
+    assert_eq!(
+        lines[0].matches("没有可信的读数").count(),
+        1,
+        "一句标记，不是两句：{:?}",
+        lines[0]
+    );
+    assert!(
+        !lines[0].contains("读不到"),
+        "试过了都失败那一支不该再出现「读不到」：{:?}",
+        lines[0]
+    );
 }
 
 /// [`status::primary_lines`] 印出来的那几行。
