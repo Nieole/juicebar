@@ -351,6 +351,90 @@ fn the_draft_leaves_an_absent_endpoint_as_a_commented_placeholder() {
     assert!(text.contains("config-refresh"), "要写明补全办法");
 }
 
+/// 补不上的那几条 Endpoint 的占位出自**同一套逻辑**：同样的开头、同样的"怎么让它出现"、
+/// 同样的 `  # ` 缩进，只有"为什么补不上"和注释掉的那几行逐种类不同。
+///
+/// 守的是"两条生成、一条手写"这件事不再回来：蓝牙那一段曾经是个硬写的常量，措辞和排布
+/// 与另两条各说各话——而用户读到的是同一份文件里三条本该长得一样的 Endpoint。
+#[test]
+fn the_draft_writes_the_endpoint_placeholders_from_one_shape() {
+    // 只插着 dongle：Dongle24G 是真块，Wired 与 Ble 都只能是占位。
+    let text = config::draft(&[mouse_dongle()]);
+
+    // 占位**始终**只是注释：两块都不许解析成真配置。`address` 那一行是本次改动第一次往
+    // 草稿里写，那个 `#` 一旦掉了，用户会拿到一台地址是"把 scan 里那串…"的蓝牙设备。
+    let config = Config::parse(&text).expect("草稿必须解析得动");
+    assert!(config.devices[0].wired.is_none(), "Wired 那一块只能是注释");
+    assert!(
+        config.devices[0].bluetooth.is_none(),
+        "Ble 那一块只能是注释 —— 那个地址是叫用户去抄的占位，不是一个真地址"
+    );
+
+    for key in ["wired", "bluetooth"] {
+        let lines = comment_run_with_block_name(&text, key);
+        assert!(
+            lines.iter().all(|line| line.starts_with("  # ")),
+            "占位整段都该是缩进两格的注释：{key} 那一段是 {lines:#?}"
+        );
+        let opening = lines.first().expect("占位不该是空的");
+        assert!(
+            opening.ends_with("所以下面这一块是**注释**，不是配置。"),
+            "开头那句要说清这一块是注释、不是配置：{key} 那一段开头是 {opening:?}"
+        );
+        let how = lines.get(1).expect("占位该有第二句");
+        assert!(
+            how.starts_with("  # 怎么让它出现："),
+            "紧接着要说清怎么才能让它出现：{key} 那一段第二句是 {how:?}"
+        );
+    }
+
+    // 一样的形状不等于一样的话：蓝牙那一条补不上的理由和另两条根本不同 —— 它不是
+    // "这次扫不到"，是程序永远不该猜，所以那一段要说清为什么，并指向去哪儿抄。
+    let ble = comment_run_with_block_name(&text, "bluetooth").join("\n");
+    assert!(
+        ble.contains("另一颗芯片"),
+        "蓝牙那一段要说清地址为什么猜不出来：{ble}"
+    );
+    assert!(ble.contains("juicebar scan"), "还要说清去哪儿抄：{ble}");
+
+    // 在场的那一条仍然是真块，所以上面那两段的形状不是"整份草稿都被注释掉了"。
+    assert!(
+        text.lines()
+            .any(|line| line.trim() == "[device.wireless_24g]"),
+        "在场的那一条该写成真块，不是占位"
+    );
+}
+
+/// 含注释掉的 `[device.<key>]` 块名的那一串**连续注释行**。名字说的就是它切的东西：
+/// 它不认识"占位"，只认识注释行连成的一段。
+///
+/// 按连续注释行切而不是按固定行数切，是为了让上面那条用例守的是**形状**，不是某一版
+/// 措辞占了几行。代价是一条隐式契约：草稿里每段占位前面**恰好有一个空行**（`draft` 的
+/// 循环每轮先 `push('\n')`）。那个空行要是没了，这里会把上一段注释（`OPTIONAL_LOW_BATTERY`
+/// 或 `OPTIONAL_ADDRESS`）一起吞进来，而断言会在一个看不出所以然的地方失败——所以下面
+/// 把这条契约**当场核一遍**，让它响在自己的名下。
+fn comment_run_with_block_name<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
+    let name = format!("# [device.{key}]");
+    let lines: Vec<&str> = text.lines().collect();
+    let commented = |line: &str| line.trim_start().starts_with('#');
+    let at = lines
+        .iter()
+        .position(|line| line.trim() == name)
+        .unwrap_or_else(|| panic!("草稿里没有注释掉的 [device.{key}] 块"));
+    let start = lines[..at]
+        .iter()
+        .rposition(|line| !commented(line))
+        .map_or(0, |index| index + 1);
+    assert!(
+        start > 0 && lines[start - 1].trim().is_empty(),
+        "这个夹具假定每段占位前面有一个空行，而 {key} 那一段前面是 {:?} —— \
+         假定破了就别让它静默切错，先来改这里",
+        lines.get(start.wrapping_sub(1))
+    );
+    let end = at + 1 + lines[at + 1..].iter().take_while(|l| commented(l)).count();
+    lines[start..end].to_vec()
+}
+
 /// 怎样才能让 Wired 出现是**逐台设备**不同的，草稿里那句提示因此不能是一句通用套话：
 /// 鼠标插上线就行，键盘还得拨机身上的模式开关。
 #[test]

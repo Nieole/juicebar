@@ -111,7 +111,8 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
             // 一直在守的"用户不该在不知情的情况下缺一整条 Endpoint"。
             let Some(identity) = known.identity(kind) else {
                 notes.push(format!(
-                    "{}：{kind} 空着，而它的地址程序猜不出来（BLE 射频是另一颗芯片，与 dongle                      之间没有能缝合的字段）。{}",
+                    "{}：{kind} 空着，而它的地址程序猜不出来（BLE 射频是另一颗芯片，\
+                     与 dongle 之间没有能缝合的字段）。{}",
                     device.id,
                     known.absent_hint(kind)
                 ));
