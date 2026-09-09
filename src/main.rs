@@ -28,6 +28,15 @@ enum Command {
         config: Option<PathBuf>,
     },
 
+    /// 没有配置就生成一份带注释的草稿；有配置就补上此刻在场、而配置里空着的 Endpoint 块。
+    ///
+    /// 只填空缺，用户写过的值和注释一概不动（见 docs/adr/0003）。
+    ConfigRefresh {
+        /// 配置文件路径，默认 %APPDATA%\juicebar\config.toml
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+
     /// 列出所有 HID collection 和带电量属性的 BLE 设备。纯只读。
     Scan {
         /// 连不含厂商自定义通道的设备也一起列出
@@ -89,6 +98,7 @@ enum Command {
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Status { config } => cli::status::run(config),
+        Command::ConfigRefresh { config } => cli::config_refresh::run(config),
         Command::Scan { all } => cli::scan::run(all),
         Command::Caps {
             vid,

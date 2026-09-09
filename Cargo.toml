@@ -29,5 +29,11 @@ clap = { version = "4.6.6", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.5"
 
+# 格式保留的 TOML 原地编辑，见 docs/adr/0003。程序要往用户手写的配置里补东西
+# （`config-refresh` 填空着的 Endpoint 块，以及票 11 的 `primary` 回写），而 serde 那套的
+# 序列化会把整份文件重新写一遍、洗掉全部注释——这份配置的价值有一半在注释里。
+# 只有**写**这一头用它；读仍然走 `toml` + serde，读要的是类型化的模型而不是文档树。
+toml_edit = "0.25.13"
+
 # 错误传播。这是个单人自用工具，调用方只有 main，不需要给错误分类型，anyhow 的上下文链就够。
 anyhow = "1.0.104"

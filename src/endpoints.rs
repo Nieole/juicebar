@@ -49,6 +49,19 @@ impl EndpointKind {
             Self::Dongle24G => device.dongle_24g.as_ref(),
         }
     }
+
+    /// 这条 Endpoint 在 TOML 里的块名，即 `[device.<这个>]`。
+    ///
+    /// 与 [`Self::config_in`] 是同一份知识的两面——一个按名字取出来，一个把名字写回去
+    /// （自举草稿和 `config-refresh` 要写），所以两者住在一起。`Display` 印的是
+    /// `CONTEXT.md` 的词（`Dongle24G`），给人看；这里印的是配置里的键
+    /// （`wireless_24g`），给文件看，两者不可混用。
+    pub fn config_key(self) -> &'static str {
+        match self {
+            Self::Wired => "wired",
+            Self::Dongle24G => "wireless_24g",
+        }
+    }
 }
 
 impl std::fmt::Display for EndpointKind {
