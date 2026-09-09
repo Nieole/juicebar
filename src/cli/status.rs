@@ -80,7 +80,18 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
         });
     }
 
-    for line in primary_lines(&config.general.primary, &rows) {
+    // "上次选出的是谁"从状态文件里取，这一趟选出的再记回去——票 09 的"全都不可信时保持
+    // 上次的选择"靠的就是这一条线（parking lot Q41）。`last_primary` 借的是 `last_known`，
+    // 而下面 `remember_primary` 要可变借它，所以这里先把那个 id 拷出来。
+    let previous_primary = last_known.last_primary().map(str::to_owned);
+    let (lines, chosen_primary) =
+        primary_lines(&config.general.primary, &rows, previous_primary.as_deref());
+    // 选出了一台真的 Primary 才记。选不出来的那一趟**什么都不动**：那正是最需要上次那个
+    // 值的时候，而把它清掉恰好会让"保持上次的选择"永久落空。
+    if let Some(id) = chosen_primary {
+        last_known.remember_primary(id);
+    }
+    for line in lines {
         println!("{line}");
     }
 
@@ -123,9 +134,23 @@ pub struct DeviceRow<'a> {
 /// 这一半是纯的，理由与 [`unregistered_ble_lines`] 同一条：选出谁、标在哪一行、要不要补
 /// 那句话，都是 `status` 的外部行为，而"本机有哪些设备"那一步才躲不开真系统。
 ///
-/// "上次的选择"在这里恒为 `None`：`status` 是一次性命令——枚举、取数、印几行、退出，
-/// 它手上没有"上次"。那份记忆的家是票 08 的状态文件（parking lot Q41）。
-pub fn primary_lines(rule: &PrimaryRule, rows: &[DeviceRow<'_>]) -> Vec<String> {
+/// **"上次的选择"从状态文件里来，这一趟选出的又记回去。**`status` 是一次性命令——枚举、
+/// 取数、印几行、退出，它自己手上没有"上次"，所以那份记忆住在票 08 的 `state.toml`
+/// （parking lot Q41：不能住 `config.toml`，因为 `primary` 只有一个格子，把自动选出的 id
+/// 写回去会把 `"lowest"` 这条规则本身洗掉）。
+///
+/// 记回去的只是"选出了一台真的 Primary"那几种（[`Selection::primary_id`] 给 `Some` 的那些）。
+/// 选不出来的那一趟**不动**这一格——那正是最需要上次那个值的时候，而 `remember_primary`
+/// 只有"设"没有"清"就是为此。
+///
+/// 这一半仍然是纯的：它收一个 `previous` 值、交出这一轮选出的 id，读盘写盘都在 [`run`] 那一头。
+/// 交出去的那个 id 可能借自三处任一：配置里钉死的那个（`rule`）、这一轮的候选之一
+/// （`rows`）、或者上次记下的那个（`previous`）。三者因此共一个生命周期。
+pub fn primary_lines<'a>(
+    rule: &'a PrimaryRule,
+    rows: &'a [DeviceRow<'a>],
+    previous: Option<&'a str>,
+) -> (Vec<String>, Option<&'a str>) {
     // 候选就是登记在册的这几台。未登记的 BLE 设备**天然不参与**：它们不是 Device，
     // 不在 `config.devices` 里，所以压根进不了 `rows`（parking lot Q24）——一台没人登记的
     // 耳机不该抢走托盘图标。
@@ -136,7 +161,7 @@ pub fn primary_lines(rule: &PrimaryRule, rows: &[DeviceRow<'_>]) -> Vec<String> 
             reading: row.candidate,
         })
         .collect();
-    let selection = primary::select(rule, &candidates, None);
+    let selection = primary::select(rule, &candidates, previous);
     let mut lines: Vec<String> = rows
         .iter()
         .map(|row| {
@@ -155,7 +180,7 @@ pub fn primary_lines(rule: &PrimaryRule, rows: &[DeviceRow<'_>]) -> Vec<String> 
     {
         lines.push(note);
     }
-    lines
+    (lines, selection.primary_id())
 }
 
 /// 本机扫到、而配置里没有登记的那些 BLE 设备，一台一行。

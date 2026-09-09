@@ -1042,7 +1042,7 @@ fn marks_the_primary_device_on_its_own_line() {
         ),
     ];
 
-    let lines = status::primary_lines(&PrimaryRule::Lowest, &rows);
+    let lines = primary_lines(&PrimaryRule::Lowest, &rows);
 
     assert_eq!(
         lines,
@@ -1066,7 +1066,7 @@ fn marks_a_pinned_device_that_could_not_be_read() {
         row(&keyboard, "读不到 —— 全部 Endpoint 都没读到", None),
     ];
 
-    let lines = status::primary_lines(&PrimaryRule::Pinned("neon75".to_string()), &rows);
+    let lines = primary_lines(&PrimaryRule::Pinned("neon75".to_string()), &rows);
 
     assert!(
         lines[1].starts_with("VGN Neon75（Primary Device）"),
@@ -1086,7 +1086,7 @@ fn adds_a_closing_note_when_no_device_got_the_marker() {
     let mouse = mouse_with_both_endpoints();
     let rows = [row(&mouse, "读不到 —— 全部 Endpoint 都没读到", None)];
 
-    let lines = status::primary_lines(&PrimaryRule::Lowest, &rows);
+    let lines = primary_lines(&PrimaryRule::Lowest, &rows);
 
     assert_eq!(lines.len(), 2, "一行 Device 加一句交代：{lines:?}");
     assert!(
@@ -1107,10 +1107,76 @@ fn adds_no_closing_note_when_the_marker_speaks_for_itself() {
     )];
 
     assert_eq!(
-        status::primary_lines(&PrimaryRule::Lowest, &rows).len(),
+        primary_lines(&PrimaryRule::Lowest, &rows).len(),
         1,
         "只该有那一行 Device"
     );
+}
+
+/// 上次选出的那台从状态文件里来：这一轮全都不可信时，标注落在它头上。
+///
+/// **这条用例守的是接线，不是规则。**规则本身（`select` 遇到一轮全不可信时交 `HeldOver`）
+/// 在 `tests/primary.rs` 里断言；这里断言的是 `primary_lines` 真的把那个 `previous` 递了
+/// 进去——票 09 落地时它恒为 `None`，那份记忆的家（票 08 的状态文件）当时还没接上，
+/// 于是"保持上次的选择"这条验收框对用户是空的（parking lot Q41）。
+#[test]
+fn holds_over_the_previous_choice_when_nothing_is_trustworthy_this_round() {
+    let mouse = mouse_with_both_endpoints();
+    let keyboard = keyboard_with_dongle_endpoint();
+    // 两台都读不到 —— 一轮里没有一个新鲜且可信的读数。
+    let rows = [
+        row(&mouse, "读不到 —— 全部 Endpoint 都没读到", None),
+        row(&keyboard, "读不到 —— 全部 Endpoint 都没读到", None),
+    ];
+
+    let (lines, chosen) = status::primary_lines(&PrimaryRule::Lowest, &rows, Some("neon75"));
+
+    assert_eq!(chosen, Some("neon75"), "该交出上次那一台，好让它被记回去");
+    assert!(
+        lines[1].starts_with("VGN Neon75（Primary Device）"),
+        "上次选的那台照旧标着，托盘不会因为一轮读不到就跳开：{:?}",
+        lines[1]
+    );
+    assert!(
+        !lines[0].contains("Primary Device"),
+        "另一台不该被标上：{:?}",
+        lines[0]
+    );
+}
+
+/// 这一趟选出来的那个 id 要交出去 —— `run` 拿它记回状态文件。
+///
+/// 没有它，下一趟启动时 `previous` 又是 `None`，上面那条 `HeldOver` 永远走不到。
+#[test]
+fn reports_which_device_it_chose_so_the_caller_can_remember_it() {
+    let mouse = mouse_with_both_endpoints();
+    let keyboard = keyboard_with_dongle_endpoint();
+    let rows = [
+        row(&mouse, "62%（Reported Level）", Some(Level::Reported(62))),
+        row(
+            &keyboard,
+            "28%（Reported Level）",
+            Some(Level::Reported(28)),
+        ),
+    ];
+
+    let (_, chosen) = status::primary_lines(&PrimaryRule::Lowest, &rows, None);
+
+    assert_eq!(chosen, Some("neon75"), "电量最低的那台就是这一趟的选择");
+}
+
+/// 一轮什么都选不出、又没有上次可依时，**不交出任何 id**。
+///
+/// 这一条挡的是"随便记一个"：`remember_primary` 只有"设"没有"清"，所以一个不该被记的 id
+/// 一旦写进去就再也退不掉，而下一趟它会伪装成"上次的选择"。
+#[test]
+fn chooses_nothing_when_there_is_no_candidate_and_no_previous() {
+    let mouse = mouse_with_both_endpoints();
+    let rows = [row(&mouse, "读不到 —— 全部 Endpoint 都没读到", None)];
+
+    let (_, chosen) = status::primary_lines(&PrimaryRule::Lowest, &rows, None);
+
+    assert_eq!(chosen, None);
 }
 
 /// 一个 Device 都没配的时候一句话都不补。
@@ -1119,5 +1185,13 @@ fn adds_no_closing_note_when_the_marker_speaks_for_itself() {
 /// 只是同一件事的第二遍。
 #[test]
 fn stays_silent_when_no_device_is_configured() {
-    assert!(status::primary_lines(&PrimaryRule::Lowest, &[]).is_empty());
+    assert!(primary_lines(&PrimaryRule::Lowest, &[]).is_empty());
+}
+
+/// [`status::primary_lines`] 印出来的那几行。
+///
+/// 这个文件里的用例守的是**那几行印成什么样**；"这一趟选出了谁"那个返回值是给 `run` 记回
+/// 状态文件用的（parking lot Q41），它自己在 `tests/primary.rs` 里由 `select` 直接断言。
+fn primary_lines(rule: &PrimaryRule, rows: &[DeviceRow<'_>]) -> Vec<String> {
+    status::primary_lines(rule, rows, None).0
 }
