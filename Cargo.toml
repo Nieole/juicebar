@@ -17,9 +17,13 @@ license = "MIT"
 #   Win32_Devices_Properties —— DEVPROPKEY / DEVPROPTYPE，上一条的入参类型
 #   Win32_Storage_FileSystem + Win32_System_IO + Win32_Security —— CreateFileW/ReadFile/WriteFile
 #       打开并读写 HID 设备句柄
+#   Win32_System_Diagnostics_ToolHelp —— CreateToolhelp32Snapshot / Process32FirstW / Process32NextW，
+#       枚举本机在跑的进程，用来认出厂商上位机并让开 HID 通路。选 Toolhelp 而不是
+#       Win32_System_ProcessStatus 的 EnumProcesses，是因为后者只给 PID，名字还要逐个
+#       OpenProcess 去问，而那一步对系统进程会失败——一份缺项的名单，症状恰好是"暂停有时不触发"
 # 选 windows 而不是 windows-sys：HID 那一层要传 PHIDP_PREPARSED_DATA 这类不透明句柄并配对释放，
 # 有类型包装能少写一批 unsafe。
-windows = { version = "0.62.2", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_SystemInformation"] }
+windows = { version = "0.62.2", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp"] }
 
 # 子命令 status / scan / probe / run。derive 是为了让子命令定义和帮助文本住在一处。
 clap = { version = "4.6.6", features = ["derive"] }

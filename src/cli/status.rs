@@ -3,6 +3,7 @@
 //! 这是取数链路的收口：配置 → 驱动 → 设备 → 一行看得懂的字。托盘将来显示的是
 //! 同一组信息。
 
+use std::fmt;
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
@@ -17,6 +18,7 @@ use crate::sources::level::{LevelSource, level_for};
 use crate::sources::{Reading, Transport, driver_for};
 use crate::staleness::{Freshness, Staleness};
 use crate::state::{LastKnown, Provenance};
+use crate::vendor_hub::{SystemProcesses, VendorHub};
 
 pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     let path = resolve_config_path(config_path)?;
@@ -34,6 +36,20 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     // （票面第 5 条）——它是缓存，不是用户的数据。
     let state_path = state_path_beside_config(&path);
     let mut last_known = LastKnown::load(&state_path);
+    // 厂商上位机在跑吗。**问一次，全部 Device 共用**——与枚举、与"当下"同一条规矩
+    // （parking lot Q27）：一次进程枚举不便宜，而这一趟里它的答案不会变。开关关着时
+    // 这一句连进程都不去枚举（`VendorHub::detect` 的第一行）。
+    //
+    // **问不出来时按"没在跑"走，只在 stderr 上说一句。**反过来（问不出来就一律暂停）会让
+    // 一台 Win32 调用失败的机器永久显示"暂停中"，而那句话指名的进程根本没在跑——一句查不下去
+    // 的假话，比一次可能读错的数字更难修（parking lot Q34）。
+    let paused_by = match VendorHub::detect(&config.general, &SystemProcesses) {
+        Ok(spotted) => spotted,
+        Err(e) => {
+            eprintln!("认不出本机在跑哪些进程，这一趟不暂停 —— {e:#}");
+            None
+        }
+    };
     // 一个 Device 都没配不是就此收摊：**那正是最需要下面那段未登记名单的时刻**（本机扫到的
     // 每一台 BLE 设备都还没登记，而 MAC 就在那几行里等着抄）。所以这里不再提前 return。
     if config.devices.is_empty() {
@@ -46,33 +62,49 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
         // 一个 Device 一个"当下"，取数与陈旧判定共用它。几台设备依次读下来会花掉真实
         // 时间，所以这个值在循环里取而不在循环外——但**一台设备只取一次**。
         let now = clock.now();
-        let (line, candidate) =
-            match read_or_last_known(device, &endpoints, &mut last_known, &config.general, now) {
-                // 读到的那一份已经由 `read_or_last_known` 记进 `last_known` 了（票面第 1 条），
-                // 写盘在这一趟的末尾一次写完：几台设备的记录住在同一份文件里。
-                Ok((reading, provenance)) => {
-                    let staleness = Staleness::assess(&reading, &config.general, now);
-                    (
-                        render(&reading, device.level_source, &staleness, provenance),
-                        // Primary 选择只要两件事：这一行显示的是哪个百分比（`Level::Unknown`
-                        // 即采信不了），以及这份读数还算不算现状。`level_for` 在 `render` 里
-                        // 也调了一次——同一个纯函数、同样的入参，两处必然是同一个答案，
-                        // 所以不必把它提进 `EndpointReading`（parking lot Q43）。
-                        //
-                        // **拿出来顶上的历史值不会因为这一步而混进 lowest**：它一律是
-                        // Stale（`CONTEXT.md`「上次已知值」那一条），而下面的筛子只收
-                        // `Freshness::Fresh`。所以这里不必再按 `provenance` 分一次支。
-                        Some(CandidateReading {
-                            level: level_for(&reading.reading, device.level_source),
-                            freshness: staleness.freshness,
-                        }),
-                    )
-                }
-                // 一台读不到不该拖累别的 Device，把原因印在它自己那一行上。**读不到就是
-                // 失联，它不参与 lowest 比较**——那正是这里 `reading` 为 `None` 的意思，
-                // 而失联与 `Level::Unknown` 是两回事（`CONTEXT.md`：Unknown 也不等于设备离线）。
-                Err(e) => (format!("读不到 —— {e:#}"), None),
-            };
+        let (line, candidate) = match read_or_last_known(
+            device,
+            &endpoints,
+            paused_by.as_ref(),
+            &mut last_known,
+            &config.general,
+            now,
+        ) {
+            // 读到的那一份已经由 `read_or_last_known` 记进 `last_known` 了（票面第 1 条），
+            // 写盘在这一趟的末尾一次写完：几台设备的记录住在同一份文件里。
+            Ok(readout) => {
+                let reading = readout.reading;
+                let staleness = Staleness::assess(&reading, &config.general, now);
+                (
+                    render(
+                        &reading,
+                        device.level_source,
+                        &staleness,
+                        readout.provenance,
+                        readout.paused_by.as_ref(),
+                    ),
+                    // Primary 选择只要两件事：这一行显示的是哪个百分比（`Level::Unknown`
+                    // 即采信不了），以及这份读数还算不算现状。`level_for` 在 `render` 里
+                    // 也调了一次——同一个纯函数、同样的入参，两处必然是同一个答案，
+                    // 所以不必把它提进 `EndpointReading`（parking lot Q43）。
+                    //
+                    // **拿出来顶上的历史值不会因为这一步而混进 lowest**：它一律是
+                    // Stale（`CONTEXT.md`「上次已知值」那一条），而下面的筛子只收
+                    // `Freshness::Fresh`。所以这里不必再按 `provenance` 分一次支。
+                    Some(CandidateReading {
+                        level: level_for(&reading.reading, device.level_source),
+                        freshness: staleness.freshness,
+                    }),
+                )
+            }
+            // 一台没读到不该拖累别的 Device，把原因印在它自己那一行上。**没读到就不参与
+            // lowest 比较**——那正是这里 `reading` 为 `None` 的意思，而它与 `Level::Unknown`
+            // 是两回事（`CONTEXT.md`：Unknown 也不等于设备离线）。
+            //
+            // 失联与暂停在这里合成一支，是因为它们对 Primary 选择是同一件事（手上没有数）；
+            // 而印出去那句话两者完全不同，那一维由 [`NoReading`] 自己的 `Display` 分开。
+            Err(no_reading) => (no_reading.to_string(), None),
+        };
         rows.push(DeviceRow {
             device,
             line,
@@ -252,6 +284,9 @@ fn is_registered(config: &Config, found: &BleBattery) -> bool {
 /// `Wired` 直接从枚举里消失（瞬时不在场而不是一次三秒的超时），降级几乎不要钱。
 /// 在场的 Endpoint 全都没读到，才算失联。
 ///
+/// **让开的那几条不在"试过"之列**：厂商上位机在跑时它们压根没被打开，那是[暂停][NoReading::Paused]
+/// 而不是失联，两者对用户是两句不同的话（[`NoReading`] 上写了理由）。
+///
 /// `pub` 是为了让"拔线 → 同周期降级"这条路径能在 `tests/endpoints.rs` 里被驱动：
 /// 集成测试只看得见 pub 接口，而这条路径在真机上拔一次线才复现一次。
 ///
@@ -260,14 +295,30 @@ fn is_registered(config: &Config, found: &BleBattery) -> bool {
 /// 试下来会花掉真实时间（一次鼠标超时就是三秒），两条 HID 各超时一次再落到 Ble，用第二个
 /// "当下"去判第一个"当下"盖的时间戳，那一行印出来就不是"0 秒前"而是"6 秒前"。
 /// 接缝本身（`crate::clock::Clock`）因此只出现在 [`run`] 的顶上，这一层往下全是纯函数。
-pub fn read(device: &Device, endpoints: &dyn Endpoints, now: Timestamp) -> Result<EndpointReading> {
+///
+/// `paused_by` 同理是个**值**而不是 `&dyn Processes`：本机在跑哪些进程只在 [`run`] 的顶上
+/// 问一次，一趟 `status` 问两次就是白花一次进程枚举（见 `crate::vendor_hub`）。`None` 即
+/// 这一趟不让开任何东西——开关关着、或者名单里一个都没在跑，两种都是它。
+pub fn read(
+    device: &Device,
+    endpoints: &dyn Endpoints,
+    paused_by: Option<&VendorHub>,
+    now: Timestamp,
+) -> Result<EndpointReading, NoReading> {
     let present = endpoints.present(device);
     let mut failures = Vec::new();
+    let yielded = yielded_to(paused_by, &present);
 
     for kind in EndpointKind::PRIORITY
         .into_iter()
         .filter(|kind| present.contains(kind))
     {
+        // **让开的那几条在这里就跳过，一个通道都不打开。**接缝定成"`present()` 答在场、
+        // `open_transport()` 才打开"两个方法（parking lot Q16）就是为了这一刻——绕开
+        // 的不只是那一次往返，还有打开通路本身。
+        if yielded.contains(&kind) {
+            continue;
+        }
         // 挑哪个**驱动**不在这个函数里做，在 `read_with_driver` 里；这里只挑 Endpoint。
         let attempt = match kind {
             // Wired 与 Dongle24G 取数都是一次 HID 往返，要经过协议驱动。
@@ -289,7 +340,118 @@ pub fn read(device: &Device, endpoints: &dyn Endpoints, now: Timestamp) -> Resul
         }
     }
 
-    Err(lost_reason(device, &failures))
+    // 让开过至少一条、而剩下的没交出读数：那是**暂停**，不是失联。两者要用户做的事相反
+    // ——失联那句话把他打发去找一个硬件故障（"设备没插？跑 `juicebar scan`"），而这里他
+    // 该做的是关掉那个上位机。
+    //
+    // **剩下那几条自己的失败原因一起带走**（多半只有 `Ble` 一条）：让开两条 HID、而蓝牙
+    // 地址又写错了的那一趟，只说"关掉它就会恢复"是一句做不到的承诺。
+    if let Some(hub) = paused_by.filter(|_| !yielded.is_empty()) {
+        return Err(NoReading::Paused {
+            hub: hub.clone(),
+            yielded,
+            failures,
+        });
+    }
+    Err(NoReading::Lost(lost_reason(device, &failures)))
+}
+
+/// 这一趟这个 Device 让开的那几条 Endpoint：在场、且撞见的那个上位机会跟它抢的那些。
+///
+/// [`read`] 与 [`read_or_last_known`] 共用这一处，好让"什么算让开"只有一个答案——两处各写
+/// 一遍，那一行末尾的标注与它解释的行为迟早会对不上。
+///
+/// 它非空同时是**"这个 Device 到底有没有被暂停"的判据**：本机有上位机在跑不等于这一台受
+/// 影响（一副只配了 `Ble` 的耳机压根没有让开的东西），而对那台设备说一句"暂停中"就是一句
+/// 与它无关的话。
+fn yielded_to(paused_by: Option<&VendorHub>, present: &[EndpointKind]) -> Vec<EndpointKind> {
+    paused_by
+        .map(|hub| {
+            present
+                .iter()
+                .copied()
+                .filter(|kind| hub.pauses(*kind))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 一份读数都没拿到时的两种下场：**去问了、问不到**，还是**我们没去问**。
+///
+/// 为什么非要一个类型、不能继续压成一句 `anyhow::Error`（票 04 把这笔代价记在本票名下）：
+/// 这两种要用户做的事**相反**。失联那句话把他打发去查设备那一头（"设备没插？蓝牙没配对？
+/// 跑 `juicebar scan`"），而暂停期间设备好端端的，该关掉的是那个厂商上位机——把暂停说成
+/// 失联，用户会去找一个不存在的硬件故障，而这张票的由来正是这句误导。
+///
+/// 压成字符串也能印出两句不同的话，但**下游分辨不了**：[`read_or_last_known`] 要按这一维
+/// 决定那一行末尾标什么（parking lot Q40 给本票的原话：厂商上位机占着通路是个例外，
+/// 那一维要自己说一句），而一个字符串只能被再解析一次。
+#[derive(Debug)]
+pub enum NoReading {
+    /// 在场的 Endpoint 都试过了、一条都没读到，或者一条都不在场 —— **失联**。
+    ///
+    /// 里面那句话由 [`lost_reason`] 给出，措辞见那一处（parking lot Q19 / Q23 打磨过两轮）。
+    Lost(anyhow::Error),
+    /// 该走的那几条 HID 让开了，**这一趟根本没去问** —— **暂停**。
+    ///
+    /// `yielded` 是真的让开了的那几条（在场、且这个上位机会跟它抢的）。它非空是这个变体
+    /// 存在的前提：本机有上位机在跑不等于每一台设备都受影响。
+    Paused {
+        /// 撞见的那个上位机。那一行要点它的名，那是用户唯一能据以行动的东西。
+        hub: VendorHub,
+        /// 让开的那几条 Endpoint。
+        yielded: Vec<EndpointKind>,
+        /// 没让开、真去试过、而且失败了的那几条各自的原因（多半只有 `Ble` 一条）。
+        ///
+        /// **它空不空改变这一行的措辞**：全空才敢说"关掉它就会恢复"，否则那是一句做不到
+        /// 的承诺——蓝牙地址写错的设备，关掉上位机也还是读不到。
+        failures: Vec<String>,
+    },
+}
+
+impl NoReading {
+    /// 让开了 Endpoint 的那个上位机。`None` 即这不是暂停而是失联。
+    ///
+    /// [`read_or_last_known`] 拿它把暂停这一维带给 [`render`]：退到上次已知值的那一行
+    /// 照样得说清"设备此刻不在"是因为我们没去问，而不是问不到。
+    pub fn paused_by(&self) -> Option<&VendorHub> {
+        match self {
+            Self::Lost(_) => None,
+            Self::Paused { hub, .. } => Some(hub),
+        }
+    }
+}
+
+impl fmt::Display for NoReading {
+    /// 印出去的就是那一行 Device 名字之后的全部内容。
+    ///
+    /// **两句话各自完整、不共用前缀**：一句以"读不到"开头（它是失联的措辞，Q19/Q23 定的），
+    /// 一句以"暂停中"开头。共用一个"读不到 —— "再接不同的后半句，就等于把暂停也说成了
+    /// 读不到，而那正是票面第 4 条要拦的。
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Lost(reason) => write!(f, "读不到 —— {reason:#}"),
+            Self::Paused {
+                hub,
+                yielded,
+                failures,
+            } => {
+                let names: Vec<String> = yielded.iter().map(EndpointKind::to_string).collect();
+                write!(
+                    f,
+                    "暂停中 —— {} 正在运行，{} 让开（同时发命令会互相覆盖对方的应答）",
+                    hub.process(),
+                    names.join("、"),
+                )?;
+                // 剩下的都没试过（只让开了这几条）才敢许那个承诺。试过而失败的那几条得
+                // 带上自己的原因，否则"关掉它就会恢复"对一台蓝牙地址写错的设备是假话。
+                match failures.is_empty() {
+                    true => write!(f, "，关掉它就会恢复"),
+                    false => write!(f, "；剩下的也没读到 —— {}", failures.join("；")),
+                }
+            }
+        }
+    }
 }
 
 /// 这一趟拿得出来的读数：先按优先级取一次，取不到就退到状态文件里的上次已知值。
@@ -316,23 +478,68 @@ pub fn read(device: &Device, endpoints: &dyn Endpoints, now: Timestamp) -> Resul
 pub fn read_or_last_known(
     device: &Device,
     endpoints: &dyn Endpoints,
+    paused_by: Option<&VendorHub>,
     last_known: &mut LastKnown,
     general: &General,
     now: Timestamp,
-) -> Result<(EndpointReading, Provenance)> {
-    match read(device, endpoints, now) {
+) -> Result<RowReading, NoReading> {
+    match read(device, endpoints, paused_by, now) {
         Ok(reading) => {
             last_known.record(&device.id, &reading, now);
-            Ok((reading, Provenance::JustRead))
+            Ok(RowReading {
+                reading,
+                provenance: Provenance::JustRead,
+                // **读到了也可能有 Endpoint 让开过**：`Ble` 顶上的那一刻，两条 HID 一个都
+                // 没被问。那一行照样要说一句——一个可能是几个月前的缓存数字突然顶上来，
+                // 用户该知道那是因为上位机在跑，而不是设备出了事。
+                //
+                // 判据走的是 [`yielded_to`]——与 `read` 里跳过那几条时问的是同一个函数。
+                // 这里再问一次 `present()` 是安全的：它是枚举快照上的纯筛选（幂等、不碰
+                // 系统，见 `SystemEndpoints`），与 Clock 那一条"只许问一次"不是同一类问题
+                // （parking lot Q35）。
+                paused_by: paused_by
+                    .filter(|_| !yielded_to(paused_by, &endpoints.present(device)).is_empty())
+                    .cloned(),
+            })
         }
         // 历史值只在这一支里被问到：读得到的时候它不参与竞争。让它参与，一份存了半天的
         // 读数就可能盖掉当场问出来的那个数——而这条链路上其余每一处守的都是相反的规矩
         // （Endpoint 优先级、`Ble` 排最后）。
-        Err(lost) => last_known
-            .reading_for(&device.id, general, now)
-            .map(|last| (last, Provenance::LastKnown))
-            .ok_or(lost),
+        Err(no_reading) => {
+            // 暂停这一维要跟着历史值一起交出去：那一行末尾非说一句不可（parking lot Q40
+            // 给本票的原话），而说得出话的只有取数那一步——它才知道这一趟让开了什么。
+            let paused_by = no_reading.paused_by().cloned();
+            last_known
+                .reading_for(&device.id, general, now)
+                .map(|reading| RowReading {
+                    reading,
+                    provenance: Provenance::LastKnown,
+                    paused_by,
+                })
+                .ok_or(no_reading)
+        }
     }
+}
+
+/// 一行 Device 背后的那份读数，连同它印出去时要交代的两件事。
+///
+/// 名字跟着 [`DeviceRow`] 走：那个结构是**印出来的那一行**，这个是它的原料。
+/// （不叫 `Readout`——parking lot Q16 与 Q31 里那个词指的是另一样东西：一个把"读到了 /
+/// 暂停 / 失联"合成一个类型的三态枚举，也就是这里**没有**走的那条路。）
+///
+/// 给它一个名字而不是交一个三元组，理由与 [`DeviceRow`] 那一条相同：靠位置解构的元组，
+/// 加第三样时每一处调用都要改——而本票就是来加第三样的那张票。
+///
+/// 三样捆在一起是因为它们**同时产生、同时被 [`render`] 用掉**：一个数、它从哪儿来的、
+/// 以及这一趟有没有 Endpoint 让开。后两样都不是 [`EndpointReading`] 的一部分——那个结构
+/// 描述的是"设备说了什么"（parking lot Q39）。
+pub struct RowReading {
+    /// 要印出去的那一份读数。
+    pub reading: EndpointReading,
+    /// 它是这一趟读到的，还是从状态文件里拿出来的上次已知值。
+    pub provenance: Provenance,
+    /// 这一趟让开过 Endpoint 的那个厂商上位机，`None` 即这台设备没让开任何东西。
+    pub paused_by: Option<VendorHub>,
 }
 
 /// 一条 Endpoint 都没读到时印出去的那句话。
@@ -404,6 +611,7 @@ pub fn render(
     level_source: LevelSource,
     staleness: &Staleness,
     provenance: Provenance,
+    paused_by: Option<&VendorHub>,
 ) -> String {
     let EndpointReading {
         endpoint: _,
@@ -444,10 +652,29 @@ pub fn render(
         (Freshness::Fresh | Freshness::Stale, _) => level,
     };
     format!(
-        "{measured}  {}{}",
+        "{measured}  {}{}{}",
         source_of(sourced, staleness),
         stale_marker(staleness.freshness, provenance),
+        pause_marker(paused_by),
     )
+}
+
+/// 暂停标注：这一趟有 Endpoint 让开时说一句，否则一个字都不加。
+///
+/// **它与陈旧标注是两维**，所以是另一段而不是塞进 [`stale_marker`]：一份读数有多旧，和
+/// "我们这一趟根本没去问"，是两个独立的事实。同一个 44% 可能既是半小时前的（陈旧），
+/// 又是因为上位机在跑才没被刷新（暂停）——两句话都得说。
+///
+/// **点名那个进程**，不只说"已暂停"：用户唯一能动手的地方就是关掉它，而"哪一个"这件事只有
+/// 这一维答得出（`crate::vendor_hub`）。
+///
+/// 它**只在真让开过 Endpoint 的那一行出现**（判据见 [`read_or_last_known`]），所以不是
+/// 一句常态化的提醒——那种提醒会把真正该看的话一起淹掉。
+fn pause_marker(paused_by: Option<&VendorHub>) -> String {
+    match paused_by {
+        None => String::new(),
+        Some(hub) => format!("  已暂停（{} 正在运行）", hub.process()),
+    }
 }
 
 /// 陈旧标注：新鲜、这一趟读到的读数什么都不加，其余每一种都以"已陈旧"开头。

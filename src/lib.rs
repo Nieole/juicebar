@@ -16,3 +16,4 @@ pub mod primary;
 pub mod sources;
 pub mod staleness;
 pub mod state;
+pub mod vendor_hub;
