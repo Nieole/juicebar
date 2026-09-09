@@ -124,6 +124,26 @@ fn rejects_a_response_left_over_from_another_command() {
     );
 }
 
+/// 就绪标志过了，但 `[1]` 里的百分比物理上不可能——照样是读取异常。
+///
+/// 键盘这条通路上能用来否决一帧的字节最少：回包**既没有 cmd 回显也没有校验和**
+/// （parking lot Q9），就绪标志是唯一的结构性判据。所以值域这一道不是重复劳动，它是
+/// 就绪标志之外仅剩的一道——一帧残留只要 `[0]` 恰好是 `0x01` 就能走到这里。
+///
+/// 这一帧是拿实测的好帧改掉 `[1]` 造出来的，其余字节一个没动。
+#[test]
+fn rejects_a_ready_frame_whose_level_is_impossible() {
+    let mut drifted = KEYBOARD_RESTING_FULL;
+    drifted[1] = 200;
+
+    let error = read(&drifted).unwrap_err().to_string();
+
+    assert!(
+        error.contains("读取异常") && error.contains("200"),
+        "错误信息要说清是哪个数说不通：{error}"
+    );
+}
+
 /// 读到半截的回包不能被当成有效读数——更不能让驱动按下标越界崩掉。
 #[test]
 fn rejects_a_truncated_frame() {

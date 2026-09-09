@@ -193,6 +193,32 @@ impl Transport for SharedTransport {
     }
 }
 
+/// 用例里那台键盘：只有 Dongle24G 一条 Endpoint（有线本体要拨机身开关才枚举得出来），
+/// 实测的 VID/PID。
+///
+/// **故意不写 `level_source`**，好让"缺省是 auto"和"键盘没有电压所以 auto 退化成用
+/// 固件自报值"这两件事在同一条用例里一起被走到。
+pub fn keyboard_with_dongle_endpoint() -> Device {
+    juicebar::config::Config::parse(
+        r#"
+        [[device]]
+        id = "neon75"
+        name = "VGN Neon75"
+        driver = "vgn_keyboard"
+
+          [device.wireless_24g]
+          vid = 0x3151
+          pid = 0x5038
+          usage_page = 0xFFFF
+          usage = 0x0002
+          report_id = 0
+        "#,
+    )
+    .expect("用例里的配置应当解析得动")
+    .devices
+    .remove(0)
+}
+
 /// 用例里那只鼠标：两条 HID Endpoint 都配齐了，实测的 VID/PID。
 pub fn mouse_with_both_endpoints() -> Device {
     juicebar::config::Config::parse(

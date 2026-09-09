@@ -284,81 +284,133 @@ spec 设 Clock 接缝正是为了"测试不需要 sleep"，说得对；本票没
 本实现只在重试之间等。键盘醒着时首读即就绪，那 100 ms 是白搭的延迟，所以没照抄。若日后发现
 冷启动首读几乎必然未就绪，把这个 sleep 补到首发之前，比加大上界更省。
 
-### Q56 —— 报文种类这一维接进枚举接缝，而不是留在 `cli::status`
+### Q11 —— "键盘没有电压所以 auto 退化成 reported"落成 `match` 的一条臂，不是设备判断
 
-**From:** 编排者，合并票 02（键盘驱动）与票 04（Wired Endpoint）时
+**From:** 票 03（电量数值的可信度）
 
-**这条不是某张票取的岔路，是合并两张票时才出现的岔路**——两个 agent 各自的树里都不存在它。
+**取的路**：`level_for` 对 `(level_source, reading.voltage_mv)` 这个二元组 match，
+`(Auto, None)` 那一臂给 Reported Level。键盘走的就是这一臂——**没有任何一处提到"键盘"**，
+也没有"这个驱动有没有电压"的能力表。类型（Q7 把 `voltage_mv` 改成 `Option`）让编译器
+要求这一臂被写出来。
 
-**撞在一起的两件事**：票 04 把"打开一条 Endpoint 拿到 Transport"定为枚举接缝的职责
-（`Endpoints::open_transport`），并把 collection 查找搬进了 `endpoints.rs`，还在那里留了一句
-注释说键盘的 feature 报文将来要在这儿分支。票 02 的 base 里没有 `endpoints.rs`，于是它把
-feature 报文那条路建在了 `cli::status` 里，连 collection 查找一起扩成了 output / feature 两支。
-位置留好了，东西盖在了别处。
+**另一条路**：给 `Driver` 加一个 `has_voltage()` 之类的能力查询，或者在 `Level` 里多一个
+变体（`ReportedBecauseNoVoltage`）把"为什么退化了"带到界面上。
 
-**取的路**：把报文种类搬进 `endpoints.rs`。`ReportKind` 由驱动来答（`report_kind_of(device)`
-经 `driver_for`），`find_collection(endpoint, kind)` 按种类筛，`open_transport` 按种类造对应的
-Transport、超时也从 `ReportKind::OutputAndInput` 里取，不再写死鼠标那一个常量。
-`cli::status` 里票 02 的 `open_transport` / `find_output_collection` / `find_feature_collection` /
-`find_collection` 四个函数因此整组消失，`read_with_driver` 只剩驱动分发本身。
+**推荐**：现状。`auto` 的定义是"电压越过表顶用固件值、其余区间查表"，而**没有电压时那两个
+区间一个都不成立**——退化不是一条规则，是"数据不存在"的算术后果。加能力查询等于把同一件事
+说两遍（一处在类型里、一处在 trait 里），而这两处迟早会不一致；多一个 `Level` 变体则要求
+呈现层解释一件用户无法采取行动的事（"你的键盘协议里没有电压"），而那一行已经因为
+`voltage_mv` 是 `None` 而不印电压那一格了。
 
-**为什么不能只是机械解冲突**：`present()` 原来用"发得出输出报文"筛在场，而键盘的 vendor
-collection 实测是 `in:0 out:0 feat:65`。照两边原样合并，**键盘会被判成永远不在场**，一条读数
-都取不到——而两边各自的测试都还是绿的：票 02 的用例经假 Transport 直接驱动驱动层，够不到
-枚举；票 04 的用例里只有鼠标。gate 也抓不住。这正是"自动合并成功而结果是错的"那一类，
-Q18 预告的是 `read()` 那一处，这是同一形状的第二处，票 04 没预见到。
+**翻案代价**：加变体是改 `Level` 加 `render` 一臂；加能力查询是 trait 加一个方法。都关在
+本票内。**若哪天键盘的有线本体（`0x82`，第 7 节仍挂在待实测清单上）真读得到电压**，这一臂
+自然就不再被键盘走到，什么都不用改——这也是推荐现状的一个理由。
 
-**另一条路**：让 `cli::status` 保留票 02 的那套 `open_transport`，`Endpoints::open_transport`
-只管鼠标那条路。那样两张票的代码都不用动，合并最省事；代价是"打开 Endpoint"这件事有两个入口，
-而票 05 的 `Ble` 恰恰要走枚举接缝那一个——它不经过协议驱动，也就没有 `ReportKind` 可言，
-两个入口会让它无处可去。
+**镜像的那一半，一并记在这里**（号段只有 Q11–Q15，不另开一条；是 code review 的 spec 轴提的）：
+上面说的是"没有 Reported 之外的来源"，反过来还有**"该用 Reported 的那一段，Reported 却是 0"**
+——比如 4155 mV + 固件 0。现在的结果是 **Unknown**，也就是把一个可信的电压丢掉了。
+另一条路是这时回退到查表（会显示 100%）。
 
-**推荐**：保持现状（接进接缝）。票 04 的接缝注释本来就把位置留在那里，这只是把东西放回留好的
-位置；而票 05 要加的第三级 Endpoint 是"不经过驱动"的那一种，只有单一入口才容得下它。
-翻案是把四个函数搬回 `cli::status`，关在这次合并的范围内。
+**推荐仍是 Unknown。**`auto` 之所以在这一段用固件值，正是因为**查表在这一段已知是错的**；
+好来源缺席时悄悄换上那个已知错的来源，屏幕上就会出现"固件刚说它不知道，我们显示 100%"
+——那恰好是 ADR-0002 第二节存在的理由。而且"固件报 0 + 电压满格"这两件事互相矛盾，本身就
+可疑，离"读取异常"比离"满电"更近。ADR 写的是「一律当作 Unknown」，没有给这一段开口子，
+所以现状也是照 ADR 的字面。**值得编排者确认这是本意**；翻案是改一条 match 臂。
 
-**Whose call:** 已定，无需结算——记录在此是因为票 05 / 06 / 07 都要站在这个形状上。
+### Q12 —— 表顶 clamp 只有 `== 4110` 这一个电压走得到，仍按票面把算法实现完整
 
-### Q57 —— 身份表里没有 Ble，`identity()` 因此返回 `Option`；空着的蓝牙块要出声
+**From:** 票 03（电量数值的可信度）
 
-**From:** 编排者，合并票 10（配置自举）与票 05（Ble Endpoint）时
+**这条记录最初写错了，已改**，抓出来的是 code review 的 spec 轴。原文断言"clamp 在两种
+`level_source` 下都到不了"，不成立：`position(|mv| *mv > voltage_mv)` 在 `voltage == 4110` 时
+找不到更高的档、返回 `None`，直接落进 clamp；而 `level_for` 的守卫是 `mv > TABLE_TOP_MV`，
+4110 不满足它，走的正是 Derived 那一臂。**所以 4110 mV 且充电中时用户看到的是
+「99%（Derived Level）」——clamp 确实可达**，这也正是 `docs/protocol.md` 那条补记说的
+"把 `== 4110` 并进 clamp"。
 
-**又一条只在交汇处出现的岔路**——票 10 的 base 是 `ed7a66c`，那时 `EndpointKind` 只有两个变体。
+准确的说法是：**clamp 的 `> 4110` 那一段走不到**——`auto` 在那一段已改用 Reported Level，
+`reported` 一律不查表。走得到的只有表顶那一个点。
 
-**票 10 自己预言了这一天。** `KnownDevice::identity` 的注释原话：
+**取的路**：照票面实现完整的 `voltageToLevel`（含 clamp 与 `charging` 参数）。`derived_level`
+是 `pub`，`> 4110` 那一段由 `tests/level.rs` 直接对着它断言（4155 / 4190 / 4235 三个实测电压）
+——这也是它 `pub` 的**唯一**理由，函数上的文档注释里写明了。
 
-> 两条身份是两个具名字段加一个穷举 `match`，而不是一个按 `PRIORITY` 下标索引的数组
-> ——后者能省掉这个 `match`，但它假定"每一种 Endpoint 的身份都是 `HidEndpoint`"，
-> 而票 05 的 `Ble` 配的是一个蓝牙地址，不是这个类型。留着 `match`，加上第三种的那一天
-> 编译器会把人指到这里。
+**另一条路**：让 `derived_level` 只覆盖表顶以下的区间——去掉 `> 4110` 那一段、去掉 `charging`
+参数、表顶以上交由调用方处理。函数会小一圈，也不会留下一段经 `level_for` 走不到的代码，
+而且它就能收回 `pub`（`tests/common/mod.rs` 那句"集成测试只看得见 pub 接口"因此更严）。
 
-编译器确实把人指到了那里。**这次合并的五处冲突和六个编译错误，全是能被工具抓住的那一类**
-——与合并票 02 那次正相反（那次 `present()` 把键盘筛成永不在场，两边测试都绿）。差别就在
-票 10 这类"留着穷举 match"的选择上，它把一次静默错误换成了一条编译错误。
+**推荐**：现状。`derived_level` 的价值之一是**对着 `app.asar` 逐行核对得上**（ADR-0002 那句
+"任何对着 app.asar 核对的人都会当成 bug，所以必须留下理由"），砍掉那一段就核对不上了；
+而且 `> 4110` 那道界是**目前的判断**，中低段孰优仍未实测（`docs/protocol.md` 第 7 节还挂着），
+哪天界挪了、或者加进一个 `level_source = "derived"`，那一段立刻就在路上。翻案是删两行加改
+签名，关在本票内。
 
-**取的路**：`identity(kind)` 从 `&HidEndpoint` 改成 `Option<&HidEndpoint>`，`Ble => None`。
-调用点用 `filter_map` / `let Some(..) else` 承接。`config_in` 全部改为票 05 的
-`hid_config_in`，"配没配"那一处改用 `is_configured_in`（票 05 特意分开的那个方法，
-理由是前者对 Ble 恒为 None、拿它当判据会把蓝牙从名单里漏掉）。`config_key` 给 Ble 补
-`"bluetooth"`。
+### Q13 —— 校验不过的那一行，外层仍说"读不到"，只有内层原因写着"读取异常"
 
-**其中一处不是机械适配，是判断**：`config-refresh` 补空缺的循环里，Ble 拿不到身份。
-最省事的写法是 `continue` 跳过，但那会让"蓝牙地址得你自己抄"这句话消失——而票 10 通篇
-守的正是「用户不该在不知情的情况下缺一整条 Endpoint」。所以 Ble 走一条专门的 `notes` 分支，
-说清它为什么补不上（BLE 射频是另一颗芯片，与 dongle 之间没有能缝合的字段）和该去哪儿抄。
-**这同时了结了票 10 的 Q50**（草稿里的 `[device.bluetooth]` 是硬写注释、票 05 落地后该退掉）
-的一半：草稿那半仍然待办，refresh 这半已经会说话了。
+**From:** 票 03（电量数值的可信度）
 
-**另一条路**：`identity` 保持 `&HidEndpoint`，另给 `EndpointKind` 加一个 HID-only 的清单
-（`HID: [Self; 2]`），所有身份表遍历改走它，`match` 的 `Ble` 分支写 `unreachable!()`。
-省掉一批 `Option` 承接代码；代价是"Ble 不在这张表里"从类型级保证退回成一条靠注释维持的
-约定，而 `unreachable!()` 是运行时 panic。
+**票面要求「校验不过时 `status` 显示"读取异常"，不显示数字」**。不显示数字是做到了（合理性
+校验不过就是 `Err`，那一行印的是原因）；而**"读取异常"目前只出现在内层原因里**，整行读起来是
+`读不到 —— 全部 Endpoint 都没读到 —— Wired: 读取异常：电压 2000 mV 不在 …`。"都没读到"这半句
+其实不准：我们读到了，只是读到的东西不可信。
 
-**推荐**：保持现状（`Option`）。票 05 已经立了"HID-only 的东西显式命名"的惯例
-（`hid_config_in` 与 `is_configured_in` 分成两个方法就是为此），`Option` 是同一条惯例在
-返回值上的样子。翻案关在这次合并的范围内。
+**取的路**：把"读取异常"写进驱动那句错误信息的开头，不动 `lost_reason()` 和 `run()` 里
+"读不到 —— " 那个前缀。
 
-**Whose call:** 已定，无需结算——记录在此是因为票 11 要动 `config.rs` 的回写，会读到这些调用点。
+**这个勾没有落到"那一行"上的测试**（code review 的 spec 轴提的，值得写明白）：
+`an_implausible_frame_reads_as_an_anomaly_rather_than_a_number` 守的是 `status::read()` 交出来
+的那句原因，而**最终印在屏幕上那一行是 `run()` 拼的**（`读不到 —— {原因}`），而 `run()` 要真去
+枚举本机 HID 通路，测不到。要把它盖住，得先把那句拼装从 `run()` 里提成一个 `pub` 函数——而那
+正是下面那条"该跟票 06 一起做"的同一处代码。
+
+**另一条路**：给失败分个类型（一个错误枚举，或者 `Err` 里带一个"读到了但不可信"的标记），
+让 `status` 那一行整句说成"读取异常"而不是"读不到"。
+
+**推荐**：暂时保持现状，但**这条该在票 06 或收口那批一起结算**，因为它需要先回答一个本票范围
+外的问题：**几条 Endpoint 各失败得不一样时那一行说什么**（一条超时、一条读取异常）。而
+`lost_reason()` 与 `read()` 的 `match` 此刻正被票 05 改着（它加第三种 Endpoint），本票去动那段
+只会平白撞出合并冲突。两种说法要用户做的事确实不同——"读不到"多半是没插或没开，"读取异常"
+是固件/协议对不上或者厂商上位机在抢通道——所以这个区分值得做，只是不该在这里做。
+
+### Q14 —— Level 的决策落在 `render()` 里，`EndpointReading` 不带它（**波及票 09**）
+
+**From:** 票 03（电量数值的可信度）
+
+**取的路**：`level_for(&Reading, LevelSource) -> Level` 是个纯函数，由 `render()` 在印那一行
+之前调用。`EndpointReading` 没有变化，`read()` 交出来的仍然是"驱动解析出来的 Reading + 来自
+哪条 Endpoint"。
+
+**另一条路**：在取数那一步就把 `Level` 定下来，塞进 `EndpointReading`，`render()` 只负责印。
+
+**推荐**：现状，但**票 09（Primary 选择）落地时要重新看一眼**。spec 写着 `primary = "lowest"`
+时"只有新鲜且可信的 Reading 参与比较，Unknown 的不参与"——那一步同样需要 `Level`，而它不经过
+`render()`。届时有两条路：把 `level_for` 也调一次（纯函数，调两次没有代价，两处只要都传对
+`level_source`），或者把 `Level` 提到 `EndpointReading` 里让全流程共用一个。**推荐后者**，
+理由是"这台设备当下的电量是多少"应当只有一处答案；本票没有这么做，只是因为 `EndpointReading`
+此刻正被票 05（加第三种 Endpoint）和票 06/08（取得时刻）同时改着，多一个字段是三方冲突。
+
+### Q15 —— 认不出的 `level_source` 让整份配置读不动，与 `driver` 的处置相反
+
+**From:** 票 03（电量数值的可信度）
+
+**取的路**：`LevelSource` 是个带 `Deserialize` 的枚举，只认 `"auto"` 和 `"reported"`，缺省
+`"auto"`。写成别的（比如 `"derived"`）→ serde 报错 → `Config::parse` 失败 → `status` 一个
+Device 都不印。
+
+**另一条路**：照 `driver` 那一项的先例存成字符串、认不出就当缺省（或者留到取数时再报），
+让一处笔误不至于让整份配置读不动。
+
+**推荐**：现状。`driver` 存字符串有个明写的理由——"配置里可以出现本次编译还没实现的驱动名"，
+那是**前向兼容**；`level_source` 只有两个合法值，不存在"将来才实现的来源"这回事。而静默按缺省
+走的后果很不对称：用户把它钉成 `"reported"` 的理由恰恰是"这台设备的另一个来源不可信"，笔误
+让他以为钉住了、其实没有，而屏幕上那个数看起来一切正常——正是本票在防的那类错误。翻案是把
+字段换回 `String` 再在 `level_for` 那边兜底，关在本票内。
+
+**知会票 10（配置自举）**：这个类型定在 `src/sources/level.rs` 而不是 `config.rs`，于是
+`config.rs` 多了一条 `use crate::sources::level::LevelSource`（没有环：`level` 不引 `config`）。
+放在行为那一侧是因为它的两个变体只有在"怎么挑那个百分比"里才有意义，`config.rs` 那边因此只多
+了一个字段、一行 `use`，合并起来是机械的。**副作用是自举生成草稿时它得写出合法值**——写别的
+会让整份配置读不动，见上。
 
 ### Q16 —— 枚举接缝定成两个方法：`present()` 答在场，`open_transport()` 交 Transport
 
@@ -687,6 +739,82 @@ decor 前缀里），读起来是"这一块补上了，下面这段是它当初�
 `draft()` 里那个 `PRIORITY` 循环连同 `commented_placeholder()` 一起产出——那时"它在不在场"
 也才真的问得出来（现在问不出来，所以它只能是注释）。`src/config.rs` 里那个常量的文档注释
 写了这件事。翻案的代价是删一个常量和一处 `push_str`，关在本票内。
+
+### Q56 —— 报文种类这一维接进枚举接缝，而不是留在 `cli::status`
+
+**From:** 编排者，合并票 02（键盘驱动）与票 04（Wired Endpoint）时
+
+**这条不是某张票取的岔路，是合并两张票时才出现的岔路**——两个 agent 各自的树里都不存在它。
+
+**撞在一起的两件事**：票 04 把"打开一条 Endpoint 拿到 Transport"定为枚举接缝的职责
+（`Endpoints::open_transport`），并把 collection 查找搬进了 `endpoints.rs`，还在那里留了一句
+注释说键盘的 feature 报文将来要在这儿分支。票 02 的 base 里没有 `endpoints.rs`，于是它把
+feature 报文那条路建在了 `cli::status` 里，连 collection 查找一起扩成了 output / feature 两支。
+位置留好了，东西盖在了别处。
+
+**取的路**：把报文种类搬进 `endpoints.rs`。`ReportKind` 由驱动来答（`report_kind_of(device)`
+经 `driver_for`），`find_collection(endpoint, kind)` 按种类筛，`open_transport` 按种类造对应的
+Transport、超时也从 `ReportKind::OutputAndInput` 里取，不再写死鼠标那一个常量。
+`cli::status` 里票 02 的 `open_transport` / `find_output_collection` / `find_feature_collection` /
+`find_collection` 四个函数因此整组消失，`read_with_driver` 只剩驱动分发本身。
+
+**为什么不能只是机械解冲突**：`present()` 原来用"发得出输出报文"筛在场，而键盘的 vendor
+collection 实测是 `in:0 out:0 feat:65`。照两边原样合并，**键盘会被判成永远不在场**，一条读数
+都取不到——而两边各自的测试都还是绿的：票 02 的用例经假 Transport 直接驱动驱动层，够不到
+枚举；票 04 的用例里只有鼠标。gate 也抓不住。这正是"自动合并成功而结果是错的"那一类，
+Q18 预告的是 `read()` 那一处，这是同一形状的第二处，票 04 没预见到。
+
+**另一条路**：让 `cli::status` 保留票 02 的那套 `open_transport`，`Endpoints::open_transport`
+只管鼠标那条路。那样两张票的代码都不用动，合并最省事；代价是"打开 Endpoint"这件事有两个入口，
+而票 05 的 `Ble` 恰恰要走枚举接缝那一个——它不经过协议驱动，也就没有 `ReportKind` 可言，
+两个入口会让它无处可去。
+
+**推荐**：保持现状（接进接缝）。票 04 的接缝注释本来就把位置留在那里，这只是把东西放回留好的
+位置；而票 05 要加的第三级 Endpoint 是"不经过驱动"的那一种，只有单一入口才容得下它。
+翻案是把四个函数搬回 `cli::status`，关在这次合并的范围内。
+
+**Whose call:** 已定，无需结算——记录在此是因为票 05 / 06 / 07 都要站在这个形状上。
+
+### Q57 —— 身份表里没有 Ble，`identity()` 因此返回 `Option`；空着的蓝牙块要出声
+
+**From:** 编排者，合并票 10（配置自举）与票 05（Ble Endpoint）时
+
+**又一条只在交汇处出现的岔路**——票 10 的 base 是 `ed7a66c`，那时 `EndpointKind` 只有两个变体。
+
+**票 10 自己预言了这一天。** `KnownDevice::identity` 的注释原话：
+
+> 两条身份是两个具名字段加一个穷举 `match`，而不是一个按 `PRIORITY` 下标索引的数组
+> ——后者能省掉这个 `match`，但它假定"每一种 Endpoint 的身份都是 `HidEndpoint`"，
+> 而票 05 的 `Ble` 配的是一个蓝牙地址，不是这个类型。留着 `match`，加上第三种的那一天
+> 编译器会把人指到这里。
+
+编译器确实把人指到了那里。**这次合并的五处冲突和六个编译错误，全是能被工具抓住的那一类**
+——与合并票 02 那次正相反（那次 `present()` 把键盘筛成永不在场，两边测试都绿）。差别就在
+票 10 这类"留着穷举 match"的选择上，它把一次静默错误换成了一条编译错误。
+
+**取的路**：`identity(kind)` 从 `&HidEndpoint` 改成 `Option<&HidEndpoint>`，`Ble => None`。
+调用点用 `filter_map` / `let Some(..) else` 承接。`config_in` 全部改为票 05 的
+`hid_config_in`，"配没配"那一处改用 `is_configured_in`（票 05 特意分开的那个方法，
+理由是前者对 Ble 恒为 None、拿它当判据会把蓝牙从名单里漏掉）。`config_key` 给 Ble 补
+`"bluetooth"`。
+
+**其中一处不是机械适配，是判断**：`config-refresh` 补空缺的循环里，Ble 拿不到身份。
+最省事的写法是 `continue` 跳过，但那会让"蓝牙地址得你自己抄"这句话消失——而票 10 通篇
+守的正是「用户不该在不知情的情况下缺一整条 Endpoint」。所以 Ble 走一条专门的 `notes` 分支，
+说清它为什么补不上（BLE 射频是另一颗芯片，与 dongle 之间没有能缝合的字段）和该去哪儿抄。
+**这同时了结了票 10 的 Q50**（草稿里的 `[device.bluetooth]` 是硬写注释、票 05 落地后该退掉）
+的一半：草稿那半仍然待办，refresh 这半已经会说话了。
+
+**另一条路**：`identity` 保持 `&HidEndpoint`，另给 `EndpointKind` 加一个 HID-only 的清单
+（`HID: [Self; 2]`），所有身份表遍历改走它，`match` 的 `Ble` 分支写 `unreachable!()`。
+省掉一批 `Option` 承接代码；代价是"Ble 不在这张表里"从类型级保证退回成一条靠注释维持的
+约定，而 `unreachable!()` 是运行时 panic。
+
+**推荐**：保持现状（`Option`）。票 05 已经立了"HID-only 的东西显式命名"的惯例
+（`hid_config_in` 与 `is_configured_in` 分成两个方法就是为此），`Option` 是同一条惯例在
+返回值上的样子。翻案关在这次合并的范围内。
+
+**Whose call:** 已定，无需结算——记录在此是因为票 11 要动 `config.rs` 的回写，会读到这些调用点。
 
 ## Settled
 

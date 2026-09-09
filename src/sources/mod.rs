@@ -4,8 +4,12 @@
 //! （output+input 还是 feature、哪个 Report ID、多长的超时）全部被吸收在 Transport
 //! 的实现里，驱动那一侧看到的只是一来一回两串字节。这条接缝也是"不接硬件就能跑
 //! 全部测试"的支点。
+//!
+//! [`level`] 不是协议家族，是这一侧的另一半：驱动把字节变成 [`Reading`]，`level`
+//! 回答"这份 Reading 可信吗、要显示的百分比取自哪里"——两问对每个家族都同一个答案。
 
 pub mod hid_transport;
+pub mod level;
 pub mod vgn_keyboard;
 pub mod vgn_mouse;
 

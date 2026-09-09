@@ -11,6 +11,7 @@ use crate::bluetooth::{self, BleBattery};
 use crate::cli::{config_refresh, resolve_config_path};
 use crate::config::{Config, Device};
 use crate::endpoints::{EndpointKind, EndpointReading, Endpoints, SystemEndpoints};
+use crate::sources::level::{LevelSource, level_for};
 use crate::sources::{Reading, Transport, driver_for};
 
 pub fn run(config_path: Option<PathBuf>) -> Result<()> {
@@ -31,7 +32,7 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     }
     for device in &config.devices {
         let line = match read(device, &endpoints) {
-            Ok(reading) => render(&reading),
+            Ok(reading) => render(&reading, device.level_source),
             // 一台读不到不该拖累别的 Device，把原因印在它自己那一行上。
             Err(e) => format!("读不到 —— {e:#}"),
         };
@@ -208,16 +209,17 @@ fn read_with_driver(
     driver.read_battery(transport)
 }
 
-/// 电量后面那句 Reported Level 不是啰嗦：项目里还有一个由电压查表算出的
-/// Derived Level，两个数可能不一致，而按来源挑哪一个尚未实现。在此之前把来源
-/// 写明白，好过让人以为这就是最终口径。
+/// 电量后面那句 Reported Level / Derived Level 不是啰嗦：项目里有两个来源不同的
+/// 百分比，它们可能不一致，而混用过一次就已经导致过一个错误结论。这一行印的是哪一个，
+/// 取决于这台设备的 `level_source` 和电压落在哪一段（见 `sources::level::level_for`），
+/// 所以必须标出来。
 ///
 /// 末尾那句"来自 X"是另一种来源：同一个 Device 的几条 Endpoint 在不同时刻各自可用，
 /// 不写出来就看不出这一行是插着线读的还是走 2.4G 读的——而"插着线"恰恰是那个最容易
 /// 被误报成离线的时刻。
 ///
 /// `pub` 与 [`read`] 同理：这一行印成什么样是 `status` 的外部行为。
-pub fn render(sourced: &EndpointReading) -> String {
+pub fn render(sourced: &EndpointReading, level_source: LevelSource) -> String {
     let EndpointReading {
         endpoint,
         reading,
@@ -235,9 +237,12 @@ pub fn render(sourced: &EndpointReading) -> String {
         Some(mv) => format!("  {mv} mV"),
         None => String::new(),
     };
+    // 两个百分比里印哪一个，以及"一个都印不出来"。措辞由 [`Level`] 自己的 `Display`
+    // 给出——**Unknown 后面那句解释只有产生它的那条规则说得准**；写在这里等于让呈现层
+    // 替取数层解释因果，Unknown 哪天多了第二个来源，这一行就开始说谎。
+    let level = level_for(reading, level_source);
     format!(
-        "{}%（Reported Level）{charging}{voltage}  {}",
-        reading.reported_level,
+        "{level}{charging}{voltage}  {}",
         source_of(*endpoint, *cache_age_secs),
     )
 }

@@ -7,7 +7,7 @@ mod common;
 use common::FakeTransport;
 use common::fixtures::{
     MOUSE_BATTERY_REQUEST, MOUSE_CHARGING, MOUSE_CMD3_RESPONSE, MOUSE_REPORT_ID, MOUSE_RESTING_95,
-    MOUSE_RESTING_FULL,
+    MOUSE_RESTING_FULL, mouse_frame_with,
 };
 use juicebar::sources::{ReportKind, driver_for, vgn_mouse};
 
@@ -78,11 +78,58 @@ fn parses_a_charging_frame() {
 ///
 /// 这不是假想的情况：dongle 侧的缓冲区保存的是"最近一次应答"，不校验 cmd 回显就
 /// 可能把上一条命令的结果当成电量。
+///
+/// **它必须因为 cmd 回显不对而红/绿，不能因为校验和不过。**票 03 加上校验和校验之后
+/// 这条用例有了第二种变绿的方式，而那一种守的是另一件事。夹具那一帧的末字节是实测
+/// 真值 `0xA9`（`docs/protocol.md` 逐帧验算过），所以它过得了校验和、只倒在 cmd 回显上
+/// ——下面那条 `!contains("校验和")` 就是把这件事钉住的钉子。
 #[test]
 fn rejects_a_response_left_over_from_another_command() {
     let error = read(&MOUSE_CMD3_RESPONSE).unwrap_err().to_string();
 
     assert!(error.contains("cmd"), "错误信息要说清是哪一步不对：{error}");
+    assert!(
+        !error.contains("校验和"),
+        "这一帧的校验和是实测真值，该倒在 cmd 回显上而不是校验和上：{error}"
+    );
+}
+
+/// 校验和对不上的回包不是有效读数。
+///
+/// **回包也带 CRC，算法与请求相同**（`0x55 − sum − reportId`，`docs/protocol.md`
+/// 第 1 节逐帧验算过）。所以"这一帧是不是我们以为的那一帧"协议自己留了字节可以回答
+/// ——而 cmd 回显只认得出"这是别的命令的应答"，认不出"这一帧被写坏了"。
+///
+/// 这里不新增夹具：拿实测的好帧翻掉末字节，得到的正是一帧被写坏的真帧。
+#[test]
+fn rejects_a_frame_whose_checksum_does_not_add_up() {
+    let mut broken = MOUSE_RESTING_FULL;
+    broken[vgn_mouse::FRAME_LEN - 1] ^= 0xFF;
+
+    let error = read(&broken).unwrap_err().to_string();
+
+    assert!(
+        error.contains("校验和"),
+        "错误信息要说清是哪一步不对：{error}"
+    );
+}
+
+/// 帧完整、cmd 回显也对，但里头的电压物理上不可能——照样是读取异常。
+///
+/// 这是**固件漂移**的形状：厂商推一版新固件把某个字段挪了位，帧仍然完整、CRC 仍然
+/// 验通、cmd 回显仍然是 4，而按老下标取出来的仍然是一串看着像数字的字节。校验和与
+/// cmd 回显都拦不住它，只有值域能。
+///
+/// 造帧的办法见 `fixtures::mouse_frame_with`：实测好帧只改两个字段、校验和由被测代码
+/// 自己补上，所以这一帧在结构上无可指摘，只有那个数说不通。
+#[test]
+fn rejects_a_frame_whose_voltage_is_impossible_even_though_it_is_intact() {
+    let error = read(&mouse_frame_with(100, 2000)).unwrap_err().to_string();
+
+    assert!(
+        error.contains("读取异常") && error.contains("2000"),
+        "错误信息要说清是哪个数说不通：{error}"
+    );
 }
 
 /// 读到半截的回包不能被当成有效读数——`ReadFile` 会按真实读到的字节数截断。
