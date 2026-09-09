@@ -9,7 +9,29 @@ use common::fixtures::{
     MOUSE_BATTERY_REQUEST, MOUSE_CHARGING, MOUSE_CMD3_RESPONSE, MOUSE_REPORT_ID, MOUSE_RESTING_95,
     MOUSE_RESTING_FULL,
 };
-use juicebar::sources::vgn_mouse;
+use juicebar::sources::{ReportKind, driver_for, vgn_mouse};
+
+/// 配置里写 `driver = "vgn_mouse"`，取到的就是鼠标那套协议，而且它自己说要走
+/// output + input 报文、等 3000 ms。
+///
+/// 超时是**协议**的性质而不是 HID 的：cmd 4 要走一次到鼠标的空中往返，实测 1000 ms
+/// 内超时过。这里写死 3000 而不是引那个常量——引常量的断言永远不会不同意实现。
+#[test]
+fn is_reachable_by_its_config_name_and_asks_for_output_reports() {
+    let driver = driver_for("vgn_mouse").expect("配置里的驱动名认不出来");
+    let transport = FakeTransport::new(MOUSE_REPORT_ID, [MOUSE_RESTING_FULL.to_vec()]);
+
+    let reading = driver.read_battery(&transport).unwrap();
+
+    assert_eq!(
+        driver.report_kind(),
+        ReportKind::OutputAndInput {
+            read_timeout_ms: 3000
+        }
+    );
+    assert_eq!(reading.reported_level, 100);
+    assert_eq!(transport.sent(), vec![MOUSE_BATTERY_REQUEST.to_vec()]);
+}
 
 /// 只发一帧 cmd 4，且那一帧和实测抓到的逐字节相同。
 ///
@@ -30,8 +52,8 @@ fn parses_a_resting_full_battery_frame() {
     let reading = read(&MOUSE_RESTING_FULL).unwrap();
 
     assert_eq!(reading.reported_level, 100);
-    assert!(!reading.charging);
-    assert_eq!(reading.voltage_mv, 4190);
+    assert_eq!(reading.charging, Some(false));
+    assert_eq!(reading.voltage_mv, Some(4190));
 }
 
 #[test]
@@ -39,8 +61,8 @@ fn parses_a_resting_frame_below_full() {
     let reading = read(&MOUSE_RESTING_95).unwrap();
 
     assert_eq!(reading.reported_level, 95);
-    assert!(!reading.charging);
-    assert_eq!(reading.voltage_mv, 4158);
+    assert_eq!(reading.charging, Some(false));
+    assert_eq!(reading.voltage_mv, Some(4158));
 }
 
 #[test]
@@ -48,8 +70,8 @@ fn parses_a_charging_frame() {
     let reading = read(&MOUSE_CHARGING).unwrap();
 
     assert_eq!(reading.reported_level, 95);
-    assert!(reading.charging);
-    assert_eq!(reading.voltage_mv, 4235);
+    assert_eq!(reading.charging, Some(true));
+    assert_eq!(reading.voltage_mv, Some(4235));
 }
 
 /// 别的命令的应答不能被当成本次结果。

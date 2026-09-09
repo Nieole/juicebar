@@ -29,9 +29,9 @@ pub struct Device {
     pub name: String,
     /// 用哪个协议驱动，见 `src/sources/`。只作用于 HID Endpoint。
     ///
-    /// 存成字符串而不是枚举：配置里可以出现本次编译还没实现的驱动名
-    /// （样例配置就写着 `vgn_keyboard`），那该是取数时报一行"尚未实现"，
-    /// 而不是让整份配置读不动。
+    /// 存成字符串而不是枚举：配置里可以出现本次编译还没实现的驱动名，那该是取数时
+    /// 那一行报"尚未实现"，而不是让整份配置读不动。认得哪些名字见
+    /// `sources::driver_for`。
     pub driver: String,
     /// 经 2.4G 接收器的 Endpoint。接收器自己有一组 VID/PID，与 Device 本体不同。
     #[serde(rename = "wireless_24g")]
