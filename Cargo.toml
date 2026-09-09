@@ -33,8 +33,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.5"
 
 # 格式保留的 TOML 原地编辑，见 docs/adr/0003。程序要往用户手写的配置里补东西
-# （`config-refresh` 填空着的 Endpoint 块，以及票 11 的 `primary` 回写），而 serde 那套的
-# 序列化会把整份文件重新写一遍、洗掉全部注释——这份配置的价值有一半在注释里。
+# （`config-refresh` 填空着的 Endpoint 块，以及 `primary` 的回写，见 `config::pin_primary`），
+# 而 serde 那套的序列化会把整份文件重新写一遍、洗掉全部注释——这份配置的价值有一半在注释里。
 # 只有**写用户手写的那份配置**用它；读配置仍然走 `toml` + serde（读要的是类型化的模型而不是
 # 文档树），而状态文件那一份读写都走 serde——那里没有注释要保。
 toml_edit = "0.25.13"

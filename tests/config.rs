@@ -1,9 +1,10 @@
-//! 配置文件这一头：解析、自举草稿、`config-refresh` 的补全。
+//! 配置文件这一头：解析、自举草稿、`config-refresh` 的补全、`primary` 的回写。
 //!
-//! 三样东西住在同一个模块（`src/config.rs`），所以用例也在同一个文件里。
+//! 四样东西住在同一个模块（`src/config.rs`），所以用例也在同一个文件里。
 
 use juicebar::config::{self, Config};
 use juicebar::hid::HidInfo;
+use juicebar::primary::PrimaryRule;
 use juicebar::sources::level::LevelSource;
 
 /// 造一条"本机枚举得到的 HID collection"。
@@ -913,4 +914,269 @@ fn a_partial_general_section_keeps_the_other_defaults() {
     assert_eq!(general.stale_after, 60);
     assert_eq!(general.very_stale_after, 86_400);
     assert_eq!(general.poll_interval_wired, 30);
+}
+
+// ---------------------------------------------------------------
+// primary 回写：只改那一格
+// ---------------------------------------------------------------
+
+/// 一份**用户手写过的**配置：文件头一句注释、`[general]` 里 `primary` 上方一句注释、
+/// 一个行尾注释、一个被他按自己的坑改过的 `report_id`，两台 Device。
+///
+/// 回写要动的只有 `primary` 那一格，别的每一个字节都得原样活下来。
+const HANDWRITTEN_CONFIG: &str = r#"# 这份配置是我自己写的，一个字都不许动
+[general]
+# 托盘画哪个 Device："lowest" 是当前电量最低的那个
+primary = "lowest"
+poll_interval_wired = 45   # 线上不耗电，我调快了
+
+[[device]]
+id = "dragonfly3"
+name = "我给它起的名字"
+driver = "vgn_mouse"
+
+  # 这一块我按自己的坑改过 report_id
+  [device.wireless_24g]
+  vid = 0x391D
+  pid = 0x1A05
+  usage_page = 0xFF02
+  usage = 0x0002
+  report_id = 9
+
+[[device]]
+id = "neon75"
+name = "VGN Neon75"
+driver = "vgn_keyboard"
+
+  [device.wireless_24g]
+  vid = 0x3151
+  pid = 0x5038
+  usage_page = 0xFFFF
+  usage = 0x0002
+  report_id = 0
+"#;
+
+/// 用户在菜单里选了另一台，那个选择要落到 `primary` 这一格里——而**下一次启动读的就是它**，
+/// 所以这里读回来的方式与真正启动时同一条（`Config::parse`），不是去文本里找字符串。
+#[test]
+fn primary_writeback_pins_the_device_the_user_chose() {
+    let pinned = config::pin_primary(HANDWRITTEN_CONFIG, "neon75").unwrap();
+
+    assert!(pinned.changed, "从 lowest 换成一台具体设备是改动");
+    let config = Config::parse(&pinned.text).expect("回写之后必须还解析得动");
+    assert_eq!(
+        config.general.primary,
+        PrimaryRule::Pinned("neon75".to_string()),
+        "重启后生效的就是这一格"
+    );
+}
+
+/// 已经钉在这一台上时**一个字节都不写**。原地编辑本身是保格式的，但"没改动却重写一遍文件"
+/// 会白白改掉文件的修改时间，也让人以为程序动过它——`config-refresh` 守的是同一条。
+#[test]
+fn primary_writeback_writes_nothing_when_it_is_already_that_device() {
+    let once = config::pin_primary(HANDWRITTEN_CONFIG, "neon75").unwrap();
+    let twice = config::pin_primary(&once.text, "neon75").unwrap();
+
+    assert!(!twice.changed, "同一个 id 钉第二遍不是改动");
+    assert_eq!(twice.text, once.text, "什么都没改的时候不该把文件重写一遍");
+}
+
+/// `primary` **那一行行尾**的注释也是用户写的。它住在那个**值**的 decor 里，不在键的
+/// decor 里——照"新造一个值塞进这个键"的写法写，这一句会跟着旧值一起消失，而键上方那句
+/// 却安然无事。两处注释因此各要一条断言。
+#[test]
+fn primary_writeback_keeps_the_comment_the_user_left_on_that_very_line() {
+    let before = r#"[general]
+# 上面这句在键的 decor 里
+primary = "lowest"  # 而这句在值的 decor 里，先用自动的，等我想清楚再钉
+
+[[device]]
+id = "neon75"
+name = "VGN Neon75"
+driver = "vgn_keyboard"
+"#;
+
+    let pinned = config::pin_primary(before, "neon75").unwrap();
+
+    for kept in [
+        "# 上面这句在键的 decor 里",
+        "# 而这句在值的 decor 里，先用自动的，等我想清楚再钉",
+    ] {
+        assert!(
+            pinned.text.contains(kept),
+            "注释被洗掉了：{kept}\n回写之后是：\n{}",
+            pinned.text
+        );
+    }
+}
+
+/// 用户的 `[general]` 在，但里面压根没写 `primary`——它有缺省值（`"lowest"`），不写也跑得动。
+/// 回写要把这一项**补进那张表**，而不是无声地什么都没干。
+#[test]
+fn primary_writeback_adds_the_setting_when_the_general_section_has_none() {
+    let before = r#"[general]
+low_battery = 15   # 我这只鼠标撑不到 20 就该充了
+
+[[device]]
+id = "neon75"
+name = "VGN Neon75"
+driver = "vgn_keyboard"
+"#;
+
+    let pinned = config::pin_primary(before, "neon75").unwrap();
+
+    assert!(pinned.changed);
+    assert_eq!(
+        Config::parse(&pinned.text).unwrap().general.primary,
+        PrimaryRule::Pinned("neon75".to_string())
+    );
+    assert!(
+        pinned
+            .text
+            .contains("low_battery = 15   # 我这只鼠标撑不到 20 就该充了"),
+        "同一张表里别的项一个字都不许动：\n{}",
+        pinned.text
+    );
+}
+
+/// 一份压根没有 `[general]` 的配置也要回写得进去——那一节整节缺席时每一项都取缺省值
+/// （`falls_back_to_the_documented_intervals_when_general_is_absent`），所以只写了设备的
+/// 配置是跑得动的。
+///
+/// 两条断言各守一件事：**建出来的得是一张真表**（不是行内表），以及**它得排在所有
+/// `[[device]]` 前面**。两件事各自为什么要紧，写在 `config::pin_primary` 里建表那一段
+/// 注释上，不在这里抄第二遍。
+#[test]
+fn primary_writeback_creates_the_general_section_when_the_config_has_none() {
+    let two = format!(
+        "{ONE_DEVICE}\n[[device]]\nid = \"neon75\"\nname = \"VGN Neon75\"\ndriver = \"vgn_keyboard\"\n"
+    );
+
+    let pinned = config::pin_primary(&two, "neon75").unwrap();
+
+    let config = Config::parse(&pinned.text).expect("新建 [general] 之后必须还解析得动");
+    assert_eq!(
+        config.general.primary,
+        PrimaryRule::Pinned("neon75".to_string())
+    );
+    assert_eq!(config.devices.len(), 2, "一台设备都不许丢");
+    assert_eq!(config.devices[0].dongle_24g.as_ref().unwrap().report_id, 8);
+
+    assert!(
+        !pinned.text.contains("general = {"),
+        "建出来的该是一张真表，不是行内表：\n{}",
+        pinned.text
+    );
+    let general_at = pinned.text.find("[general]").expect("那一节要真的写出来");
+    let first_device_at = pinned.text.find("[[device]]").unwrap();
+    assert!(
+        general_at < first_device_at,
+        "新建的 [general] 要排在所有 [[device]] 前面：\n{}",
+        pinned.text
+    );
+}
+
+/// 不在册的 id **一个字节都不写**。写下去的话，下一次启动 `primary::select` 交回的是
+/// `PinnedNotFound`：一行都没标，命令行上多一句"配置里 primary 钉的 id 不在登记的 Device
+/// 里"。让程序自己写出那种配置，等于替用户造一个他没犯的错——而菜单只可能把在册的设备列出来，
+/// 所以这里收到一个不在册的 id 是**调用方的 bug**，该当场说出来。
+#[test]
+fn primary_writeback_refuses_an_id_that_is_not_a_registered_device() {
+    let error = config::pin_primary(HANDWRITTEN_CONFIG, "dragonfly4")
+        .expect_err("不在册的 id 不该写进去")
+        .to_string();
+
+    assert!(
+        error.contains("dragonfly4"),
+        "得说清是哪个 id 不在册：{error}"
+    );
+}
+
+/// 一台 id 恰好叫 `lowest` 的 Device **钉不住**：那个词先被当成"电量最低的那个"这条规则
+/// （`config.example.toml` 原话——"id 恰好叫 lowest 的 Device 钉不住，换个 id"）。
+///
+/// 照样写下去是最难发现的那一种错：用户在菜单里点了这一台，配置里出现的却是一条规则，
+/// 而规则多数时候恰好也选中它。所以宁可当场拒绝。
+#[test]
+fn primary_writeback_refuses_a_device_whose_id_is_the_rule_word() {
+    let before = r#"[[device]]
+id = "lowest"
+name = "起名起得不巧"
+driver = "vgn_mouse"
+"#;
+
+    let error = config::pin_primary(before, "lowest")
+        .expect_err("钉不住的就别写进去")
+        .to_string();
+
+    assert!(error.contains("lowest"), "得说清是哪个 id：{error}");
+}
+
+/// 票面最后一条：一份**带注释、含用户手改值**的配置，回写之后两者都原样保留。
+/// ADR-0003 划死的边界就落在这一条上——程序自己管的字段只有 `primary` 那一格。
+///
+/// 除了列举几处该活下来的东西，还**逐行比一遍**：只有 `primary` 那一行允许不同，行数也不许变。
+/// 逐行这一半才是真正守边界的那一半——列举只能证明我想到的那几处没丢。
+#[test]
+fn primary_writeback_touches_nothing_else_the_user_wrote() {
+    let pinned = config::pin_primary(HANDWRITTEN_CONFIG, "neon75").unwrap();
+
+    for kept in [
+        "# 这份配置是我自己写的，一个字都不许动",
+        "# 托盘画哪个 Device：\"lowest\" 是当前电量最低的那个",
+        "poll_interval_wired = 45   # 线上不耗电，我调快了",
+        "name = \"我给它起的名字\"",
+        "  # 这一块我按自己的坑改过 report_id",
+        "report_id = 9",
+    ] {
+        assert!(pinned.text.contains(kept), "不该动的东西被动了：{kept}");
+    }
+
+    let before: Vec<&str> = HANDWRITTEN_CONFIG.lines().collect();
+    let after: Vec<&str> = pinned.text.lines().collect();
+    assert_eq!(before.len(), after.len(), "行数都不该变");
+    let mut changed_lines = 0;
+    for (before, after) in before.iter().zip(&after) {
+        if before == after {
+            continue;
+        }
+        changed_lines += 1;
+        assert!(
+            before.starts_with("primary = "),
+            "只该动 primary 那一行，却动了：{before} → {after}"
+        );
+    }
+    assert_eq!(changed_lines, 1, "而 primary 那一行确实该变");
+
+    // 用户手改过的那个值，读回来还是他写的那个（程序知道的是 8）。
+    let config = Config::parse(&pinned.text).unwrap();
+    assert_eq!(config.devices[0].dongle_24g.as_ref().unwrap().report_id, 9);
+}
+
+/// 用户把 `[general]` 写成了**行内表**（`general = { … }`）。那是合法 TOML，而回写这条路上
+/// `doc["general"]["primary"]` 走的是 `toml_edit` 的 `IndexMut`——它对认不出的形状是
+/// `.expect("index not found")`，也就是 panic。一个往用户配置里写字的程序 panic 是最糟的
+/// 结局，所以这条形状要有人钉着。
+#[test]
+fn primary_writeback_survives_a_general_section_written_as_an_inline_table() {
+    let before = r#"general = { primary = "lowest", low_battery = 15 }
+
+[[device]]
+id = "neon75"
+name = "VGN Neon75"
+driver = "vgn_keyboard"
+"#;
+
+    let pinned = config::pin_primary(before, "neon75").unwrap();
+
+    assert_eq!(
+        Config::parse(&pinned.text).unwrap().general.primary,
+        PrimaryRule::Pinned("neon75".to_string())
+    );
+    assert!(
+        pinned.text.contains("low_battery = 15"),
+        "同一张行内表里别的项一样不许动：\n{}",
+        pinned.text
+    );
 }
