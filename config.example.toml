@@ -2,45 +2,92 @@
 #
 # 首次运行时程序会扫描本机、生成一份带注释的草稿，通常不需要从这份样例抄。
 # 这里保留一份是为了说明每一项的含义。
+#
+# 术语（Device / Endpoint / Reading）见仓库根目录的 CONTEXT.md。
 
 [general]
-# 托盘图标显示哪个设备。
+# 托盘图标显示哪个 Device。
 #   "lowest"      —— 当前电量最低的那个（默认，也是推荐值）
-#   "<设备 id>"   —— 钉死某个具体设备，取下面 [[device]] 的 id
+#   "<设备 id>"   —— 钉死某个具体 Device，取下面 [[device]] 的 id
+#
+# 注意：这一项**程序会回写**。在托盘菜单里切换主设备时，新选择会写回这里，
+# 好让配置始终是单一事实来源。程序只动这一项和下面被注释掉的 Endpoint 块，
+# 你手写过的值一概不碰（见 docs/adr/0003）。
+#
+# 参与 "lowest" 比较的只有新鲜且可信的 Reading——陈旧、失联、Unknown 的都不参与，
+# 全都不可信时保持上次的选择。正在充电的 Device 照常参与（绿色已经能表达"不是风险"）。
 primary = "lowest"
 
-# 轮询间隔（秒）。两条来源成本差着几个数量级，所以分开配：
-#   2.4G 要往设备发无线包，省着来；蓝牙是纯本地属性读取，几乎免费。
+# 轮询间隔（秒）。三条 Endpoint 的成本差着数量级，所以分开配：
+#   Wired      走线取数，设备还在外部供电，不耗它的电，可以勤一点
+#   Dongle24G  要往设备发无线包，耗设备的电，省着来
+#   Ble        纯本地属性读取，几乎免费
+poll_interval_wired = 30
 poll_interval_24g = 60
 poll_interval_bluetooth = 10
 
-# 低电量阈值（百分比），图标数字变红。
+# 低电量阈值（百分比），图标数字变红。可被单个 [[device]] 覆盖。
 low_battery = 20
 
-# 数据陈旧阈值（秒）。蓝牙侧读到的是 Windows 缓存，可能过期几个月。
+# 数据陈旧阈值（秒）。**只对 Ble 生效**——它读的是 Windows 缓存，可能过期几个月。
+#
+# HID（Wired / Dongle24G）不用这两项：它们的新鲜度由轮询间隔自动推导（3 倍间隔即视为陈旧）。
+# 这样改了轮询间隔阈值会自动跟着走，不会出现"改了间隔忘了改阈值"的不一致。
 stale_after = 3600          # 超过标灰
-very_stale_after = 86400    # 超过只显示日期，不显示百分比
+very_stale_after = 86400    # 超过只显示日期，不显示百分比；也是持久化读数的丢弃期限
 
 # 列表里是否显示未在 [[device]] 中登记的 BLE 设备。
 show_unknown_ble = false
 
-# 检测到厂商上位机在运行时暂停 2.4G 轮询，避免抢同一条 HID 通道。
+# 检测到厂商上位机在运行时暂停轮询，避免抢同一条 HID 通道。
+#
+# 这不是防御性设计：键盘 dongle 的 feature 报文是一块**保存最近一次应答的共享缓冲区**，
+# 两个程序同时发命令会互相覆盖对方的应答，双方都读到错数据。HUB 同样驱动有线设备，
+# 所以 Wired 和 Dongle24G 都要停；Ble 是纯本地属性读取，不存在竞争，照常。
 pause_when_vendor_hub_running = true
 vendor_hub_processes = ["VGN VHUB.exe"]
 
 
 # ---------------------------------------------------------------
-# 设备。每个物理设备一条，把它的 2.4G 身份和蓝牙身份合并在一起。
+# Device。每个物理设备一条，把它的几条 Endpoint 合并在一起。
 #
-# 为什么必须手写：两套身份之间没有任何字段能自动缝合。鼠标的 dongle
-# 是 VID 0x391D，而它自己的 BLE 射频是 VID 0x3554——两颗不同的芯片，
-# 各有各的 VID，也没有共同的序列号。跑 `juicebar scan` 看候选。
+# 为什么必须手写：几套身份之间没有任何字段能自动缝合。鼠标的 dongle 是 VID 0x391D，
+# 而它自己的 BLE 射频是 VID 0x3554——两颗不同的芯片，各有各的 VID，也没有共同的序列号。
+# 跑 `juicebar scan` 看候选。
+#
+# 取数时按 Wired > Dongle24G > Ble 依次尝试，遇第一个成功即停；靠前的失败会在**同一个周期内**
+# 立刻降级，不用等下一轮（拔线那一刻 Wired 直接从枚举里消失，降级代价几乎为零）。
 # ---------------------------------------------------------------
 
 [[device]]
 id = "dragonfly3"
 name = "Dragonfly 3 Master+"
-driver = "vgn_mouse"              # 用哪个协议驱动，见 src/sources/
+
+# 用哪个协议驱动，见 src/sources/。**只作用于 HID Endpoint**——Ble 走的是 Windows
+# 属性读取，不经过驱动。一个驱动覆盖该协议家族的所有 Endpoint 种类，内部自行分支
+# （键盘的 Dongle24G 与 Wired 命令不同，鼠标的相同）。
+driver = "vgn_mouse"
+
+# 电量数值取自哪里。缺省为 "auto"。
+#   "auto"      电压 > 4110 mV 时用固件自报值，其余区间用电压查表
+#   "reported"  一律用固件自报值
+#
+# 为什么不是全局项：想切的理由是"某型号固件 level 不准"，本质上是设备相关的，
+# 不该有一个能连带影响其它设备的全局默认。理由见 docs/adr/0002。
+level_source = "auto"
+
+# 可选，覆盖 [general] 的全局值。键鼠的电池容量和耗电差很多，同一个 20%
+# 对两者的实际紧急程度并不相等。
+low_battery = 15
+
+  # 插线时才出现的 Endpoint。它是一个**独立于 dongle 的设备**，插线后与 dongle 并存，
+  # 不是替换关系。注意 pid 与下面的 0x1A05 只差一个字符。
+  [device.wired]
+  vid = 0x391D
+  pid = 0x1005
+  usage_page = 0xFF02
+  usage = 0x0002
+  report_id = 8
 
   [device.wireless_24g]
   vid = 0x391D
@@ -48,6 +95,10 @@ driver = "vgn_mouse"              # 用哪个协议驱动，见 src/sources/
   usage_page = 0xFF02             # 认 collection 用 usage 而不是 MI_xx 路径，
   usage = 0x0002                  # 后者在不同机器上可能不一样
   report_id = 8
+
+  # 可选。设备自己的无线地址（鼠标 cmd 3 能问出来，HUB 也拿它当缓存键）。
+  # 只有同时接了两台**同型号**设备、VID/PID 完全相同时才需要写，用来区分谁是谁。
+  address = "97d435"
 
   [device.bluetooth]
   address = "e452430072a9"        # MAC 是唯一可靠的实例标识
@@ -57,12 +108,24 @@ driver = "vgn_mouse"              # 用哪个协议驱动，见 src/sources/
 id = "neon75"
 name = "VGN Neon75"
 driver = "vgn_keyboard"
+level_source = "auto"
+
+  # 这块自举时扫不到，所以留成注释：键盘只有把机身上的模式开关拨到**有线档**才会
+  # 枚举出 0x502F；仅插线而开关还在 2.4G 档时，线只负责充电，数据仍走 2.4G。
+  #
+  # 拨到有线档并插线后，跑 `juicebar config-refresh` 会自动补全这一块。
+  # [device.wired]
+  # vid = 0x3151
+  # pid = 0x502F
+  # usage_page = 0xFFFF
+  # usage = 0x0002
+  # report_id = 0
 
   [device.wireless_24g]
   vid = 0x3151
   pid = 0x5038
-  usage_page = 0xFFFF             # 待实测：可能是 MI_02 (usage 0x0002)
-  usage = 0x0002                  # 也可能是 MI_01&Col05 (usage 0x0001)
+  usage_page = 0xFFFF
+  usage = 0x0002
   report_id = 0
 
   [device.bluetooth]

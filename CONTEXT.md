@@ -1,0 +1,55 @@
+# juicebar
+
+把无线键鼠的电量常驻在 Windows 任务栏。本文件只是词汇表——统一项目里那些被混用的词，
+不记录任何实现决策（那些在 `docs/adr/`，协议细节在 `docs/protocol.md`）。
+
+## Language
+
+### 设备与通路
+
+**Device**：
+一个物理外设，比如一把键盘或一只鼠标。配置里一条 `[[device]]` 就是一个 Device，有稳定的 id 和
+人类可读的 name。
+_Avoid_: 用"设备"泛指 dongle、有线本体或蓝牙身份——那些是 Endpoint。
+
+**Endpoint**：
+Device 上一条能取到读数的通路。同一个 Device 通常有多条，彼此独立地可用或不可用。
+_Avoid_: 通道、接口、数据源、collection。
+
+**Dongle24G**：
+经 2.4G 接收器的 Endpoint。接收器自己有一组 VID/PID，和 Device 本体不是同一组。
+
+**Wired**：
+Device 通过 USB 线直连时出现的 Endpoint。它有**独立于 Dongle24G 的另一组 VID/PID**，插线时作为
+一个额外的设备被枚举出来，而不是替换掉原来那个。
+
+**Ble**：
+经蓝牙的 Endpoint。数据取自 Windows 缓存而非当场问设备，因此天然可能陈旧。
+
+### 读数
+
+**Reading**：
+从某一条 Endpoint 上取到的一次结果，包含电量、充电状态、电压、取得时刻，以及它来自哪条 Endpoint。
+一个 Device 在同一时刻可能有多份来自不同 Endpoint 的 Reading。
+_Avoid_: 用"电量"指代整个结果。
+
+**Reported Level**：
+设备固件自己上报的电量百分比。
+_Avoid_: 裸用"level"——项目里有两个来源不同的百分比，混用过一次就已经导致过错误结论。
+
+**Derived Level**：
+由电压经查表加插值算出的电量百分比。与 Reported Level 是两个独立的数，可能不一致。
+
+**Stale**：
+形容一份 Reading 的取得时刻距今已久到不该再当作现状。只有 Ble 的 Reading 会陈旧到有实际影响。
+_Avoid_: 过期、失效。
+
+**Unknown**：
+一份 Reading 的电量字段无法采信的状态——譬如设备回了一个不可区分于"字段未就绪"的值。
+Unknown 不等于 0%，也不等于设备离线。
+
+### 呈现
+
+**Primary Device**：
+托盘图标当下画的那一个 Device。可以钉死某一个，也可以按规则动态选出。
+_Avoid_: 主设备、默认设备、当前设备混用。
