@@ -204,6 +204,87 @@ fn a_last_known_reading_is_marked_stale_even_when_it_was_taken_seconds_ago() {
     );
 }
 
+/// 一份**真读出来的**充电态历史值：半小时前插着线读一趟，记进 `LastKnown`。
+///
+/// 下面两条用例都不手搓这一份，因为**带着充电态的历史值只可能这么来**：`Ble` 那一格恒为
+/// `None`（Windows 的电量属性里没有充电这一项），两条 HID 读的又都是当场——所以"HID 读过、
+/// 然后从状态文件里捞回来"是这个断言够得着用户的唯一入口，也正是它们要证的那条路。
+fn charging_recorded_half_an_hour_ago(
+    device: &juicebar::config::Device,
+    general: &juicebar::config::General,
+) -> LastKnown {
+    // level 95 / 充电中 / 4235 mV。
+    let mut last_known = LastKnown::default();
+    let plugged_in = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [(EndpointKind::Wired, vec![MOUSE_CHARGING.to_vec()])],
+    );
+    let live = readout::read_or_last_known(
+        device,
+        &plugged_in,
+        None,
+        &mut last_known,
+        general,
+        NOW.minus_secs(1_800),
+    )
+    .expect("插着线读得到");
+    assert_eq!(live.provenance, Provenance::JustRead, "这一趟是真读到的");
+    last_known
+}
+
+/// 退到上次已知值的那一行**不印充电态那一格**——电量与电压照印。
+///
+/// 电量与电压是**那一刻的测量值**，行尾"已陈旧，上次已知值"已经把它们限定完整了；而充电态是
+/// 一个**现在时的状态断言**，它恰恰在设备被收进抽屉、或者刚插上线的那一刻变掉。整格不印走的
+/// 是这个仓库**已有**的规矩（键盘那两格不印就是这么守住的），而不是一个过去时的措辞——理由
+/// 全文在 `cli::status::render` 那一格的注释上，不在这里抄第二遍。
+#[test]
+fn does_not_claim_a_device_is_charging_when_the_number_is_a_last_known_value() {
+    let device = mouse_with_both_endpoints();
+    let general = default_general();
+    let mut last_known = charging_recorded_half_an_hour_ago(&device, &general);
+
+    // 这一趟设备收进了抽屉：一条 Endpoint 都不在场，于是退到刚记下的那一份。
+    let put_away = FakeEndpoints::new(MOUSE_REPORT_ID, []);
+    let row = readout::read_or_last_known(&device, &put_away, None, &mut last_known, &general, NOW)
+        .expect("手上有上次已知值");
+    assert_eq!(row.provenance, Provenance::LastKnown, "这一趟是捞出来的");
+
+    let line = line_of_taken(&row.reading, row.provenance);
+    assert!(
+        line.contains("95%（Reported Level）"),
+        "上次是多少电照旧看得到：{line}"
+    );
+    assert!(line.contains("4235 mV"), "上次是多少电压照旧看得到：{line}");
+    assert!(
+        line.contains("已陈旧，上次已知值"),
+        "行尾那句标注照旧：{line}"
+    );
+    assert!(
+        !line.contains("充电"),
+        "但不许断言它此刻在充电——整格不印，也不改成过去时措辞：{line}"
+    );
+}
+
+/// 当场读到的那一行**照印充电态**——这一票只碰"这个数从哪儿来的"那一维。
+///
+/// 与上面那一条成对：「说不上来的那一格整个不印」一改很容易改过头，而插着线的那一刻恰恰是
+/// 充电态唯一被实测过、也唯一说得准的时刻。
+#[test]
+fn still_says_charging_on_a_line_it_read_this_round() {
+    let wired = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [(EndpointKind::Wired, vec![MOUSE_CHARGING.to_vec()])],
+    );
+
+    let line = render(&mouse_with_both_endpoints(), &wired);
+
+    assert!(line.contains("充电中"), "当场读到的正是充电中：{line}");
+    assert!(line.contains("95%（Reported Level）"), "电量照印：{line}");
+    assert!(line.contains("4235 mV"), "电压照印：{line}");
+    assert!(!line.contains("上次已知值"), "它不是历史值：{line}");
+}
+
 /// 一台**没有更新时间戳**的蓝牙设备不该看着像刚问出来的。
 ///
 /// `bluetooth.rs` 的原话：`age_secs` 为 `None` 是"这台设备根本没有更新时间戳"。它和
@@ -592,6 +673,66 @@ fn keeps_the_last_known_value_while_paused_and_says_which_it_is() {
         endpoints.opens().is_empty(),
         "拿历史值顶上不代表可以去打开通道：{:?}",
         endpoints.opens()
+    );
+}
+
+/// 暂停里**退到历史值**的那一行同样不印充电态那一格。
+///
+/// 判据是"这一趟到底有没有读到这个状态"，而 [`Provenance`] 答的正是这个问题：这一趟两条 HID
+/// 都让开了、又没有别的 Endpoint 顶上，所以我们**不知道**它此刻在不在充电。那与失联是同一个
+/// 认知位置，而印出去反而更糟——失联时设备多半关着、或者在抽屉里，暂停时它**就在手边**，
+/// 用户可能一分钟前刚给它插上线，屏幕上却还挂着半小时前那句"充电中"。
+///
+/// **暂停不止这一种形态**：`Ble` 顶上的那一趟是当场读到的（`JustRead`，见
+/// [`says_it_paused_even_when_the_ble_cache_answered`]），那一行没有充电态靠的是另一条理由
+/// ——`Ble` 压根不给这一项。所以"暂停"本身不是判据，"这一趟读到了没有"才是。
+///
+/// 这一条守的是一个原先**没有任何用例守着**的决定：上面那条暂停用例的历史值本来就带着
+/// `charging: Some(true)`，却一个字都没断言过充电态——谁把这一格悄悄改回去都不会红。
+/// 暂停**那一维**照旧一个字不动：末尾那句标注、以及失联那句话的暂停分支（parking lot Q98）。
+#[test]
+fn does_not_claim_a_paused_device_is_charging_either() {
+    let device = mouse_with_both_endpoints();
+    let general = default_general();
+    let hub = vendor_hub_running();
+    // 半小时前上位机还没起来，那一趟是插着线真读到的。
+    let mut last_known = charging_recorded_half_an_hour_ago(&device, &general);
+
+    // 这一趟上位机在跑：两条 HID 都在场、回包也都备着，可一条都没被问——它们让开了。
+    let yielded = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [
+            (EndpointKind::Wired, vec![MOUSE_CHARGING.to_vec()]),
+            (EndpointKind::Dongle24G, vec![MOUSE_CHARGING.to_vec()]),
+        ],
+    );
+    let row = readout::read_or_last_known(
+        &device,
+        &yielded,
+        Some(&hub),
+        &mut last_known,
+        &general,
+        NOW,
+    )
+    .expect("暂停期间该拿出最后读数");
+    assert_eq!(row.provenance, Provenance::LastKnown, "拿出来的是历史值");
+
+    let line = line_of_row(&device, &row, &general);
+    assert!(
+        line.contains("95%（Reported Level）") && line.contains("4235 mV"),
+        "上次是多少电、多少电压照旧看得到：{line}"
+    );
+    assert!(
+        line.contains("已陈旧，上次已知值"),
+        "行尾那句标注照旧：{line}"
+    );
+    assert!(
+        line.contains("已暂停（VGN VHUB.exe 正在运行）"),
+        "暂停那一维一个字不动：{line}"
+    );
+    assert!(
+        !line.contains("充电"),
+        "但这一趟没问过它在不在充电，那一格就整个不印：{line}"
     );
 }
 
