@@ -8,8 +8,9 @@
 
 mod common;
 
-use common::scanned_ble;
+use common::{NOW, scanned_ble};
 use juicebar::endpoints::{EndpointKind, EndpointReading};
+use juicebar::sources::Reading;
 
 /// 一台扫到的 BLE 设备读成一份什么样的 Reading。
 ///
@@ -21,7 +22,7 @@ use juicebar::endpoints::{EndpointKind, EndpointReading};
 fn a_ble_cache_reading_says_nothing_about_charging_or_voltage() {
     let cached = scanned_ble("VGN Neon75", "f4ee2553b27e", Some(48), Some(7200));
 
-    let reading = EndpointReading::from_ble_cache(&cached).unwrap();
+    let reading = EndpointReading::from_ble_cache(&cached, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Ble);
     assert_eq!(reading.reading.reported_level, 48);
@@ -39,7 +40,7 @@ fn a_ble_cache_reading_says_nothing_about_charging_or_voltage() {
 fn a_ble_device_without_a_battery_property_is_not_a_reading_of_zero() {
     let cached = scanned_ble("某个耳机", "aabbccddeeff", None, Some(10));
 
-    let error = EndpointReading::from_ble_cache(&cached)
+    let error = EndpointReading::from_ble_cache(&cached, NOW)
         .unwrap_err()
         .to_string();
 
@@ -47,4 +48,51 @@ fn a_ble_device_without_a_battery_property_is_not_a_reading_of_zero() {
         error.contains("没有电量属性"),
         "说清是读不到而不是 0：{error}"
     );
+}
+
+/// **取得时刻是"这个数描述的那一刻"，不是"我们跑这次查询的那一刻"。**
+///
+/// 两条 HID 是当场往返，两者重合。`Ble` 读的是 Windows 攒的缓存：那个百分比描述的是
+/// `cache_age_secs` 秒之前的设备，所以取得时刻要往回退那么多秒。把它记成"此刻"，
+/// 一个 10 天前的数字就会看着像刚问出来的——`CONTEXT.md` 说 Stale 形容的是「取得时刻
+/// 距今已久」，而按"查询时刻"记，`Ble` 就永远陈旧不了，那句定义会落空。
+#[test]
+fn a_reading_is_stamped_with_the_moment_its_number_was_true() {
+    let hid = EndpointReading::from_hid(
+        EndpointKind::Wired,
+        Reading {
+            reported_level: 95,
+            charging: Some(true),
+            voltage_mv: Some(4180),
+        },
+        NOW,
+    );
+    assert_eq!(hid.taken_at, Some(NOW), "当场往返，就是此刻");
+    assert_eq!(hid.cache_age_secs, None, "HID 没有缓存这回事");
+
+    // 票 05 的真机记录：那台鼠标的缓存是 10 天前的。
+    let cached = scanned_ble(
+        "Dragonfly 3 Master+",
+        "e452430072a9",
+        Some(95),
+        Some(864_000),
+    );
+    let ble = EndpointReading::from_ble_cache(&cached, NOW).unwrap();
+    assert_eq!(ble.taken_at, Some(NOW.minus_secs(864_000)));
+    assert_eq!(ble.taken_at.unwrap().utc_date_text(), "2026-03-15");
+}
+
+/// 没有更新时间戳的 BLE 设备**说不出**取得时刻。
+///
+/// `bluetooth.rs` 的原话：`age_secs` 为 `None` 是"这台设备根本没有更新时间戳"。拿"此刻"
+/// 顶上去，一台没时间戳的设备就会看着像当场读的——两种 `None` 混起来正是这张票要防的
+/// 假的安全感。空着，陈旧判定那一步才分得清（它把这一种判成陈旧）。
+#[test]
+fn a_ble_device_without_an_update_timestamp_has_no_known_moment() {
+    let cached = scanned_ble("VGN Neon75", "f4ee2553b27e", Some(100), None);
+
+    let reading = EndpointReading::from_ble_cache(&cached, NOW).unwrap();
+
+    assert_eq!(reading.taken_at, None);
+    assert_eq!(reading.cache_age_secs, None);
 }

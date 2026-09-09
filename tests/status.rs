@@ -14,12 +14,31 @@ use common::fixtures::{
     MOUSE_REPORT_ID, MOUSE_RESTING_FULL, mouse_frame_with,
 };
 use common::{
-    FakeEndpoints, keyboard_with_dongle_endpoint, mouse_with_all_three_endpoints,
-    mouse_with_both_endpoints, scanned_ble,
+    FakeEndpoints, NOW, default_general, keyboard_with_dongle_endpoint,
+    mouse_with_all_three_endpoints, mouse_with_both_endpoints, scanned_ble,
 };
 use juicebar::cli::status;
+use juicebar::clock::Timestamp;
 use juicebar::config::Config;
-use juicebar::endpoints::EndpointKind;
+use juicebar::endpoints::{EndpointKind, EndpointReading};
+use juicebar::sources::level::LevelSource;
+use juicebar::staleness::Staleness;
+
+/// 一份读数在 [`NOW`] 这一刻印成的那一行。
+///
+/// 把"判一次 + 排一次版"收成一句：这个文件关心的是**那一行印成什么样**，而阈值本身怎么
+/// 从轮询间隔推导出来在 `tests/staleness.rs`。
+///
+/// `level_source` 取缺省的 `Auto`：这里的用例关心 Endpoint 合成、来源标注和陈旧那几档，
+/// 不是"两个百分比里印哪一个"——后者在 `tests/level.rs` 里单独断言。要按 Device 指定
+/// 来源的用例走下面那个 [`render`]。
+fn line_of(reading: &EndpointReading) -> String {
+    status::render(
+        reading,
+        LevelSource::Auto,
+        &Staleness::assess(reading, &default_general(), NOW),
+    )
+}
 
 /// 插着线的鼠标：两条 Endpoint 都在场时用 Wired。
 ///
@@ -35,7 +54,7 @@ fn reads_from_the_wired_endpoint_when_it_is_present() {
         ],
     );
 
-    let reading = status::read(&mouse_with_both_endpoints(), &endpoints).unwrap();
+    let reading = status::read(&mouse_with_both_endpoints(), &endpoints, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Wired);
     // `Some(true)` 而不是"真值"：票 02 把这两项改成了 Option，因为键盘答不上来。
@@ -58,7 +77,7 @@ fn does_not_disturb_the_dongle_24g_endpoint_while_wired_is_present() {
         ],
     );
 
-    status::read(&mouse_with_both_endpoints(), &endpoints).unwrap();
+    status::read(&mouse_with_both_endpoints(), &endpoints, NOW).unwrap();
 
     assert_eq!(
         endpoints.transport(EndpointKind::Wired).sent(),
@@ -87,7 +106,7 @@ fn prefers_wired_even_when_the_enumeration_lists_dongle_24g_first() {
         ],
     );
 
-    let reading = status::read(&mouse_with_both_endpoints(), &endpoints).unwrap();
+    let reading = status::read(&mouse_with_both_endpoints(), &endpoints, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Wired);
 }
@@ -107,7 +126,7 @@ fn falls_back_to_dongle_24g_when_wired_disappears_from_the_enumeration() {
         ],
     );
     assert_eq!(
-        status::read(&device, &plugged).unwrap().endpoint,
+        status::read(&device, &plugged, NOW).unwrap().endpoint,
         EndpointKind::Wired
     );
 
@@ -117,7 +136,7 @@ fn falls_back_to_dongle_24g_when_wired_disappears_from_the_enumeration() {
         [(EndpointKind::Dongle24G, vec![MOUSE_RESTING_FULL.to_vec()])],
     );
 
-    let reading = status::read(&device, &unplugged).unwrap();
+    let reading = status::read(&device, &unplugged, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Dongle24G);
     assert_eq!(reading.reading.reported_level, 100);
@@ -137,7 +156,7 @@ fn degrades_to_dongle_24g_within_the_same_cycle_when_wired_fails() {
         ],
     );
 
-    let reading = status::read(&mouse_with_both_endpoints(), &endpoints).unwrap();
+    let reading = status::read(&mouse_with_both_endpoints(), &endpoints, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Dongle24G);
     assert_eq!(reading.reading.reported_level, 100);
@@ -162,7 +181,7 @@ fn reports_a_lost_device_only_after_every_endpoint_failed() {
         ],
     );
 
-    let error = status::read(&mouse_with_both_endpoints(), &endpoints)
+    let error = status::read(&mouse_with_both_endpoints(), &endpoints, NOW)
         .unwrap_err()
         .to_string();
 
@@ -198,7 +217,7 @@ fn falls_back_to_the_ble_cache_when_both_hid_endpoints_fail() {
         Some(300),
     ));
 
-    let reading = status::read(&mouse_with_all_three_endpoints(), &endpoints).unwrap();
+    let reading = status::read(&mouse_with_all_three_endpoints(), &endpoints, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Ble);
     assert_eq!(reading.reading.reported_level, 62);
@@ -223,7 +242,7 @@ fn does_not_read_the_ble_cache_while_a_hid_endpoint_works() {
         Some(86_400),
     ));
 
-    let reading = status::read(&mouse_with_all_three_endpoints(), &endpoints).unwrap();
+    let reading = status::read(&mouse_with_all_three_endpoints(), &endpoints, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Wired);
     assert_eq!(reading.reading.reported_level, 95);
@@ -251,7 +270,7 @@ fn prefers_dongle_24g_over_the_ble_cache() {
         Some(86_400),
     ));
 
-    let reading = status::read(&mouse_with_all_three_endpoints(), &endpoints).unwrap();
+    let reading = status::read(&mouse_with_all_three_endpoints(), &endpoints, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Dongle24G);
     assert_eq!(reading.reading.reported_level, 100);
@@ -290,7 +309,7 @@ fn reads_the_ble_cache_even_when_the_driver_is_not_implemented() {
         Some(42),
     ));
 
-    let reading = status::read(&device, &endpoints).unwrap();
+    let reading = status::read(&device, &endpoints, NOW).unwrap();
 
     assert_eq!(reading.endpoint, EndpointKind::Ble);
     assert_eq!(reading.reading.reported_level, 71);
@@ -302,7 +321,7 @@ fn reads_the_ble_cache_even_when_the_driver_is_not_implemented() {
 fn says_no_endpoint_is_present_rather_than_that_reading_failed() {
     let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []);
 
-    let error = status::read(&mouse_with_both_endpoints(), &endpoints)
+    let error = status::read(&mouse_with_both_endpoints(), &endpoints, NOW)
         .unwrap_err()
         .to_string();
 
@@ -319,7 +338,7 @@ fn lists_the_ble_endpoint_among_the_ones_this_device_configured() {
     // 一条都不在场：两条 HID 没枚举到，本机的 BLE 设备里也没有这个地址。
     let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []);
 
-    let error = status::read(&mouse_with_all_three_endpoints(), &endpoints)
+    let error = status::read(&mouse_with_all_three_endpoints(), &endpoints, NOW)
         .unwrap_err()
         .to_string();
 
@@ -363,8 +382,8 @@ fn the_status_line_says_which_endpoint_it_came_from() {
 /// 还把那份缓存多久以前更新的一起带出来——`scan` 子命令的提示里早写过这句话：
 /// 「蓝牙读数是 Windows 的缓存，『多久前』那一列才是它的真实可信度」。
 ///
-/// 这条用例只断言"说得出来"，**不涉及任何陈旧判定**：阈值、变灰、只显示日期，
-/// 连同 Clock 接缝都是票 06 的活。
+/// 这条用例只断言"说得出来"。阈值怎么推导在 `tests/staleness.rs`，标注与"只显示日期"
+/// 在下面那几条——这一条守的是来源那一段本身的措辞。
 #[test]
 fn the_status_line_tells_the_ble_cache_apart_from_the_two_hid_endpoints() {
     let device = mouse_with_all_three_endpoints();
@@ -375,10 +394,7 @@ fn the_status_line_tells_the_ble_cache_apart_from_the_two_hid_endpoints() {
         Some(62),
         Some(300),
     ));
-    let line = status::render(
-        &status::read(&device, &cached).unwrap(),
-        device.level_source,
-    );
+    let line = render(&device, &cached);
     assert!(line.contains("62%"), "电量照常显示：{line}");
     assert!(line.contains("Ble"), "该标出来源 Endpoint：{line}");
     assert!(
@@ -400,11 +416,201 @@ fn the_status_line_tells_the_ble_cache_apart_from_the_two_hid_endpoints() {
         MOUSE_REPORT_ID,
         [(EndpointKind::Wired, vec![MOUSE_CHARGING.to_vec()])],
     );
-    let line = status::render(&status::read(&device, &wired).unwrap(), device.level_source);
+    let line = render(&device, &wired);
     assert!(line.contains("来自 Wired"), "来源那一段照旧：{line}");
     assert!(
         !line.contains("缓存"),
         "HID 是当场往返，没有缓存这回事：{line}"
+    );
+}
+
+/// 陈旧的读数被**明确标注**，与新鲜的分得清。
+///
+/// 这是这张票的全部意义：蓝牙缓存可能过期几个月，在最需要它的时候给出假的安全感。
+/// 一个不带任何标注的 `62%` 和一个刚问出来的 `62%` 长得一模一样，而它们的可信度差着
+/// 一个数量级。
+#[test]
+fn the_status_line_marks_a_stale_reading_apart_from_a_fresh_one() {
+    let device = mouse_with_all_three_endpoints();
+
+    // 五分钟前的缓存：缺省 stale_after 是一小时，还算现状。
+    let fresh = FakeEndpoints::new(MOUSE_REPORT_ID, []).with_ble_cache(scanned_ble(
+        "Dragonfly 3 Master+",
+        "e452430072a9",
+        Some(62),
+        Some(300),
+    ));
+    let reading = status::read(&device, &fresh, NOW).unwrap();
+    let line = line_of(&reading);
+    assert!(line.contains("62%"), "新鲜的读数照常显示百分比：{line}");
+    assert!(
+        !line.contains("陈旧"),
+        "五分钟前的缓存不该被标成陈旧：{line}"
+    );
+
+    // 两小时前的缓存：超过 stale_after，数字照印但要标出来。
+    let stale = FakeEndpoints::new(MOUSE_REPORT_ID, []).with_ble_cache(scanned_ble(
+        "Dragonfly 3 Master+",
+        "e452430072a9",
+        Some(62),
+        Some(7_200),
+    ));
+    let reading = status::read(&device, &stale, NOW).unwrap();
+    let line = line_of(&reading);
+    assert!(line.contains("62%"), "这一档数字还是照印：{line}");
+    assert!(line.contains("陈旧"), "但要明确标注出来：{line}");
+    assert!(line.contains("2 小时前"), "「多久前」也照印：{line}");
+}
+
+/// 一台**没有更新时间戳**的蓝牙设备不该看着像刚问出来的。
+///
+/// `bluetooth.rs` 的原话：`age_secs` 为 `None` 是"这台设备根本没有更新时间戳"。它和
+/// 两条 HID 那个恒为 `None` 的缓存年龄是两个完全不同的意思，混起来正好在最危险的方向上
+/// 撒谎——说不出这个数多旧的时候，最像真的那个说法恰恰是"刚取的"。
+#[test]
+fn a_ble_reading_without_a_timestamp_does_not_look_freshly_taken() {
+    let device = mouse_with_all_three_endpoints();
+
+    let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []).with_ble_cache(scanned_ble(
+        "Dragonfly 3 Master+",
+        "e452430072a9",
+        Some(62),
+        None,
+    ));
+
+    let reading = status::read(&device, &endpoints, NOW).unwrap();
+    let line = line_of(&reading);
+
+    assert!(line.contains("无时间戳"), "说清它没有时间戳：{line}");
+    assert!(line.contains("陈旧"), "说不出多旧的读数不算新鲜：{line}");
+}
+
+/// 每一行都说得出"多久前"——包括两条当场往返的 HID。
+///
+/// 今天 `status` 是一次性命令，HID 那一格永远是"0 秒前"；写出来是因为常驻轮询之后
+/// 它才是真话，而那时**看不出这一行是几秒前还是几分钟前取的**才是真正的问题。
+#[test]
+fn every_status_line_says_how_long_ago_the_reading_was_taken() {
+    let device = mouse_with_both_endpoints();
+
+    let wired = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [(EndpointKind::Wired, vec![MOUSE_CHARGING.to_vec()])],
+    );
+    let reading = status::read(&device, &wired, NOW).unwrap();
+    let line = line_of(&reading);
+
+    assert!(line.contains("0 秒前"), "当场问出来的也要说一句：{line}");
+    assert!(!line.contains("陈旧"), "刚取的读数不是陈旧的：{line}");
+    assert!(
+        !line.contains("缓存"),
+        "HID 是当场往返，没有缓存这回事：{line}"
+    );
+}
+
+/// 超过 `very_stale_after` 的读数**只显示日期，不显示百分比**。
+///
+/// 票 05 的真机实测：`Dragonfly 3 Master+  95%（Reported Level）  来自 Ble（Windows 缓存，
+/// 10 天前）`。缺省 `very_stale_after` 是一天，那一行早就过了，却还照常印着 95%——那个
+/// 数字是 3 月 15 日的，而它看上去和现在的电量没有任何区别。这条用例就是把那一行拦下来。
+///
+/// 一起被拿掉的还有充电态与电压：几个月前"在充电"是同一句假话的另一半。
+#[test]
+fn shows_only_the_date_when_a_reading_is_older_than_very_stale_after() {
+    let device = mouse_with_all_three_endpoints();
+
+    let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []).with_ble_cache(scanned_ble(
+        "Dragonfly 3 Master+",
+        "e452430072a9",
+        Some(95),
+        Some(10 * 86_400),
+    ));
+
+    let reading = status::read(&device, &endpoints, NOW).unwrap();
+    let line = line_of(&reading);
+
+    assert!(!line.contains("95"), "百分比不该再出现：{line}");
+    assert!(!line.contains('%'), "一个百分号都不该有：{line}");
+    // NOW 是 2026-03-25，往回退十天。
+    assert!(line.contains("2026-03-15"), "换上那个数是哪天的：{line}");
+    assert!(line.contains("10 天前"), "「多久前」照印：{line}");
+    assert!(line.contains("已陈旧"), "照旧明确标注：{line}");
+}
+
+/// 刚好卡在阈值上的读数**还不算**陈旧。
+///
+/// 边界要有一侧，写下来是因为两侧都说得通，而"超过才算"是配置注释的原话（"超过标灰"）。
+#[test]
+fn a_reading_exactly_at_the_threshold_is_still_current() {
+    let device = mouse_with_all_three_endpoints();
+
+    // 缺省 stale_after = 3600：整整一小时前的缓存还不算陈旧。
+    let at_threshold = FakeEndpoints::new(MOUSE_REPORT_ID, []).with_ble_cache(scanned_ble(
+        "Dragonfly 3 Master+",
+        "e452430072a9",
+        Some(62),
+        Some(3_600),
+    ));
+    let reading = status::read(&device, &at_threshold, NOW).unwrap();
+    let line = line_of(&reading);
+    assert!(!line.contains("陈旧"), "整一小时还不算超过：{line}");
+
+    // 多一秒就算。
+    let past_threshold = FakeEndpoints::new(MOUSE_REPORT_ID, []).with_ble_cache(scanned_ble(
+        "Dragonfly 3 Master+",
+        "e452430072a9",
+        Some(62),
+        Some(3_601),
+    ));
+    let reading = status::read(&device, &past_threshold, NOW).unwrap();
+    let line = line_of(&reading);
+    assert!(line.contains("已陈旧"), "多一秒就算：{line}");
+}
+
+/// `Ble` 那一格的"多久前"是 **Windows 自己报的**秒数，不经过 Clock 换算回去。
+///
+/// parking lot Q21 给本票的原话：「Ble 的"多久以前"已经从 `cache_age_secs` 带出来了……
+/// 它是 Windows 报的秒数、**不经过 Clock**（那份时间戳是系统攒的，本机时钟只能用来算差值，
+/// 而 `bluetooth.rs` 已经算过了）」。
+///
+/// 两者平时看不出差别：取得时刻就是 `当下 − cache_age_secs`，减回去必然还是原数。所以这条
+/// 用例**故意让判定的"当下"比取数的晚**——那时"来源那一段印的是哪一个数"才现形。真机上
+/// 两个"当下"是同一个（`run` 一台设备只问一次时钟），这条用例守的是那个换算别偷偷长回来。
+#[test]
+fn the_ble_age_is_the_number_windows_reported_not_one_recomputed_from_the_clock() {
+    let device = mouse_with_all_three_endpoints();
+
+    // Windows 说这份缓存 3000 秒（50 分钟）之前更新过。
+    let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []).with_ble_cache(scanned_ble(
+        "Dragonfly 3 Master+",
+        "e452430072a9",
+        Some(62),
+        Some(3_000),
+    ));
+    let reading = status::read(&device, &endpoints, NOW).unwrap();
+
+    // 取数在 NOW，判定在一千秒之后：此刻这份读数已经四千秒了，超过缺省的 stale_after。
+    // 用 as_unix_secs / from_unix_secs 往前挪，而不是给 Timestamp 加一个只有用例用得到的
+    // `plus_secs`——生产接口不为用例的方便而长。
+    let later = Timestamp::from_unix_secs(NOW.as_unix_secs() + 1_000);
+    let line = status::render(
+        &reading,
+        LevelSource::Auto,
+        &Staleness::assess(&reading, &default_general(), later),
+    );
+
+    assert!(
+        line.contains("50 分钟前"),
+        "来源那一段印 Windows 报的那个数：{line}"
+    );
+    assert!(
+        !line.contains("66 分钟前"),
+        "不该拿本机时钟把它重算一遍：{line}"
+    );
+    // 判定用的**是**晚一点的那个当下——陈旧与否看的是取得时刻距今多久。
+    assert!(
+        line.contains("已陈旧"),
+        "四千秒已经过了 stale_after：{line}"
     );
 }
 
@@ -559,7 +765,7 @@ fn an_implausible_frame_reads_as_an_anomaly_rather_than_a_number() {
         )],
     );
 
-    let line = status::read(&mouse_with_both_endpoints(), &endpoints)
+    let line = status::read(&mouse_with_both_endpoints(), &endpoints, NOW)
         .unwrap_err()
         .to_string();
 
@@ -569,8 +775,10 @@ fn an_implausible_frame_reads_as_an_anomaly_rather_than_a_number() {
 
 /// 取一次数并印成一行。
 fn render(device: &juicebar::config::Device, endpoints: &FakeEndpoints) -> String {
+    let reading = status::read(device, endpoints, NOW).unwrap();
     status::render(
-        &status::read(device, endpoints).unwrap(),
+        &reading,
         device.level_source,
+        &Staleness::assess(&reading, &default_general(), NOW),
     )
 }

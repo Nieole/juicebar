@@ -4,10 +4,15 @@
 //! **读**走 `toml` + serde，要的是类型化的模型；**写**走 `toml_edit`，要的是保住用户
 //! 写下的注释（见 `docs/adr/0003`）。
 //!
-//! 结构里只有**当前用得上**的字段。TOML 里其余的键（`poll_interval_*`、`[general]` 里
-//! 还没人读的那几项 …）会被静默忽略，等要用它们的那一步再加进来——这样用户的配置不必随
-//! 实现进度反复改写，样例配置也可以先于代码写全。**草稿照样把它们写出来**，因为草稿是给人
-//! 读的：一个还没实现的开关，用户也该知道它存在。
+//! 结构里只有**当前用得上**的字段。TOML 里其余的键（`[general]` 里还没人读的那几项 …）
+//! 会被静默忽略，等要用它们的那一步再加进来——这样用户的配置不必随实现进度反复改写，
+//! 样例配置也可以先于代码写全。**草稿照样把它们写出来**，因为草稿是给人读的：一个还没
+//! 实现的开关，用户也该知道它存在。
+//!
+//! 一处有意的例外：`poll_interval_bluetooth`。三个轮询间隔是**一组**，而另两个是两条 HID
+//! 陈旧阈值的来源（3 倍，见 `crate::staleness`），只解析其中两个会让下一个读这个结构的人
+//! 以为漏了一个。它本身不参与陈旧判定——`Ble` 读的是 Windows 缓存，轮询得多勤也不会让缓存
+//! 里的数字变新——真正读它的是常驻轮询那一步。
 //!
 //! 字段名沿用 `CONTEXT.md` 的词：配置里的 `wireless_24g` 块在代码里叫
 //! `dongle_24g`，因为它描述的正是 Dongle24G 这条 Endpoint。
@@ -34,7 +39,12 @@ pub struct Config {
 }
 
 /// `[general]` 里**当前用得上**的那几项。
-#[derive(Debug, Clone, Default, Deserialize)]
+///
+/// **缺省值逐字段给，不靠 `#[derive(Default)]`。**那个派生会把每个间隔归零，而 3 × 0
+/// 秒的陈旧阈值意味着每一份读数在取到的同一刻就已经陈旧——一份没写 `[general]` 的配置
+/// 会因此让整个工具把所有读数都标成不可信。缺省的那几个数与 `config.example.toml` 的
+/// 注释是同一份。
+#[derive(Debug, Clone, Deserialize)]
 pub struct General {
     /// 列表里是否显示未在 `[[device]]` 里登记的 BLE 设备。
     ///
@@ -43,6 +53,67 @@ pub struct General {
     /// 埋掉。它是一条**独立的输出维度**，不是某个 Device 那一行上的事。
     #[serde(default)]
     pub show_unknown_ble: bool,
+    /// Wired 的轮询间隔，秒。走线取数，设备还在外部供电，不耗它的电，可以勤一点。
+    ///
+    /// 它同时**决定 Wired 的陈旧阈值**（3 倍，见 `crate::staleness`）：改了间隔阈值
+    /// 自动跟着走，不会出现"改了间隔忘了改阈值"的不一致——所以 HID 那两级不另设阈值
+    /// 配置项。
+    #[serde(default = "default_poll_interval_wired")]
+    pub poll_interval_wired: u64,
+    /// Dongle24G 的轮询间隔，秒。要往设备发无线包，耗设备的电，省着来。
+    ///
+    /// 与 `poll_interval_wired` 同理，它也是 Dongle24G 那一级陈旧阈值的来源。
+    #[serde(default = "default_poll_interval_24g")]
+    pub poll_interval_24g: u64,
+    /// Ble 的轮询间隔，秒。纯本地属性读取，几乎免费。
+    ///
+    /// **它不参与陈旧判定**：那一级读的是 Windows 攒的缓存，读得多勤也不会让缓存里的
+    /// 数字变新——它的新鲜度是 `stale_after` / `very_stale_after` 的事。
+    #[serde(default = "default_poll_interval_bluetooth")]
+    pub poll_interval_bluetooth: u64,
+    /// 陈旧阈值，秒：取得时刻距今超过这么久，读数就被标注为陈旧。**只对 Ble 生效。**
+    #[serde(default = "default_stale_after")]
+    pub stale_after: u64,
+    /// 陈旧得不该再显示数字的阈值，秒：超过它就只说这个数是哪一天的，不显示百分比。
+    ///
+    /// **只对 Ble 生效**；票 08 另拿它当持久化读数的丢弃期限。
+    #[serde(default = "default_very_stale_after")]
+    pub very_stale_after: u64,
+}
+
+fn default_poll_interval_wired() -> u64 {
+    30
+}
+
+fn default_poll_interval_24g() -> u64 {
+    60
+}
+
+fn default_poll_interval_bluetooth() -> u64 {
+    10
+}
+
+fn default_stale_after() -> u64 {
+    3_600
+}
+
+fn default_very_stale_after() -> u64 {
+    86_400
+}
+
+impl Default for General {
+    /// 整节 `[general]` 缺席时的取值。走的是逐字段 `#[serde(default = …)]` 用的同一批
+    /// 函数——两处各写一份缺省是这个结构最容易出的错，共用一份就出不了。
+    fn default() -> Self {
+        Self {
+            show_unknown_ble: false,
+            poll_interval_wired: default_poll_interval_wired(),
+            poll_interval_24g: default_poll_interval_24g(),
+            poll_interval_bluetooth: default_poll_interval_bluetooth(),
+            stale_after: default_stale_after(),
+            very_stale_after: default_very_stale_after(),
+        }
+    }
 }
 
 /// 一个物理外设。它的几条 Endpoint 合在这一条下面。

@@ -71,6 +71,10 @@ impl BleBattery {
 /// 电量和这个秒数，没有整台 [`BleBattery`]（它不是 `Copy`）。两处印的是同一件事，
 /// 措辞得是同一份——`scan` 说"多久前那一列才是它的真实可信度"，`status` 那一行不该
 /// 换个说法。
+///
+/// 名字里没有 BLE，也不该有：`status` 现在**三条 Endpoint 都印"多久前"**，两条 HID 那一格
+/// 的秒数由取得时刻与当下相减得来（见 `cli::status::source_of`）。这个函数只管把一个秒数
+/// 说成人话，不管那个秒数是谁的。
 pub fn age_text(age_secs: Option<u64>) -> String {
     match age_secs {
         None => "无时间戳".into(),

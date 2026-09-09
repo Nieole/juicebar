@@ -816,6 +816,137 @@ Q18 预告的是 `read()` 那一处，这是同一形状的第二处，票 04 �
 
 **Whose call:** 已定，无需结算——记录在此是因为票 11 要动 `config.rs` 的回写，会读到这些调用点。
 
+### Q26 —— 取得时刻加成 `EndpointReading.taken_at: Option<Timestamp>`（**票 08 与票 09 都要站在这上面**）
+
+**From:** 票 06（Clock 接缝与陈旧判定）
+
+**票面点名要记的那处岔路。** `Reading` 和 `EndpointReading` 两处文档注释都写着"取得时刻由
+Clock 接缝那一步（票 06）补上"，但加在哪、叫什么、什么类型留给了本票。
+
+**取的路**：`EndpointReading` 多一个字段 `taken_at: Option<Timestamp>`，`Timestamp` 是
+`src/clock.rs` 里一个包着 **Unix 纪元秒**的 newtype（`from_unix_secs` / `as_unix_secs`，
+`const fn`，`Copy` + `Ord`）。两个构造器各多收一个 `now: Timestamp`
+（`from_hid(endpoint, reading, now)`、`from_ble_cache(cached, now)`），`trait Endpoints` 的
+`read_ble` 也跟着多收一个（只有那一级要它，理由见下），`cli::status::read` 多收一个
+`&dyn Clock` 并在整条链路上**只问一次**"现在几点"。
+
+**语义上最要紧的一句：`taken_at` 是"这个数描述的那一刻"，不是"我们跑这次查询的那一刻"。**
+两条 HID 当场往返，两者重合；`Ble` 记的是 `now - cache_age_secs`。按查询时刻记的话 `Ble`
+永远陈旧不了，而 `CONTEXT.md` 偏偏说「只有 Ble 的 Reading 会陈旧到有实际影响」——那句定义会
+当场落空。`cache_age_secs` **原样留着**（Windows 给的原始数字，来源那一段印它），
+`taken_at` 是由它换算出来的规范化字段：**来源那一段印的仍是 `cache_age_secs` 本身**
+（Q21 给本票的原话：Ble 的"多久以前"不经过 Clock），只有两条 HID 那一格的秒数由取得时刻与
+当下相减得来——它们没有"缓存年龄"这回事。
+
+`Option` 而不是裸 `Timestamp`：那台 BLE 设备没有更新时间戳时（`bluetooth.rs` 的原话）就是
+说不出来。拿 `now` 顶上去会让它看着像当场读的——正是本票要防的假的安全感。**`None` 不是
+"新鲜"的同义词**：陈旧判定把这一种判成 `Stale`（见 Q29 末段）。
+
+**另一条路**：不存字段，每次由 `endpoint` + `cache_age_secs` + 当下**推**出来。改动面小得多
+（`read` 不用收时钟，15 处用例一行不动）。**为什么没走**：票 08 要把读数写盘、重启之后读回来
+比较，那时 `cache_age_secs` 相对新的"当下"已经没有意义，推出来的时刻会让一份存了三天的读数
+看着像刚取的。取得时刻必须**存**，不能算。
+
+**推荐**：保持现状。**给票 08**：写盘就写 `as_unix_secs()`，读回来 `from_unix_secs()`，
+`Option` 的两种情形都要能落盘（缺字段 = `None`）。**给票 09**：筛"只有新鲜且可信的参与
+lowest 比较"用 `Staleness::freshness == Freshness::Fresh`，别自己比时刻——本票**故意没有**
+预先加一个 `is_fresh()` 便利方法，因为本票一处都用不上它，而一个没人调的 pub 方法是替下一张
+票做决定。翻案（改名、改类型、改成推导）关在这三张票之间，代价是改一个字段加两个构造器。
+
+**波及面（合并时会撞上）**：`tests/status.rs` 里 17 处 `status::read(…)` 各多一个 `NOW`
+参数，`tests/endpoints.rs` 里 2 处 `from_ble_cache` 各多一个 `NOW`，`tests/common/mod.rs` 的
+假枚举 `read_ble` 跟着改签名，共用的 `NOW` 与 `default_general()` 也落在那个文件里。
+**都是机械改动**，但票 03 若也动了 `tests/status.rs`，那 17 行会逐行冲突。
+
+### Q27 —— Clock 接缝只在链路顶上被问一次，往下只传 `Timestamp`
+
+**From:** 票 06（Clock 接缝与陈旧判定）
+
+**取的路**：`trait Clock { fn now(&self) -> Timestamp; }`，实现 `SystemClock`（一次
+`GetSystemTimeAsFileTime`）。**接缝只出现在 `cli::status::run` 里**——一个 Device 问一次
+时钟，那一个"当下"被取数（`read(device, endpoints, now)`）与陈旧判定
+（`Staleness::assess(&reading, general, now)`）共用。往下全是收 `Timestamp` 的纯函数。
+
+同一条决定的另一半：`render` 的签名由 `render(&EndpointReading)` 变成
+`render(&EndpointReading, &Staleness)`。**判定在上游做完，`render` 退回成纯排版**：不问配置、
+不问时钟。票 09 的 Primary 选择要的也是 `Staleness` 这个值，而不是一行字。
+
+`read_ble` 为什么也要收 `now`：接缝这一侧是唯一知道那份缓存有多旧的地方（Q21 的原话），
+而"多旧"换成绝对时刻就得有个当下。两条 HID 的取得时刻由取数那一步盖，所以 `open_transport`
+不收——这个不对称与 Q21 记的那个同源。
+
+**另一条路（先走了、被 code review 打回来的那条）**：让 `read` 收 `&dyn Clock`，与仓库另两条
+接缝（`Transport`、`Endpoints`）的 `&dyn` 用法齐平，用例注入一个 `FakeClock`。**它是错的，
+不只是啰嗦**：`read` 内部问一次得到 now₁，`run` 回头为了判定又问一次得到 now₂，而几条
+Endpoint 依次试下来会花掉真实时间——spec 记着鼠标超时 3000 ms，两条 HID 各超时一次再落到
+Ble，那一行印出来就不是"0 秒前"而是"6 秒前"，一份当场读到的读数凭空老了六秒。假时钟不走表，
+**两条轴的 review 各自独立抓到了这一处**，而用例一条都没红。
+
+**推荐**：保持现状。一个"当下"是一次取数周期的属性，把它当值传下去，多问一次这件事就**表示
+不出来**。代价是没有任何用例注入 `Clock`——`FakeClock` 因此删掉了，用例直接喂字面量
+`common::NOW`。那不是覆盖上的缺口而是更硬的保证：接缝之下的代码**碰不到系统时钟**，连一个
+假的都不需要。trait 留着是因为常驻轮询（第 7、8 步）与票 08 的持久化都要拿着一个时钟跨周期
+用，那时需要的正是一个能注入的对象。翻案是把 `now: Timestamp` 换回 `&dyn Clock` 并让
+`run` 只问一次，关在本票内。
+
+### Q28 —— "只显示日期"按 UTC 算，不收日期库、不问本机时区
+
+**From:** 票 06（Clock 接缝与陈旧判定）
+
+**取的路**：`Timestamp::utc_date_text()`，Howard Hinnant 的 `civil_from_days` 十来行整数
+运算，印 `YYYY-MM-DD`。**不收 `chrono` / `time`**，也不走 `windows` crate 已有的
+`GetLocalTime` / `SystemTimeToTzSpecificLocalTime`。
+
+**另一条路（两条）**：收一个日期库；或者用 Win32 换成**本机时区**的日期。后者是更贴用户的
+那一个——日期是日历上的事，UTC+8 的人在本地 00:30 会看到"昨天"。
+
+**推荐**：保持现状，但这一条是三条里最该被翻的。理由是这个日期**只在读数超过
+`very_stale_after`（缺省一天）时才印得出来**，那时它要传达的是"这个数不是现在的"，差一天
+相对于那个信号是噪声；换来的是它是纯函数，用例断言得到确切字符串（`1970-01-01`、
+`2026-03-15`），不问系统时区、不多一个依赖。托盘那一步若要把日期印在气泡里给人读，
+那时本地时区就值那点代价了。翻案是换掉一个函数体（外加一条"用例改成断言形状而不是断言
+确切日期"的连带），关在本票内。
+
+### Q29 —— 两条 HID 没有 VeryStale 这一档，且"说不出取得时刻"落在 Stale
+
+**From:** 票 06（Clock 接缝与陈旧判定）
+
+**取的路**：`StalenessPolicy { stale_after_secs, very_stale_after_secs: Option<u64> }`。
+HID 的 `very_stale_after_secs` 是 `None`——**那一档在两条 HID 上不存在**。票面只给了 HID
+一个阈值（3 × 轮询间隔），`config.example.toml` 也写明那两个配置项只对 Ble 生效。
+
+**另一条路**：给 HID 也编一个第二档（比如 30 × 间隔）。三级 Endpoint 的呈现于是齐整，
+而票 08 那份持久化读数（重启后读回来的有线读数可能是几天前的）也会被同一条规则挡住。
+
+**推荐**：保持现状。拿 3 × 间隔当第二档是不能的：一份 91 秒前、间隔 30 秒的有线读数会立刻
+只剩一个日期，而它其实是一分半钟前当场问出来的。另编一个倍数就是**引入一个票面和配置都
+没有的数**。**给票 08**：它的验收框里"超过 `very_stale_after` 的持久化读数被丢弃"是在
+读回来那一步丢，不是在这里判——所以旧到那个地步的 HID 读数根本活不到 `render`，这一档
+在 HID 上确实用不着。翻案是给 `from_poll_interval` 填一个 `Some(...)`，一行。
+
+（`render` 里那个 `match` 起初写了 `_` 通配分支，等于让上面这句"波及一个 match"的承诺落空
+——加一档时编译器不会指过来。code review 的标准轴抓到了，现在三档各写一支。）
+
+**同一处的第二个旋钮**：`verdict(None, now)` 交 `Stale`，而不是 `Fresh`、也不是第四个变体。
+`Fresh` 是明确的说谎（替设备编一个它没给的时间戳）；第四个变体（`Undated`？）站得住，
+但 `VeryStale` 那一档的表现是"印日期"，而这一种恰恰**连日期都说不出来**，所以它天然属于
+"照印数字 + 明确标注"那一档。翻案是加一个变体，波及 `render` 的一个 `match`。
+
+### Q30 —— `stale_after` 注释里的"标灰"在 CLI 里落成一句文字标注
+
+**From:** 票 06（Clock 接缝与陈旧判定）
+
+**取的路**：`config.example.toml` 写的是"`stale_after = 3600` # 超过标灰"。`status` 是一行
+纯文本，于是"标灰"落成末尾一句 `已陈旧`（第二档 `已陈旧，不显示百分比`，多的半句交代那个
+百分比去哪了）。**没有引入 ANSI 颜色。**
+
+**另一条路**：用 ANSI 转义真的把那一段变暗。视觉上更接近注释里的原话，也更不占宽度。
+
+**推荐**：保持现状。`status` 的输出会被重定向、会被别的东西 grep，嵌一串转义码是在为一个
+终端的样子牺牲输出的可用性；而"标灰"那句话本来是对着**托盘图标**说的（那是它真正的归宿），
+不是对着这一行。措辞按 `CONTEXT.md` 的 Stale 走，两档共用同一个"陈旧"——那一条的 _Avoid_
+正是"过期、失效"。翻案是改一个返回 `&'static str` 的函数，关在本票内。
+
 ## Settled
 
 <!-- 记录连同它的处置一起挪到这里 -->

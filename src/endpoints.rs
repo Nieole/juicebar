@@ -11,6 +11,7 @@
 use anyhow::{Result, anyhow};
 
 use crate::bluetooth::{self, BleBattery};
+use crate::clock::Timestamp;
 use crate::config::{BluetoothEndpoint, Device, HidEndpoint};
 use crate::hid::{self, HidInfo};
 use crate::sources::hid_transport::{FeatureReportTransport, OutputReportTransport};
@@ -109,8 +110,7 @@ impl std::fmt::Display for EndpointKind {
 ///
 /// `CONTEXT.md` 说的 Reading 是"电量、充电状态、电压、取得时刻，以及来自哪条
 /// Endpoint"——它是分层拼起来的：[`Reading`] 是驱动从一帧里能解析出来的那部分，
-/// **来源 Endpoint 由这一步补上**，取得时刻由 Clock 接缝那一步（票 06）补上，
-/// 也补在这里。
+/// **来源 Endpoint 与取得时刻都由这一步补上**（取得时刻要一个"当下"，来自 Clock 接缝）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EndpointReading {
     /// 这份读数是从哪条 Endpoint 上取到的。
@@ -123,19 +123,35 @@ pub struct EndpointReading {
     /// `Ble` 这一侧的 `None` 是另一个意思——`bluetooth.rs` 的原话：这台设备根本没有
     /// 更新时间戳。哪一种由 `endpoint` 区分。
     ///
-    /// 本票只把它带出来、印在来源那一段里，**不据它做任何陈旧判定**：阈值
-    /// （`stale_after` / `very_stale_after`）、变灰、只显示日期，连同 Clock 接缝
-    /// 都是票 06 的活。
+    /// 它是 Windows 交出来的**原始数字**，陈旧判定不直接读它——判定读的是
+    /// [`Self::taken_at`]，那个数由这一个换算出来。留着它是因为它比换算结果更原始：
+    /// "Windows 说这份缓存 10 天前更新过"是来源那一段要印的话。
     pub cache_age_secs: Option<u64>,
+    /// 这份读数**所描述的那一刻**——`CONTEXT.md` 说的"取得时刻"。
+    ///
+    /// 注意它不是"我们跑这次查询的那一刻"。两条 HID 是当场往返，两者重合；`Ble` 读的是
+    /// Windows 攒的缓存，那个百分比描述的是 `cache_age_secs` 秒**之前**的设备，所以这里
+    /// 记的是往回退过的时刻。按查询时刻记，`Ble` 就永远陈旧不了，而 `CONTEXT.md` 偏偏说
+    /// 「只有 Ble 的 Reading 会陈旧到有实际影响」——那句定义会当场落空。
+    ///
+    /// `None` 是"说不出这个数是什么时候的"，目前只有一个来源：那台 BLE 设备根本没有更新
+    /// 时间戳（`bluetooth.rs` 的原话）。**它不是"新鲜"的同义词**——陈旧判定把这一种判成
+    /// 陈旧，因为说它新鲜就是替设备编一个它没给的时间戳。
+    ///
+    /// 陈旧判定在 `crate::staleness`。票 08（持久化）要把这个时刻写盘再读回来
+    /// （`Timestamp::as_unix_secs` / `from_unix_secs` 就是为此留的），票 09（Primary 选择）
+    /// 要拿它筛"只有新鲜且可信的参与比较"。
+    pub taken_at: Option<Timestamp>,
 }
 
 impl EndpointReading {
-    /// 一次 HID 往返读到的读数。当场问出来的，没有缓存年龄可言。
-    pub fn from_hid(endpoint: EndpointKind, reading: Reading) -> Self {
+    /// 一次 HID 往返读到的读数。当场问出来的，没有缓存年龄可言，取得时刻就是 `now`。
+    pub fn from_hid(endpoint: EndpointKind, reading: Reading, now: Timestamp) -> Self {
         Self {
             endpoint,
             reading,
             cache_age_secs: None,
+            taken_at: Some(now),
         }
     }
 
@@ -148,7 +164,10 @@ impl EndpointReading {
     /// `charging` 与 `voltage_mv` 一律 `None`，理由与键盘那两项同一条（parking lot
     /// Q7/Q8）：Windows 的电量属性里**根本没有**这两项，`None` 是"这条通路说不出来"，
     /// 不是"没在充电"、也不是"0 mV"。填一个值出去，下游就再也分不清两者。
-    pub fn from_ble_cache(cached: &BleBattery) -> Result<Self> {
+    ///
+    /// `now` 是把 Windows 给的"多少秒之前"换成绝对取得时刻用的：它只说了年龄，
+    /// 而一份要写盘、要跨重启比较的读数需要的是时刻。
+    pub fn from_ble_cache(cached: &BleBattery, now: Timestamp) -> Result<Self> {
         // level 缺席的设备在 `bluetooth::enumerate` 那一步就被滤掉了，走到这里仍要
         // 交代一句：没有电量属性不是"电量为 0"，那是这条通路这一次读不到。
         let reported_level = cached.level.ok_or_else(|| {
@@ -169,6 +188,10 @@ impl EndpointReading {
                 voltage_mv: None,
             },
             cache_age_secs: cached.age_secs,
+            // 缓存的年龄换成绝对时刻。设备没有更新时间戳时年龄是 `None`，取得时刻就
+            // 跟着说不出来——**不拿 `now` 顶上去**：那会让一台没时间戳的设备看着像
+            // 当场读的，正是这里最要紧的一句话。
+            taken_at: cached.age_secs.map(|age_secs| now.minus_secs(age_secs)),
         })
     }
 }
@@ -205,7 +228,11 @@ pub trait Endpoints {
     ///
     /// 失败与另两级同义："这条 Endpoint 这一次读不到"——没配 `[device.bluetooth]`、
     /// 本机的 BLE 设备里没有这个地址、或者那台设备没有电量属性。
-    fn read_ble(&self, device: &Device) -> Result<EndpointReading>;
+    ///
+    /// `now` 也是这个不对称的一部分：只有这一级需要它。Windows 只说那份缓存"多少秒之前
+    /// 更新过"，而交出去的成品要带一个绝对的取得时刻，换算就得有个"当下"。两条 HID 的
+    /// 取得时刻由取数那一步盖（它当场就在），所以 `open_transport` 不需要这个参数。
+    fn read_ble(&self, device: &Device, now: Timestamp) -> Result<EndpointReading>;
 }
 
 /// 落到真机上的枚举：一次 [`hid::enumerate`] 加一次 [`bluetooth::enumerate`] 的快照。
@@ -348,7 +375,7 @@ impl Endpoints for SystemEndpoints {
         })
     }
 
-    fn read_ble(&self, device: &Device) -> Result<EndpointReading> {
+    fn read_ble(&self, device: &Device, now: Timestamp) -> Result<EndpointReading> {
         let configured = device
             .bluetooth
             .as_ref()
@@ -363,6 +390,6 @@ impl Endpoints for SystemEndpoints {
                 configured.address
             )
         })?;
-        EndpointReading::from_ble_cache(cached)
+        EndpointReading::from_ble_cache(cached, now)
     }
 }

@@ -9,10 +9,12 @@ use anyhow::{Result, anyhow};
 
 use crate::bluetooth::{self, BleBattery};
 use crate::cli::{config_refresh, resolve_config_path};
+use crate::clock::{Clock, SystemClock, Timestamp};
 use crate::config::{Config, Device};
 use crate::endpoints::{EndpointKind, EndpointReading, Endpoints, SystemEndpoints};
 use crate::sources::level::{LevelSource, level_for};
 use crate::sources::{Reading, Transport, driver_for};
+use crate::staleness::{Freshness, Staleness};
 
 pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     let path = resolve_config_path(config_path)?;
@@ -25,14 +27,21 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
 
     // 枚举一次，全部 Device 共用：一次枚举要打开本机每一条 HID collection。
     let endpoints = SystemEndpoints::enumerate()?;
+    let clock = SystemClock;
     // 一个 Device 都没配不是就此收摊：**那正是最需要下面那段未登记名单的时刻**（本机扫到的
     // 每一台 BLE 设备都还没登记，而 MAC 就在那几行里等着抄）。所以这里不再提前 return。
     if config.devices.is_empty() {
         println!("配置 {} 里一个 Device 都没有。", path.display());
     }
     for device in &config.devices {
-        let line = match read(device, &endpoints) {
-            Ok(reading) => render(&reading, device.level_source),
+        // 一个 Device 一个"当下"，取数与陈旧判定共用它。几台设备依次读下来会花掉真实
+        // 时间，所以这个值在循环里取而不在循环外——但**一台设备只取一次**。
+        let now = clock.now();
+        let line = match read(device, &endpoints, now) {
+            Ok(reading) => {
+                let staleness = Staleness::assess(&reading, &config.general, now);
+                render(&reading, device.level_source, &staleness)
+            }
             // 一台读不到不该拖累别的 Device，把原因印在它自己那一行上。
             Err(e) => format!("读不到 —— {e:#}"),
         };
@@ -123,7 +132,13 @@ fn is_registered(config: &Config, found: &BleBattery) -> bool {
 ///
 /// `pub` 是为了让"拔线 → 同周期降级"这条路径能在 `tests/endpoints.rs` 里被驱动：
 /// 集成测试只看得见 pub 接口，而这条路径在真机上拔一次线才复现一次。
-pub fn read(device: &Device, endpoints: &dyn Endpoints) -> Result<EndpointReading> {
+///
+/// `now` 收的是一个**值**而不是 `&dyn Clock`：整条链路只在 [`run`] 里问一次"现在几点"，
+/// 那一个"当下"再被取数与陈旧判定共用。问两次不是浪费而是**错的**——几条 Endpoint 依次
+/// 试下来会花掉真实时间（一次鼠标超时就是三秒），两条 HID 各超时一次再落到 Ble，用第二个
+/// "当下"去判第一个"当下"盖的时间戳，那一行印出来就不是"0 秒前"而是"6 秒前"。
+/// 接缝本身（`crate::clock::Clock`）因此只出现在 [`run`] 的顶上，这一层往下全是纯函数。
+pub fn read(device: &Device, endpoints: &dyn Endpoints, now: Timestamp) -> Result<EndpointReading> {
     let present = endpoints.present(device);
     let mut failures = Vec::new();
 
@@ -137,13 +152,13 @@ pub fn read(device: &Device, endpoints: &dyn Endpoints) -> Result<EndpointReadin
             EndpointKind::Wired | EndpointKind::Dongle24G => endpoints
                 .open_transport(device, kind)
                 .and_then(|transport| read_with_driver(device, kind, transport.as_ref()))
-                .map(|reading| EndpointReading::from_hid(kind, reading)),
+                .map(|reading| EndpointReading::from_hid(kind, reading, now)),
             // Ble 不是往返：它读的是 Windows 攒的属性缓存，**不经过协议驱动**
             // （所以这一支根本不碰 `read_with_driver`——配置里的 `driver` 只作用于
             // HID），也没有 Transport 可开。接缝那一侧直接交成品，因为只有它知道
             // 那份缓存有多旧。这里仍**不写通配分支**：加第四种时编译器还会把人指到
             // 这一行来。
-            EndpointKind::Ble => endpoints.read_ble(device),
+            EndpointKind::Ble => endpoints.read_ble(device, now),
         };
         match attempt {
             Ok(reading) => return Ok(reading),
@@ -219,11 +234,16 @@ fn read_with_driver(
 /// 被误报成离线的时刻。
 ///
 /// `pub` 与 [`read`] 同理：这一行印成什么样是 `status` 的外部行为。
-pub fn render(sourced: &EndpointReading, level_source: LevelSource) -> String {
+pub fn render(
+    sourced: &EndpointReading,
+    level_source: LevelSource,
+    staleness: &Staleness,
+) -> String {
     let EndpointReading {
-        endpoint,
+        endpoint: _,
         reading,
-        cache_age_secs,
+        cache_age_secs: _,
+        taken_at,
     } = sourced;
     // 键盘那一位至今没有实测样本，spec 明写「键盘暂不显示充电态」，所以说不上来时
     // 这一格整个不印——印"未充电"就是替设备做了一个没人验过的断言。
@@ -240,28 +260,77 @@ pub fn render(sourced: &EndpointReading, level_source: LevelSource) -> String {
     // 两个百分比里印哪一个，以及"一个都印不出来"。措辞由 [`Level`] 自己的 `Display`
     // 给出——**Unknown 后面那句解释只有产生它的那条规则说得准**；写在这里等于让呈现层
     // 替取数层解释因果，Unknown 哪天多了第二个来源，这一行就开始说谎。
-    let level = level_for(reading, level_source);
+    //
+    // 陈旧到不该再显示数字的那一档，把电量、充电态、电压**整段换掉**：一个几个月前的
+    // 百分比印出来就是一句假话，而"充电中"是同一句假话的另一半（几个月前在充电，
+    // 现在呢？）。换上去的是那时唯一还成立的事实——这个数是哪一天的。
+    // 百分比为什么不见了由 [`stale_marker`] 那半句交代。
+    let level = format!("{}{charging}{voltage}", level_for(reading, level_source));
+    // 对 `Freshness` **穷举、不写通配分支**：加一档时编译器会把人指到这一行来
+    // （parking lot Q29 承诺的"翻案是加一个变体，波及 render 的一个 match"靠的正是这个，
+    // 一个 `_` 就会让那句承诺落空）。
+    let measured = match (staleness.freshness, taken_at) {
+        (Freshness::VeryStale, Some(taken_at)) => format!("{taken_at} 的读数"),
+        // VeryStale 而说不出取得时刻走不到：那一档要算出年龄才判得出来，而算得出年龄就
+        // 有时刻。留着这一支是因为类型要交代一句，而**交代的话得是实话**：说不出是哪天的
+        // 就只能照常印数字，由末尾那个陈旧标注去拦。
+        (Freshness::VeryStale, None) => level,
+        (Freshness::Fresh | Freshness::Stale, _) => level,
+    };
     format!(
-        "{level}{charging}{voltage}  {}",
-        source_of(*endpoint, *cache_age_secs),
+        "{measured}  {}{}",
+        source_of(sourced, staleness),
+        stale_marker(staleness.freshness),
     )
 }
 
-/// 来源那一段：这个数是从哪条 Endpoint 上来的，以及——只有蓝牙才有的——它有多旧。
+/// 陈旧标注：新鲜的读数什么都不加，另两档都以"已陈旧"开头。
+///
+/// 两档共用同一个词是有意的：`CONTEXT.md` 只给了一个 **Stale**，而用户要分辨的也只有
+/// "能不能当现状"这一件事。给第二档另造一个词（"极旧"？"失效"？）只会多一个
+/// `CONTEXT.md` 里没有的说法，而 Stale 那一条的 _Avoid_ 恰恰就是"过期、失效"。
+///
+/// 第二档多的半句是**交代那个百分比去哪了**：前面那一段已经换成了一个日期，不说一句
+/// 用户会以为读数没读到——而它读到了，只是旧得不该再当数字报出来。
+fn stale_marker(freshness: Freshness) -> &'static str {
+    match freshness {
+        Freshness::Fresh => "",
+        Freshness::Stale => "  已陈旧",
+        Freshness::VeryStale => "  已陈旧，不显示百分比",
+    }
+}
+
+/// 来源那一段：这个数是从哪条 Endpoint 上来的，以及它有多旧。
 ///
 /// `Ble` 与另两级的差别不是装饰。Wired 与 Dongle24G 是当场问出来的，`Ble` 读的是
 /// Windows 攒的缓存，可能是几个月前的（`CONTEXT.md`：「数据取自 Windows 缓存而非当场问
 /// 设备，因此天然可能陈旧」）。只印一个"来自 Ble"，用户分不出"刚问出来的 62%"和"三月份
 /// 那个 62%"——而 spec 的第 6 条 user story 要的正是这个分辨。
 ///
-/// **这里只标注，不判定。**阈值（`stale_after` / `very_stale_after`）、变灰、只显示日期，
-/// 连同为了可测而要引入的 Clock 接缝，全是票 06 的活。
-fn source_of(endpoint: EndpointKind, cache_age_secs: Option<u64>) -> String {
+/// **"多久前"三级都印**，不只蓝牙那一级：`status` 今天是一次性命令，HID 那一格恒为
+/// "0 秒前"，但常驻轮询之后"这一行是几秒前还是几分钟前取的"才是真正要分辨的事。
+/// 只有"（Windows 缓存，…）"那半句是 Ble 独有的——它说的是这个数**不是当场问出来的**。
+///
+/// **那个秒数两级各有各的来源，这不是重复而是两个不同的事实。**`Ble` 印的是
+/// [`EndpointReading::cache_age_secs`]，也就是 **Windows 自己报的**那份缓存的年龄
+/// ——它**不经过 Clock**（parking lot Q21 给本票的原话：「它是 Windows 报的秒数、不经过
+/// Clock」；那份时间戳是系统攒的，本机时钟只能用来算差值，而 `bluetooth.rs` 已经算过了）。
+/// 两条 HID 没有"缓存年龄"这回事，它们的秒数只能由取得时刻与当下相减得来，那正是
+/// [`Staleness::age_secs`]。
+///
+/// **这里只排版，不判定**：阈值怎么定、够不够陈旧，都在 `crate::staleness` 里判完了。
+fn source_of(sourced: &EndpointReading, staleness: &Staleness) -> String {
+    let endpoint = sourced.endpoint;
     match endpoint {
-        EndpointKind::Wired | EndpointKind::Dongle24G => format!("来自 {endpoint}"),
+        EndpointKind::Wired | EndpointKind::Dongle24G => {
+            format!(
+                "来自 {endpoint}（{}）",
+                bluetooth::age_text(staleness.age_secs)
+            )
+        }
         EndpointKind::Ble => format!(
             "来自 {endpoint}（Windows 缓存，{}）",
-            bluetooth::age_text(cache_age_secs)
+            bluetooth::age_text(sourced.cache_age_secs)
         ),
     }
 }
