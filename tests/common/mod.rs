@@ -21,6 +21,7 @@ use std::rc::Rc;
 
 use anyhow::{Result, bail};
 use juicebar::bluetooth::BleBattery;
+use juicebar::clock::Timestamp;
 use juicebar::config::Device;
 use juicebar::endpoints::{EndpointKind, EndpointReading, Endpoints};
 use juicebar::sources::Transport;
@@ -167,12 +168,12 @@ impl Endpoints for FakeEndpoints {
     ///
     /// 不看 `device` 配的地址：地址怎么比对是 `BluetoothEndpoint::matches` 那一处的事，
     /// 假枚举再实现一遍就等于把被测逻辑抄进了测试。转换本身走的是真的那一个函数。
-    fn read_ble(&self, _device: &Device) -> Result<EndpointReading> {
+    fn read_ble(&self, _device: &Device, now: Timestamp) -> Result<EndpointReading> {
         let Some(cache) = self.ble.as_ref() else {
             bail!("这台设备不在本机的 BLE 设备里");
         };
         *cache.reads.borrow_mut() += 1;
-        EndpointReading::from_ble_cache(&cache.cached)
+        EndpointReading::from_ble_cache(&cache.cached, now)
     }
 }
 
@@ -276,4 +277,24 @@ pub fn scanned_ble(
         age_secs,
         connected: false,
     }
+}
+
+/// 用例里的"当下"。
+///
+/// 取一个整天边界（2026-03-25 00:00 UTC），好让"这个数是哪一天的"算得清：往回退十天正好是
+/// 2026-03-15，也就是票 05 真机实测那台鼠标的缓存日期。
+///
+/// **它是个字面量而不是一个假时钟。**陈旧判定那一层收的是 `Timestamp` 而不是 `&dyn Clock`
+/// ——问环境只在 `cli::status::run` 的顶上发生一次。所以用例根本没有系统时钟可碰，
+/// 也没有一处 sleep：那比给它们一个假时钟更硬（parking lot Q27）。
+pub const NOW: Timestamp = Timestamp::from_unix_secs(20_537 * 86_400);
+
+/// 缺省配置：陈旧阈值取 `config.example.toml` 注释里那几个数。
+///
+/// 陈旧判定要读阈值，而多数用例不关心阈值本身是多少，只关心那一档的行为。阈值怎么从轮询
+/// 间隔推导出来在 `tests/staleness.rs` 里单独断言。
+pub fn default_general() -> juicebar::config::General {
+    juicebar::config::Config::parse("")
+        .expect("空配置应当解析得动")
+        .general
 }

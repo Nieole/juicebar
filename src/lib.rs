@@ -8,7 +8,9 @@
 
 pub mod bluetooth;
 pub mod cli;
+pub mod clock;
 pub mod config;
 pub mod endpoints;
 pub mod hid;
 pub mod sources;
+pub mod staleness;
