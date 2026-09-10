@@ -160,7 +160,8 @@ pub struct DeviceRow<'a> {
     pub device: &'a Device,
     /// 这一行 Device 名字**之后**的全部内容，已经排好版（[`render`]，或者读不到时的原因）。
     pub line: String,
-    /// 它在 Primary 选择里的样子。`None` = 失联，不参与 `lowest` 比较。
+    /// 它在 Primary 选择里的样子。`None` = 取数失败或者暂停、又退不到上次已知值，
+    /// 不参与 `lowest` 比较。
     pub candidate: Option<CandidateReading>,
 }
 

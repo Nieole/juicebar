@@ -23,7 +23,7 @@ use common::{
 };
 use juicebar::config::Config;
 use juicebar::endpoints::{EndpointKind, EndpointReading};
-use juicebar::readout;
+use juicebar::readout::{self, NoReading};
 use juicebar::sources::Reading;
 use juicebar::state::{LastKnown, Provenance};
 
@@ -626,6 +626,34 @@ fn an_implausible_frame_reads_as_an_anomaly_rather_than_a_number() {
     assert!(
         !line.contains("都没读到"),
         "设备答了话，这一行不许声称都没读到：{line}"
+    );
+}
+
+/// 设备答了坏帧的那一次取数落在**取数失败**那一支——那个变体的名字因此不能宣称"失联"。
+///
+/// `CONTEXT.md`「读取异常」的 _Avoid_ 明写着不许拿失联说它：设备答了话，只是那一帧不可
+/// 采信。而它与超时、一条都不在场、一条都没配落在同一个变体里，因为对这一层它们是同一个
+/// 下场——手上没有可印的数。所以那个变体叫它们的上一层（「取数失败」），与暂停切成一条
+/// 干净的二分：一边是交不出可以印的数、而且不是因为我们没去问，一边是我们主动没去问。
+///
+/// 断言的是**那个变体本身**，不是印出去的那句话（那句话上面那条断言过了）：下游要按这一维
+/// 分支，而一句话只能被再解析一次。
+#[test]
+fn answering_with_a_bad_frame_is_a_failed_readout() {
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [(
+            EndpointKind::Wired,
+            vec![mouse_frame_with(100, 2000).to_vec()],
+        )],
+    );
+
+    let no_reading =
+        readout::read(&mouse_with_both_endpoints(), &endpoints, None, NOW).unwrap_err();
+
+    assert!(
+        matches!(no_reading, NoReading::Failed(_)),
+        "读取异常是取数失败的一种来路：{no_reading:?}"
     );
 }
 
