@@ -200,11 +200,11 @@ fn a_last_known_reading_is_marked_stale_even_when_it_was_taken_seconds_ago() {
     assert!(history.contains("已陈旧"), "但一律标注成陈旧：{history}");
     assert!(
         history.contains("上次已知值"),
-        "并且说清它是上次已知值，不是这一趟读到的：{history}"
+        "并且说清它是上次已知值，不是这一次取数读到的：{history}"
     );
 }
 
-/// 一份**真读出来的**充电态历史值：半小时前插着线读一趟，记进 `LastKnown`。
+/// 一份**真读出来的**充电态历史值：半小时前插着线取一次数，记进 `LastKnown`。
 ///
 /// 下面两条用例都不手搓这一份，因为**带着充电态的历史值只可能这么来**：`Ble` 那一格恒为
 /// `None`（Windows 的电量属性里没有充电这一项），两条 HID 读的又都是当场——所以"HID 读过、
@@ -228,7 +228,7 @@ fn charging_recorded_half_an_hour_ago(
         NOW.minus_secs(1_800),
     )
     .expect("插着线读得到");
-    assert_eq!(live.provenance, Provenance::JustRead, "这一趟是真读到的");
+    assert_eq!(live.provenance, Provenance::JustRead, "这一次是真读到的");
     last_known
 }
 
@@ -244,11 +244,11 @@ fn does_not_claim_a_device_is_charging_when_the_number_is_a_last_known_value() {
     let general = default_general();
     let mut last_known = charging_recorded_half_an_hour_ago(&device, &general);
 
-    // 这一趟设备收进了抽屉：一条 Endpoint 都不在场，于是退到刚记下的那一份。
+    // 这一次取数时设备收进了抽屉：一条 Endpoint 都不在场，于是退到刚记下的那一份。
     let put_away = FakeEndpoints::new(MOUSE_REPORT_ID, []);
     let row = readout::read_or_last_known(&device, &put_away, None, &mut last_known, &general, NOW)
         .expect("手上有上次已知值");
-    assert_eq!(row.provenance, Provenance::LastKnown, "这一趟是捞出来的");
+    assert_eq!(row.provenance, Provenance::LastKnown, "这一次是捞出来的");
 
     let line = line_of_taken(&row.reading, row.provenance);
     assert!(
@@ -587,7 +587,7 @@ fn render(device: &juicebar::config::Device, endpoints: &FakeEndpoints) -> Strin
 // ---------------------------------------------------------------
 // 厂商上位机暂停（票 07）
 //
-// 让开了哪几条、以及那一趟到底算不算暂停，在 `tests/readout.rs` 里断言完了；这里断言的
+// 让开了哪几条、以及那一次取数到底算不算暂停，在 `tests/readout.rs` 里断言完了；这里断言的
 // 是**那一行怎么说这件事**：末尾那句"已暂停"点不点名那个进程、什么时候一个字都不该多。
 // ---------------------------------------------------------------
 
@@ -678,14 +678,14 @@ fn keeps_the_last_known_value_while_paused_and_says_which_it_is() {
 
 /// 暂停里**退到历史值**的那一行同样不印充电态那一格。
 ///
-/// 判据是"这一趟到底有没有读到这个状态"，而 [`Provenance`] 答的正是这个问题：这一趟两条 HID
+/// 判据是"这一次取数到底有没有读到这个状态"，而 [`Provenance`] 答的正是这个问题：这一次取数两条 HID
 /// 都让开了、又没有别的 Endpoint 顶上，所以我们**不知道**它此刻在不在充电。那与失联是同一个
 /// 认知位置，而印出去反而更糟——失联时设备多半关着、或者在抽屉里，暂停时它**就在手边**，
 /// 用户可能一分钟前刚给它插上线，屏幕上却还挂着半小时前那句"充电中"。
 ///
-/// **暂停不止这一种形态**：`Ble` 顶上的那一趟是当场读到的（`JustRead`，见
+/// **暂停不止这一种形态**：`Ble` 顶上的那一次取数是当场读到的（`JustRead`，见
 /// [`says_it_paused_even_when_the_ble_cache_answered`]），那一行没有充电态靠的是另一条理由
-/// ——`Ble` 压根不给这一项。所以"暂停"本身不是判据，"这一趟读到了没有"才是。
+/// ——`Ble` 压根不给这一项。所以"暂停"本身不是判据，"这一次取数读到了没有"才是。
 ///
 /// 这一条守的是一个原先**没有任何用例守着**的决定：上面那条暂停用例的历史值本来就带着
 /// `charging: Some(true)`，却一个字都没断言过充电态——谁把这一格悄悄改回去都不会红。
@@ -695,10 +695,10 @@ fn does_not_claim_a_paused_device_is_charging_either() {
     let device = mouse_with_both_endpoints();
     let general = default_general();
     let hub = vendor_hub_running();
-    // 半小时前上位机还没起来，那一趟是插着线真读到的。
+    // 半小时前上位机还没起来，那一次取数是插着线真读到的。
     let mut last_known = charging_recorded_half_an_hour_ago(&device, &general);
 
-    // 这一趟上位机在跑：两条 HID 都在场、回包也都备着，可一条都没被问——它们让开了。
+    // 这一次取数时上位机在跑：两条 HID 都在场、回包也都备着，可一条都没被问——它们让开了。
     let yielded = FakeEndpoints::new(
         MOUSE_REPORT_ID,
         [
@@ -732,7 +732,7 @@ fn does_not_claim_a_paused_device_is_charging_either() {
     );
     assert!(
         !line.contains("充电"),
-        "但这一趟没问过它在不在充电，那一格就整个不印：{line}"
+        "但这一次取数没问过它在不在充电，那一格就整个不印：{line}"
     );
 }
 
@@ -967,9 +967,9 @@ fn holds_over_the_previous_choice_when_nothing_is_trustworthy_this_round() {
     );
 }
 
-/// 这一趟选出来的那个 id 要交出去 —— `run` 拿它记回状态文件。
+/// 这一轮选出来的那个 id 要交出去 —— `run` 拿它记回状态文件。
 ///
-/// 没有它，下一趟启动时 `previous` 又是 `None`，上面那条 `HeldOver` 永远走不到。
+/// 没有它，下次启动时 `previous` 又是 `None`，上面那条 `HeldOver` 永远走不到。
 #[test]
 fn reports_which_device_it_chose_so_the_caller_can_remember_it() {
     let mouse = mouse_with_both_endpoints();
@@ -985,13 +985,13 @@ fn reports_which_device_it_chose_so_the_caller_can_remember_it() {
 
     let (_, chosen) = status::primary_lines(&PrimaryRule::Lowest, &rows, None);
 
-    assert_eq!(chosen, Some("neon75"), "电量最低的那台就是这一趟的选择");
+    assert_eq!(chosen, Some("neon75"), "电量最低的那台就是这一轮的选择");
 }
 
 /// 一轮什么都选不出、又没有上次可依时，**不交出任何 id**。
 ///
 /// 这一条挡的是"随便记一个"：`remember_primary` 只有"设"没有"清"，所以一个不该被记的 id
-/// 一旦写进去就再也退不掉，而下一趟它会伪装成"上次的选择"。
+/// 一旦写进去就再也退不掉，而下一轮它会伪装成"上次的选择"。
 #[test]
 fn chooses_nothing_when_there_is_no_candidate_and_no_previous() {
     let mouse = mouse_with_both_endpoints();
@@ -1026,7 +1026,7 @@ fn composes_a_lost_row_from_the_real_failure_sentence() {
     // 在场却答不出：回包脚本空着，相当于超时。
     let endpoints = FakeEndpoints::new(KEYBOARD_REPORT_ID, [(EndpointKind::Dongle24G, vec![])]);
     let failure = readout::read(&keyboard, &endpoints, None, NOW)
-        .expect_err("脚本空着，这一趟读不出数来")
+        .expect_err("脚本空着，这一次取数读不出数来")
         .to_string();
 
     let lines = primary_lines(&PrimaryRule::Lowest, &[row(&keyboard, &failure, None)]);
@@ -1051,7 +1051,7 @@ fn composes_a_lost_row_from_the_real_failure_sentence() {
 
 /// [`status::primary_lines`] 印出来的那几行。
 ///
-/// 这个文件里的用例守的是**那几行印成什么样**；"这一趟选出了谁"那个返回值是给 `run` 记回
+/// 这个文件里的用例守的是**那几行印成什么样**；"这一轮选出了谁"那个返回值是给 `run` 记回
 /// 状态文件用的（parking lot Q41），它自己在 `tests/primary.rs` 里由 `select` 直接断言。
 fn primary_lines(rule: &PrimaryRule, rows: &[DeviceRow<'_>]) -> Vec<String> {
     status::primary_lines(rule, rows, None).0

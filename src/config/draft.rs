@@ -80,7 +80,7 @@ pub fn draft(collections: &[HidInfo]) -> String {
         if explain {
             out.push_str(OPTIONAL_LOW_BATTERY);
         }
-        // **三条 Endpoint 都从这一趟出来**，包括身份表里根本没有身份的 Ble：它以前是一段
+        // **三条 Endpoint 都从这一个循环出来**，包括身份表里根本没有身份的 Ble：它以前是一段
         // 硬写的常量，措辞和排布与另两条各说各话。
         for kind in EndpointKind::PRIORITY {
             let identity = known.identity(kind);
@@ -148,7 +148,7 @@ poll_interval_wired = 30
 poll_interval_24g = 60
 poll_interval_bluetooth = 10
 
-# 低电量阈值（百分比），图标数字变红。可被单个 [[device]] 覆盖。
+# 低电量阈值（百分比）：电量低于它就算低电，托盘图标换成低电的样子。可被单个 [[device]] 覆盖。
 low_battery = 20
 
 # 数据陈旧阈值（秒）。**只对 Ble 生效**——它读的是 Windows 缓存，可能过期几个月。

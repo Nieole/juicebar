@@ -9,7 +9,7 @@
 //! **这是这个项目的第四条接缝**，形状照 [`crate::clock`] 抄：一次进程枚举要碰真系统，
 //! 而这个仓库的用例不接硬件也跑得通。接缝之下只传一个**值**（[`VendorHub`]），不传
 //! `&dyn Processes`——问系统只在 `cli::status::run` 的顶上发生一次，往下全是纯函数
-//! （parking lot Q27 定的规矩：一趟 `status` 只该问一次系统）。
+//! （parking lot Q27 定的规矩：一次 `status` 只该问一次系统）。
 //!
 //! 名字比对留在这一侧、不进接缝，是为了让那件最容易写错的事（大小写）被用例守住：
 //! 认不出来的症状是"暂停永远不触发"，而它和"HUB 没在跑"长得一模一样。
@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use crate::config::General;
 use crate::endpoints::EndpointKind;
 
-/// 这一趟撞见的那个厂商上位机进程。**它存在即"这一趟要让开"**。
+/// 这一次撞见的那个厂商上位机进程。**它存在即"取数要让开"**。
 ///
 /// 拿一个结构而不是一个 `bool`：那一行印给用户的话里要有进程名——"暂停中"本身不足以让
 /// 用户做任何事，而"VGN VHUB.exe 正在运行"是他关掉它的依据。
@@ -57,7 +57,7 @@ impl VendorHub {
             .context("枚举不出本机在跑哪些进程，认不出厂商上位机")?;
         // 外层遍历**配置的名单**而不是本机那几百个进程：撞见谁因此只由用户写下的顺序
         // 决定，不由进程枚举的次序决定——同一台机器上跑着两个上位机时，那一行印出来的
-        // 名字才不会一趟一个样。
+        // 名字才不会一次一个样。
         Ok(general
             .vendor_hub_processes
             .iter()
@@ -131,7 +131,7 @@ pub trait Processes {
 /// 而且不需要任何额外权限。
 ///
 /// 与 `hid::enumerate` / `bluetooth::enumerate` 同一形态：**取一次快照、当场读完、
-/// 交出一份纯数据**。快照里的进程可能在这之后就退出了，那不要紧——这一趟要的就是"刚才那
+/// 交出一份纯数据**。快照里的进程可能在这之后就退出了，那不要紧——这一次要的就是"刚才那
 /// 一瞬间在跑什么"。
 pub struct SystemProcesses;
 
@@ -167,7 +167,7 @@ impl Processes for SystemProcesses {
                         Ok(()) => {}
                         // 走到底了：这是唯一一种"失败"其实是正常收尾的情形。
                         Err(e) if e.code() == ERROR_NO_MORE_FILES.into() => break,
-                        // 中途真失败就整趟作废，**不交一份缺项的名单**：缺了哪几项无从得知，
+                        // 中途真失败就整次作废，**不交一份缺项的名单**：缺了哪几项无从得知，
                         // 而缺的正好是 HUB 那一项时，暂停会时灵时不灵（`Cargo.toml` 里选
                         // Toolhelp 而不是 EnumProcesses 的理由，逐字就是这一句）。
                         Err(e) => {
@@ -179,7 +179,7 @@ impl Processes for SystemProcesses {
             }
             Ok(names)
         })();
-        // 快照的句柄照旧要还。关不掉只会漏一个句柄，不因此改变这一趟的结论
+        // 快照的句柄照旧要还。关不掉只会漏一个句柄，不因此改变这一次的结论
         // （`hid.rs` 里每一处 `CloseHandle` 同样处置）。
         unsafe {
             let _ = CloseHandle(snapshot);

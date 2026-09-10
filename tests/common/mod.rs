@@ -360,9 +360,9 @@ impl FakeProcesses {
         }
     }
 
-    /// **问不出来**的那一趟：一次 Win32 失败长这样。
+    /// **问不出来**的时候：一次 Win32 失败长这样。
     ///
-    /// 它和"一个都没在跑"必须分得开——后者什么都不必说，前者该在 stderr 上说一句
+    /// 它和"一个都没在跑"必须分得开——后者什么都不必说，前者要作为这一轮的一条告警说出来
     /// （parking lot Q34）。
     pub fn failing() -> Self {
         Self {
@@ -382,13 +382,13 @@ impl Processes for FakeProcesses {
     fn running(&self) -> Result<Vec<String>> {
         *self.enumerations.borrow_mut() += 1;
         if self.fails {
-            bail!("假接缝这一趟故意枚举不动");
+            bail!("假接缝这一次故意枚举不动");
         }
         Ok(self.running.clone())
     }
 }
 
-/// 撞见了厂商上位机的那一趟。
+/// 撞见了厂商上位机的那一次。
 ///
 /// **走的是真的 `detect`**，不是一个手搓的值：那样用例里印出来的那句"已暂停"就必然与
 /// 名字比对那一段出自同一处，而不是两份各自可能漂开的知识。

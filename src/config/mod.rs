@@ -4,7 +4,7 @@
 //! **读**走 `toml` + serde，要的是类型化的模型；**写**走 `toml_edit`，要的是保住用户
 //! 写下的注释（见 `docs/adr/0003`）。
 //!
-//! 结构里只有**当前用得上**的字段。TOML 里其余的键（`[general]` 里还没人读的那几项 …）
+//! 结构里只有**当前用得上**的字段。TOML 里其余的键（譬如 `[device.wireless_24g]` 里那个可选的 `address`）
 //! 会被静默忽略，等要用它们的那一步再加进来——这样用户的配置不必随实现进度反复改写，
 //! 样例配置也可以先于代码写全。**草稿照样把它们写出来**，因为草稿是给人读的：一个还没
 //! 实现的开关，用户也该知道它存在。
@@ -96,6 +96,13 @@ pub struct General {
     /// 数字变新——它的新鲜度是 `stale_after` / `very_stale_after` 的事。
     #[serde(default = "default_poll_interval_bluetooth")]
     pub poll_interval_bluetooth: u64,
+    /// 低电量阈值，百分比：电量**低于**它就算低电（`CONTEXT.md`「图标状态」）。缺省 20。
+    ///
+    /// 单台 `[[device]]` 可以覆盖（[`Device::low_battery`]），所以问"这台低不低电"要走
+    /// [`Self::low_battery_for`]，不是直接读这一格：键鼠的电池容量和耗电差很多，同一个 20%
+    /// 对两者的紧急程度并不相等。
+    #[serde(default = "default_low_battery")]
+    pub low_battery: u8,
     /// 陈旧阈值，秒：取得时刻距今超过这么久，读数就被标注为陈旧。**只对 Ble 生效。**
     #[serde(default = "default_stale_after")]
     pub stale_after: u64,
@@ -135,6 +142,10 @@ fn default_poll_interval_bluetooth() -> u64 {
     10
 }
 
+fn default_low_battery() -> u8 {
+    20
+}
+
 fn default_stale_after() -> u64 {
     3_600
 }
@@ -162,11 +173,19 @@ impl Default for General {
             poll_interval_wired: default_poll_interval_wired(),
             poll_interval_24g: default_poll_interval_24g(),
             poll_interval_bluetooth: default_poll_interval_bluetooth(),
+            low_battery: default_low_battery(),
             stale_after: default_stale_after(),
             very_stale_after: default_very_stale_after(),
             pause_when_vendor_hub_running: default_pause_when_vendor_hub_running(),
             vendor_hub_processes: default_vendor_hub_processes(),
         }
+    }
+}
+
+impl General {
+    /// 这台 Device 的低电量阈值：它自己写了就用它自己的，没写就用 `[general]` 的。
+    pub fn low_battery_for(&self, device: &Device) -> u8 {
+        device.low_battery.unwrap_or(self.low_battery)
     }
 }
 
@@ -195,6 +214,10 @@ pub struct Device {
     /// 设备的另一个来源不可信"。
     #[serde(default)]
     pub level_source: LevelSource,
+    /// 这台设备自己的低电量阈值，覆盖 `[general]` 的 [`General::low_battery`]。缺席即跟着
+    /// `[general]` 走——取值一律经 [`General::low_battery_for`]。
+    #[serde(default)]
+    pub low_battery: Option<u8>,
     /// Device 通过 USB 线直连时出现的 Endpoint。
     ///
     /// 它有**独立于 Dongle24G 的另一组 VID/PID**，插线时作为一个额外的设备被枚举

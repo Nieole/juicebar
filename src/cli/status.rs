@@ -4,8 +4,10 @@
 //! 同一组信息。
 //!
 //! **取数那一步不在这里**：先试哪一条 Endpoint、怎么降级、什么时候才算失联、读不到时
-//! 退到上次已知值，全在 `crate::readout`。这个模块剩下的只有"印出这几行"——`run` 的
-//! 接线、一行 Device 的排版、以及那几行的合成。
+//! 退到上次已知值，全在 `crate::readout`。**这一轮判成什么也不在这里**：每台 Device 的
+//! 图标状态、Primary Device 是谁、这一轮的告警，全在 `crate::round`——托盘要的是同一个结构。
+//! 这个模块剩下的只有"印出这几行"：`run` 的接线、一行 Device 的排版、以及那几行的合成，
+//! 都从那个结构排出来。
 
 use std::path::PathBuf;
 
@@ -13,11 +15,12 @@ use anyhow::Result;
 
 use crate::bluetooth::{self, BleBattery};
 use crate::cli::{config_refresh, resolve_config_path, state_path_beside_config};
-use crate::clock::{Clock, SystemClock};
+use crate::clock::{Clock, SystemClock, Timestamp};
 use crate::config::{Config, Device};
 use crate::endpoints::{EndpointKind, EndpointReading, SystemEndpoints};
-use crate::primary::{self, Candidate, CandidateReading, PrimaryRule};
+use crate::primary::{self, Candidate, CandidateReading, PrimaryRule, Selection};
 use crate::readout;
+use crate::round::{DeviceState, InHand, PauseCheck, Round, Shown, Warning};
 use crate::sources::level::{LevelSource, level_for};
 use crate::staleness::{Freshness, Staleness};
 use crate::state::{LastKnown, Provenance};
@@ -27,7 +30,7 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     let path = resolve_config_path(config_path)?;
     if !path.exists() {
         // 首次运行：先给一份扫出来的草稿，而不是打发用户去抄样例。草稿里扫不到的
-        // Endpoint 是注释掉的占位，得他自己看一眼，所以这一趟到此为止、不接着取数。
+        // Endpoint 是注释掉的占位，得他自己看一眼，所以这一次到此为止、不接着取数。
         return config_refresh::bootstrap(&path);
     }
     let config = Config::load(&path)?;
@@ -40,93 +43,69 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     let state_path = state_path_beside_config(&path);
     let mut last_known = LastKnown::load(&state_path);
     // 厂商上位机在跑吗。**问一次，全部 Device 共用**——与枚举、与"当下"同一条规矩
-    // （parking lot Q27）：一次进程枚举不便宜，而这一趟里它的答案不会变。开关关着时
-    // 这一句连进程都不去枚举（`VendorHub::detect` 的第一行）。
-    //
-    // **问不出来时按"没在跑"走，只在 stderr 上说一句。**反过来（问不出来就一律暂停）会让
-    // 一台 Win32 调用失败的机器永久显示"暂停中"，而那句话指名的进程根本没在跑——一句查不下去
-    // 的假话，比一次可能读错的数字更难修（parking lot Q34）。
-    let paused_by = match VendorHub::detect(&config.general, &SystemProcesses) {
-        Ok(spotted) => spotted,
-        Err(e) => {
-            eprintln!("认不出本机在跑哪些进程，这一趟不暂停 —— {e:#}");
-            None
-        }
-    };
+    // （parking lot Q27）：一次进程枚举不便宜，而这一次 `status` 里它的答案不会变。开关关着时
+    // 这一句连进程都不去枚举（`VendorHub::detect` 的第一行）。问不出来时按"没在跑"走、
+    // 交一条这一轮的告警——那条规则住在 `PauseCheck` 里，这里只把它的答案递下去。
+    let pause = PauseCheck::detect(&config.general, &SystemProcesses);
+    // **先把每台都取完数，再合成这一轮**：`primary = "lowest"` 得看过这一轮的全部读数才知道
+    // 该标哪一行，而那个标注印在每一行上。取数的次序和印的次序都还是配置里的书写顺序。
+    let fetched: Vec<(InHand, Timestamp)> = config
+        .devices
+        .iter()
+        .map(|device| {
+            // 一个 Device 一个"当下"，取数与陈旧判定共用它。几台设备依次读下来会花掉真实
+            // 时间，所以这个值在循环里取而不在循环外——但**一台设备只取一次**。
+            let now = clock.now();
+            // 读到的那一份已经由 `read_or_last_known` 记进 `last_known` 了（票面第 1 条），
+            // 写盘在最后一次写完：几台设备的记录住在同一份文件里。
+            let in_hand = InHand::from(readout::read_or_last_known(
+                device,
+                &endpoints,
+                pause.paused_by(),
+                &mut last_known,
+                &config.general,
+                now,
+            ));
+            (in_hand, now)
+        })
+        .collect();
+
+    // "上次选出的是谁"从状态文件里取，这一轮选出的再记回去——"全都不可信时保持上次的
+    // 选择"靠的就是这一条线（parking lot Q41）。`last_primary` 借的是 `last_known`，
+    // 而下面 `remember_primary` 要可变借它，所以这里先把那个 id 拷出来。
+    let previous_primary = last_known.last_primary().map(str::to_owned);
+    // **每台在它自己那个"当下"判，再合成一轮**（`Round::compose`），不拿一个统一的"当下"
+    // 判全部（`Round::assess`，托盘要的是那一种）：那样先取完数的那几台会被后面那台的超时
+    // 拖老几秒，一行当场问出来的"0 秒前"就成了"3 秒前"。
+    let states = config
+        .devices
+        .iter()
+        .zip(&fetched)
+        .map(|(device, (in_hand, now))| DeviceState::assess(device, in_hand, &config.general, *now))
+        .collect();
+    let round = Round::compose(
+        &config.general,
+        states,
+        previous_primary.as_deref(),
+        pause.warning().into_iter().collect(),
+    );
+
+    // 这一轮的告警印在 stderr 上、先于那几行：它们还是两句 `eprintln!` 时就是这个次序。
+    for warning in &round.warnings {
+        eprintln!("{warning}");
+    }
     // 一个 Device 都没配不是就此收摊：**那正是最需要下面那段未登记名单的时刻**（本机扫到的
     // 每一台 BLE 设备都还没登记，而 MAC 就在那几行里等着抄）。所以这里不再提前 return。
     if config.devices.is_empty() {
         println!("配置 {} 里一个 Device 都没有。", path.display());
     }
-    // **先把每台都读完，再一起印**：`primary = "lowest"` 得看过这一轮的全部读数才知道
-    // 该标哪一行，而那个标注印在每一行上。读的次序和印的次序都还是配置里的书写顺序。
-    let mut rows: Vec<DeviceRow<'_>> = Vec::new();
-    for device in &config.devices {
-        // 一个 Device 一个"当下"，取数与陈旧判定共用它。几台设备依次读下来会花掉真实
-        // 时间，所以这个值在循环里取而不在循环外——但**一台设备只取一次**。
-        let now = clock.now();
-        let (line, candidate) = match readout::read_or_last_known(
-            device,
-            &endpoints,
-            paused_by.as_ref(),
-            &mut last_known,
-            &config.general,
-            now,
-        ) {
-            // 读到的那一份已经由 `read_or_last_known` 记进 `last_known` 了（票面第 1 条），
-            // 写盘在这一趟的末尾一次写完：几台设备的记录住在同一份文件里。
-            Ok(row_reading) => {
-                let reading = row_reading.reading;
-                let staleness = Staleness::assess(&reading, &config.general, now);
-                (
-                    render(
-                        &reading,
-                        device.level_source,
-                        &staleness,
-                        row_reading.provenance,
-                        row_reading.paused_by.as_ref(),
-                    ),
-                    // Primary 选择只要两件事：这一行显示的是哪个百分比（`Level::Unknown`
-                    // 即采信不了），以及这份读数还算不算现状。`level_for` 在 `render` 里
-                    // 也调了一次——同一个纯函数、同样的入参，两处必然是同一个答案，
-                    // 所以不必把它提进 `EndpointReading`（parking lot Q43）。
-                    //
-                    // **拿出来顶上的历史值不会因为这一步而混进 lowest**：它一律是
-                    // Stale（`CONTEXT.md`「上次已知值」那一条），而下面的筛子只收
-                    // `Freshness::Fresh`。所以这里不必再按 `provenance` 分一次支。
-                    Some(CandidateReading {
-                        level: level_for(&reading.reading, device.level_source),
-                        freshness: staleness.freshness,
-                    }),
-                )
-            }
-            // 一台没读到不该拖累别的 Device，把原因印在它自己那一行上。**没读到就不参与
-            // lowest 比较**——那正是这里 `reading` 为 `None` 的意思，而它与 `Level::Unknown`
-            // 是两回事（`CONTEXT.md`：Unknown 也不等于设备离线）。
-            //
-            // 失联与暂停在这里合成一支，是因为它们对 Primary 选择是同一件事（手上没有数）；
-            // 而印出去那句话两者完全不同，那一维由 [`NoReading`] 自己的 `Display` 分开。
-            Err(no_reading) => (no_reading.to_string(), None),
-        };
-        rows.push(DeviceRow {
-            device,
-            line,
-            candidate,
-        });
-    }
-
-    // "上次选出的是谁"从状态文件里取，这一趟选出的再记回去——票 09 的"全都不可信时保持
-    // 上次的选择"靠的就是这一条线（parking lot Q41）。`last_primary` 借的是 `last_known`，
-    // 而下面 `remember_primary` 要可变借它，所以这里先把那个 id 拷出来。
-    let previous_primary = last_known.last_primary().map(str::to_owned);
-    let (lines, chosen_primary) =
-        primary_lines(&config.general.primary, &rows, previous_primary.as_deref());
-    // 选出了一台真的 Primary 才记。选不出来的那一趟**什么都不动**：那正是最需要上次那个
+    let rows: Vec<DeviceRow<'_>> = round.devices.iter().map(row_of).collect();
+    // 选出了一台真的 Primary 才记。选不出来的那一轮**什么都不动**：那正是最需要上次那个
     // 值的时候，而把它清掉恰好会让"保持上次的选择"永久落空。
-    if let Some(id) = chosen_primary {
+    if let Some(id) = round.primary.primary_id() {
         last_known.remember_primary(id);
     }
-    for line in lines {
+    for line in lines_with_primary(&round.primary, &rows) {
         println!("{line}");
     }
 
@@ -141,12 +120,45 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
         }
     }
 
-    // 写盘放在最后，一趟一次。**写不进去只在 stderr 上说一句，不让整条命令失败**：上面
-    // 那几行已经印出去了，而用户要的东西就是那几行。丢的是下一趟的记忆，不是这一趟的输出。
+    // 写盘放在最后，一次 `status` 只写一次。**写不进去只说一句（这一轮的又一条告警），不让
+    // 整条命令失败**：上面那几行已经印出去了，而用户要的东西就是那几行。丢的是下次启动时的
+    // 记忆，不是这一轮的输出。这一条由这里造，不经过 `Round`：写盘在这一轮合成之后，那个纯函数
+    // 碰不到磁盘。
     if let Err(e) = last_known.save(&state_path) {
-        eprintln!("记不下这一趟的读数（下次启动就没有上次已知值了）—— {e:#}");
+        eprintln!("{}", Warning::StateNotSaved(format!("{e:#}")));
     }
     Ok(())
+}
+
+/// 这一轮里的一台 Device 排成的那一行成品。
+fn row_of<'a>(state: &DeviceState<'a>) -> DeviceRow<'a> {
+    DeviceRow {
+        device: state.device,
+        line: line_of(state),
+        candidate: state.candidate(),
+    }
+}
+
+/// 一台 Device 名字之后的那一段：有读数就排版那份读数（[`render`]），没有就印取数那一层交出的
+/// 那句话。
+///
+/// 两支的措辞都不在这里定：前者是 [`render`] 的事，后者由 [`readout::NoReading`] 自己的
+/// `Display` 给出——失联与暂停对 Primary 选择是同一件事（手上没有数），而印出去那句话两者
+/// 完全不同，那一维由它分开。
+fn line_of(state: &DeviceState<'_>) -> String {
+    match &state.shown {
+        Shown::Reading { row, staleness } => render(
+            &row.reading,
+            state.device.level_source,
+            staleness,
+            row.provenance,
+            row.paused_by.as_ref(),
+        ),
+        Shown::NoReading(no_reading) => no_reading.to_string(),
+        // 走不到：`run` 给每台都取过一次数，手上的东西只会是一次取数的结果。留着这一支是因为
+        // 类型要交代一句，而**交代的话得是实话**。
+        Shown::NoKnownValue => "无已知值 —— 还没读到过，也没有上次已知值".to_string(),
+    }
 }
 
 /// 一个 Device 这一轮的成品：那一行印什么，以及它在 Primary 选择里的样子。
@@ -165,18 +177,22 @@ pub struct DeviceRow<'a> {
     pub candidate: Option<CandidateReading>,
 }
 
-/// `status` 印出去的那几行：每个 Device 一行，末尾可能多一句交代。
+/// `status` 印出去的那几行：每个 Device 一行，末尾可能多一句交代——连同这一轮选出了谁。
 ///
 /// 这一半是纯的，理由与 [`unregistered_ble_lines`] 同一条：选出谁、标在哪一行、要不要补
 /// 那句话，都是 `status` 的外部行为，而"本机有哪些设备"那一步才躲不开真系统。
 ///
-/// **"上次的选择"从状态文件里来，这一趟选出的又记回去。**`status` 是一次性命令——枚举、
+/// **`run` 不走这里的那一步选择**：它手上已经有这一轮选出的那个 [`Selection`]
+/// （`crate::round`，与托盘同一个结构），直接交给 [`lines_with_primary`] 排版。这个函数是
+/// 同一段合成连同那一步选择（[`primary::select`]，`Round` 用的也是它），那几条排版用例从这里进来。
+///
+/// **"上次的选择"从状态文件里来，这一轮选出的又记回去。**`status` 是一次性命令——枚举、
 /// 取数、印几行、退出，它自己手上没有"上次"，所以那份记忆住在票 08 的 `state.toml`
 /// （parking lot Q41：不能住 `config.toml`，因为 `primary` 只有一个格子，把自动选出的 id
 /// 写回去会把 `"lowest"` 这条规则本身洗掉）。
 ///
 /// 记回去的只是"选出了一台真的 Primary"那几种（[`Selection::primary_id`] 给 `Some` 的那些）。
-/// 选不出来的那一趟**不动**这一格——那正是最需要上次那个值的时候，而 `remember_primary`
+/// 选不出来的那一轮**不动**这一格——那正是最需要上次那个值的时候，而 `remember_primary`
 /// 只有"设"没有"清"就是为此。
 ///
 /// 这一半仍然是纯的：它收一个 `previous` 值、交出这一轮选出的 id，读盘写盘都在 [`run`] 那一头。
@@ -198,6 +214,11 @@ pub fn primary_lines<'a>(
         })
         .collect();
     let selection = primary::select(rule, &candidates, previous);
+    (lines_with_primary(&selection, rows), selection.primary_id())
+}
+
+/// 那几行的合成：每个 Device 一行，Primary Device 那一行的名字后面带标注，末尾可能多一句交代。
+fn lines_with_primary(selection: &Selection<'_>, rows: &[DeviceRow<'_>]) -> Vec<String> {
     let mut lines: Vec<String> = rows
         .iter()
         .map(|row| {
@@ -216,7 +237,7 @@ pub fn primary_lines<'a>(
     {
         lines.push(note);
     }
-    (lines, selection.primary_id())
+    lines
 }
 
 /// 本机扫到、而配置里没有登记的那些 BLE 设备，一台一行。
@@ -317,23 +338,20 @@ pub fn render(
     //     已经把它们限定完整了；而充电态是一个**现在时的状态断言**，它恰恰在设备被收进
     //     抽屉、或者刚插上线的那一刻变掉（`CONTEXT.md`「上次已知值」：它有多新，和设备
     //     此刻在不在，是两件事）。**暂停里退到历史值的那一行也落在这一条**（两条 HID 都
-    //     让开了、又没有别的 Endpoint 顶上）：那一趟根本没问过它在不在充电，而那时设备
+    //     让开了、又没有别的 Endpoint 顶上）：那一次取数根本没问过它在不在充电，而那时设备
     //     **就在手边**、可能一分钟前刚插上线，比失联更不该印（parking lot Q98）。`Ble`
     //     顶上的那一种暂停是当场读到的，它落在上面第一条。
     //
-    // 两条合起来是同一句话——**这一趟没读到这个状态，就不说它**——所以"说不上来的那一格整个
+    // 两条合起来是同一句话——**这一次取数没读到这个状态，就不说它**——所以"说不上来的那一格整个
     // 不印"这条规矩到此在所有情形下一致：一格有值，那个值就是真的。**不改成过去时措辞**
     // （"当时在充电"）：一个只为措辞存在的分支不值得，而这里能省下的正是那个分支。
     //
-    // 对 `Provenance` **穷举**，理由与 [`stale_marker`] 那一条相同：加第三种来路时编译器会
-    // 把人指到这一行来。（`Option<bool>` 那一维加不出变体，所以第二条那一支取通配。）
-    let charging = match (provenance, reading.charging) {
-        (Provenance::JustRead, Some(true)) => "  充电中",
-        (Provenance::JustRead, Some(false)) => "  未充电",
-        // 理由一：这条协议说不上来。
-        (Provenance::JustRead, None) => "",
-        // 理由二：这个数是上次已知值。
-        (Provenance::LastKnown, _) => "",
+    // 第二条理由住在 [`Provenance::charging_now`] 里（对来路穷举的也是它）：图标状态里的
+    // "充电中"问的是同一条，规则只守一处。它交 `None` 的两种来由正是上面这两条。
+    let charging = match provenance.charging_now(reading.charging) {
+        Some(true) => "  充电中",
+        Some(false) => "  未充电",
+        None => "",
     };
     // 键盘的回包里根本没有电压这一项，那一格同样整个不印。印一个 0 mV 会被当成读数。
     let voltage = match reading.voltage_mv {
@@ -368,10 +386,10 @@ pub fn render(
     )
 }
 
-/// 暂停标注：这一趟有 Endpoint 让开时说一句，否则一个字都不加。
+/// 暂停标注：这一次取数有 Endpoint 让开时说一句，否则一个字都不加。
 ///
 /// **它与陈旧标注是两维**，所以是另一段而不是塞进 [`stale_marker`]：一份读数有多旧，和
-/// "我们这一趟根本没去问"，是两个独立的事实。同一个 44% 可能既是半小时前的（陈旧），
+/// "我们这一次取数根本没去问"，是两个独立的事实。同一个 44% 可能既是半小时前的（陈旧），
 /// 又是因为上位机在跑才没被刷新（暂停）——两句话都得说。
 ///
 /// **点名那个进程**，不只说"已暂停"：用户唯一能动手的地方就是关掉它，而"哪一个"这件事只有
@@ -388,7 +406,7 @@ fn pause_marker(paused_by: Option<&VendorHub>) -> String {
     }
 }
 
-/// 陈旧标注：新鲜、这一趟读到的读数什么都不加，其余每一种都以"已陈旧"开头。
+/// 陈旧标注：新鲜、这一次取数读到的读数什么都不加，其余每一种都以"已陈旧"开头。
 ///
 /// 几档共用同一个词是有意的：`CONTEXT.md` 只给了一个 **Stale**，而用户要分辨的也只有
 /// "能不能当现状"这一件事。给第二档另造一个词（"极旧"？"失效"？）只会多一个

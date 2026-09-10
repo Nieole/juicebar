@@ -15,6 +15,7 @@ pub mod hid;
 pub mod icon;
 pub mod primary;
 pub mod readout;
+pub mod round;
 pub mod sources;
 pub mod staleness;
 pub mod state;

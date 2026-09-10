@@ -1300,3 +1300,62 @@ fn pauses_for_the_vgn_hub_unless_the_config_says_otherwise() {
     assert!(general.pause_when_vendor_hub_running);
     assert_eq!(general.vendor_hub_processes, ["VGN VHUB.exe"]);
 }
+
+/// 低电阈值读得出来：`[general]` 里的 `low_battery`，单台 `[[device]]` 可以覆盖，没写的那台
+/// 用 `[general]` 的。
+///
+/// 它以前是被静默忽略的键：样例和草稿里都写着，注释说"可被单个 `[[device]]` 覆盖"，代码这边
+/// 没人读——图标状态里的低电就靠它，所以它从这里开始生效。覆盖按台，因为键鼠的电池容量和耗电
+/// 差很多，同一个 20% 对两者的紧急程度并不相等。
+#[test]
+fn reads_the_low_battery_threshold_and_a_per_device_override() {
+    let config = Config::parse(
+        r#"
+        [general]
+        low_battery = 25
+
+        [[device]]
+        id = "dragonfly3"
+        name = "Dragonfly 3 Master+"
+        driver = "vgn_mouse"
+        low_battery = 15
+
+        [[device]]
+        id = "neon75"
+        name = "VGN Neon75"
+        driver = "vgn_keyboard"
+        "#,
+    )
+    .unwrap();
+
+    let general = &config.general;
+    assert_eq!(general.low_battery, 25);
+    assert_eq!(
+        general.low_battery_for(&config.devices[0]),
+        15,
+        "覆盖了的那台用它自己的阈值"
+    );
+    assert_eq!(
+        general.low_battery_for(&config.devices[1]),
+        25,
+        "没写的那台用 [general] 的"
+    );
+}
+
+/// 缺省 20，与 `config.example.toml` 同一个数——`[general]` 整节缺席、或者写了别的项而没写它，
+/// 都是 20。
+///
+/// 两条路各走一次，因为缺省值有两处出处（逐字段的 `#[serde(default = …)]` 与整节缺席时的
+/// `General::default`）；这个结构最容易出的错就是两处各写一份、写得不一样。
+#[test]
+fn the_low_battery_threshold_defaults_to_twenty() {
+    let absent = Config::parse(ONE_DEVICE).unwrap();
+    assert_eq!(absent.general.low_battery, 20, "[general] 整节缺席");
+    assert_eq!(absent.general.low_battery_for(&absent.devices[0]), 20);
+
+    let partial = Config::parse("[general]\nstale_after = 60\n").unwrap();
+    assert_eq!(
+        partial.general.low_battery, 20,
+        "[general] 在，只是没写这一项"
+    );
+}
