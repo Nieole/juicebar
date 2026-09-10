@@ -57,7 +57,7 @@ pub struct Candidate<'a> {
     pub id: &'a str,
     /// 这一轮从这台 Device 读到的东西。
     ///
-    /// `None` = **失联**，在场的 Endpoint 一条都没读到。它与一份 [`Level::Unknown`] 的读数
+    /// `None` = **取数失败**或者暂停，又退不到上次已知值。它与一份 [`Level::Unknown`] 的读数
     /// 是两回事（`CONTEXT.md`：「Unknown 不等于 0%，**也不等于设备离线**」），所以这里是
     /// 一个 `Option` 而不是拿 Unknown 顶上去：两者在 `lowest` 里的结论恰好相同（都不参与），
     /// 但它们在那一行上印的话完全不同，混成一个下游就再也分不清。
