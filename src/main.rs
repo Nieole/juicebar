@@ -75,12 +75,12 @@ enum Command {
         /// Report ID，不带编号报文填 0
         #[arg(long, default_value_t = 0)]
         report_id: u8,
-        /// 要发的字节，如 "04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ef"
-        bytes: String,
+        /// 要发的字节，如 "04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ef"。`--listen` 时不需要
+        bytes: Option<String>,
         /// 按 VGN 鼠标那套算法覆写帧末字节的校验和
         #[arg(long)]
         vgn_crc: bool,
-        /// 等回包的毫秒数
+        /// 等回包的毫秒数；`--listen` 时是整段监听时长
         #[arg(long, default_value_t = 1000)]
         timeout: u32,
         /// 连读几份回包（设备可能先回无关报文）
@@ -92,6 +92,13 @@ enum Command {
         /// 只 GetFeature、不 SetFeature。用来判断回读内容到底受不受所发命令影响。
         #[arg(long)]
         no_write: bool,
+
+        /// 只听不发：打开一条**纯输入**通道（`out:0`）收输入报文，一个字节都不发出去。
+        ///
+        /// 用来查"请求走一条通道、应答从另一条回来"这种异步协议——那种通道用别的模式够不着，
+        /// 因为它们发不出命令。
+        #[arg(long)]
+        listen: bool,
     },
 }
 
@@ -118,9 +125,20 @@ fn main() -> Result<()> {
             reads,
             feature,
             no_write,
+            listen,
         } => cli::probe::run(
-            vid, pid, usage_page, usage, report_id, &bytes, vgn_crc, timeout, reads, feature,
+            vid,
+            pid,
+            usage_page,
+            usage,
+            report_id,
+            bytes.as_deref(),
+            vgn_crc,
+            timeout,
+            reads,
+            feature,
             no_write,
+            listen,
         ),
     }
 }

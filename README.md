@@ -61,12 +61,13 @@ juicebar run             # 常驻托盘
 | 设备 | 2.4G | 蓝牙 |
 |---|---|---|
 | VGN Dragonfly 3 Master+ | ✓ 实测可读（**需管理员**） | ✓ |
-| VGN Neon75 | ⚠ 协议已知、走 `MI_02` 的 feature 报文，但**当前读不到**（见下） | ✓ |
+| VGN Neon75 | 🔴 协议**存疑**、读不到（见下） | ✓ |
 | 任何 BLE 设备 | — | ✓（只要 Windows 缓存了电量属性） |
 
-**Neon75 走 2.4G 当前读不到**：dongle 的就绪位恒为 0，而同一时刻 HUB 显示 100% 正常——设备与
-dongle 都是好的，是我们走的路子和 HUB 不同。提权、重启、初始化序列都试过。在它修好之前，键盘
-那一行靠蓝牙兜底（要手工把 `scan` 里的 MAC 抄进配置）。详见 [`docs/gaps.md`](docs/gaps.md)。
+**Neon75 走 2.4G 读不到，而且这条路可能从来没真正工作过**：dongle 的就绪位恒为 0，而同一时刻
+HUB 显示 100% 正常——设备与 dongle 都是好的。权限、睡眠、初始化、重启、时机全排掉了（细节见
+`docs/gaps.md`）。最可能的解释是当初那次"实测通过"读到的是 HUB 放进缓冲区的应答，不是我们请求
+换来的。下一步是 USB 抓包。在那之前键盘那一行靠蓝牙兜底（要手工把 `scan` 里的 MAC 抄进配置）。
 
 ATK、雷柏等后续接入。协议细节见 [`docs/protocol.md`](docs/protocol.md)。
 
@@ -77,10 +78,11 @@ ATK、雷柏等后续接入。协议细节见 [`docs/protocol.md`](docs/protocol
 - [x] HID 层（枚举、output/input 报文、feature 报文）
 - [x] 蓝牙数据源（CfgMgr 读 DEVPKEY_Bluetooth_Battery，含新鲜度）
 - [x] `scan` 子命令
-- [x] `probe` 子命令（含 VGN 鼠标校验和、feature 模式）
-- [x] 鼠标经 Dongle24G 取数（Transport 接缝 + `status` 子命令收口）
+- [x] `probe` 子命令（含 VGN 鼠标校验和、feature 模式、`--listen` 纯监听）
+- [x] 鼠标经 Dongle24G 取数（Transport 接缝 + `status` 子命令收口）—— **真机实测可读**
 - [ ] 鼠标 Wired Endpoint、读数合理性校验与电量来源选择
-- [x] 键盘经 Dongle24G 取数（feature 报文 Transport + 驱动 trait）
+- [ ] 键盘经 Dongle24G 取数 —— **代码写完了，但这条路到底通不通存疑**（见"支持的设备"；
+      当初那次"实测通过"很可能读到的是 HUB 的应答，不是我们请求换来的）
 - [ ] 设备模型与身份合并
 - [ ] 配置自举
 - [ ] 托盘图标渲染
