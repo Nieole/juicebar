@@ -156,10 +156,10 @@ fn reading_it_charging_rearms_so_the_next_drop_after_unplugging_notifies_again()
 }
 
 /// 拿上次已知值顶上的结果不触发：这一次取数没读到，顶上来的那个低于阈值的数是上次存下的，不是新消息
-/// （spec「低电通知」）。图标照样按低电画，那归「一轮」那一块（`tests/tray_round.rs`）。
+/// ——但图标照样按低电画（spec「低电通知」）。钉死鼠标，好让图标上画的就是它，与 `lowest` 怎么选无关。
 #[test]
-fn a_result_topped_up_with_the_last_known_value_does_not_notify() {
-    let (mut tray, mut screen) = start(MOUSE_AND_KEYBOARD, &LastKnown::default(), NOW);
+fn a_result_topped_up_with_the_last_known_value_does_not_notify_but_the_icon_still_draws_low() {
+    let (mut tray, mut screen) = start(&pinned("dragonfly3"), &LastKnown::default(), NOW);
 
     feed(
         &mut tray,
@@ -173,17 +173,12 @@ fn a_result_topped_up_with_the_last_known_value_does_not_notify() {
     );
 
     assert_eq!(screen.notices, []);
+    assert_eq!(screen.icon().state, IconState::Low);
 }
 
-/// 不是 Primary Device 的那一台也提醒：钉死了键盘，图标上画的是键盘，鼠标跌破了照样弹（spec 用户故事 19）。
 #[test]
 fn a_device_that_is_not_the_primary_device_is_reminded_too() {
-    let config = format!(
-        "[general]
-primary = \"neon75\"
-{MOUSE_AND_KEYBOARD}"
-    );
-    let (mut tray, mut screen) = start(&config, &LastKnown::default(), NOW);
+    let (mut tray, mut screen) = start(&pinned("neon75"), &LastKnown::default(), NOW);
 
     feed(
         &mut tray,
@@ -316,10 +311,10 @@ fn after_a_restart_a_device_still_below_the_threshold_is_reminded_again() {
     );
 }
 
-/// 说不出电量的结果既不提醒、也不重新武装：电量 Unknown 不等于 0%（`CONTEXT.md`「Unknown」），也不
+/// 电量 Unknown、取数失败，既不提醒、也不重新武装：Unknown 不等于 0%（`CONTEXT.md`「Unknown」），也不
 /// 等于回升了；取数失败什么都没读到。所以一台时读得到、时读不到的设备，不会一次次地提醒。
 #[test]
-fn results_without_a_level_neither_remind_nor_rearm() {
+fn an_unknown_level_or_a_failed_fetch_neither_reminds_nor_rearms() {
     let (mut tray, mut screen) = start(MOUSE_AND_KEYBOARD, &LastKnown::default(), NOW);
     let unknown = |at| just_read(EndpointKind::Dongle24G, 0, at);
 
@@ -377,10 +372,10 @@ fn a_reading_taken_while_the_vendor_hub_is_running_still_reminds() {
     );
 }
 
-/// 一份很旧的 `Ble` 缓存低于阈值：照样提醒。它是这一次取数从系统里读到的，不是上次已知值；读不到新数
-/// 的设备，最常见的原因就是没电了（parking lot Q200）。
+/// 一份陈旧到不该再显示百分比的 `Ble` 缓存（十天前）低于阈值：照样提醒。它是这一次取数从系统里读到的，
+/// 不是上次已知值；读不到新数的设备，最常见的原因就是没电了（parking lot Q200）。
 #[test]
-fn an_old_ble_cache_below_the_threshold_still_reminds() {
+fn a_ble_reading_too_stale_to_show_its_percentage_still_reminds() {
     let (mut tray, mut screen) = start(MOUSE_AND_KEYBOARD, &LastKnown::default(), NOW);
     let ten_days_ago = NOW.minus_secs(10 * 86_400);
 
@@ -401,6 +396,11 @@ fn an_old_ble_cache_below_the_threshold_still_reminds() {
             body: "12%（Reported Level），低于低电量阈值 20%".to_string(),
         }]
     );
+}
+
+/// 同 [`MOUSE_AND_KEYBOARD`]，但钉死 `id` 那一台当 Primary Device。
+fn pinned(id: &str) -> String {
+    format!("[general]\nprimary = \"{id}\"\n{MOUSE_AND_KEYBOARD}")
 }
 
 /// 同 [`MOUSE_AND_KEYBOARD`]，但鼠标自己写了低电阈值 30。

@@ -688,14 +688,14 @@ Q154 自己的推荐就是"搭 rt-04 的车"。
 （Q161）——以及上位机在跑时 `Ble` 顶上来的那一份（图标上画暂停），都照样提醒，正文里写着那个百分比。理由：spec 只点名了
 上次已知值这一种例外；`CONTEXT.md`「图标状态」里"低电压过 Stale"的理由（读不到新数的设备，最常见的原因就是没电了）在这里
 一样成立；`DeviceState::assess` 上写着 VeryStale 那一档照样参与低电判定（Q151）。两条用例钉着它：
-`an_old_ble_cache_below_the_threshold_still_reminds`、`a_reading_taken_while_the_vendor_hub_is_running_still_reminds`。
+`a_ble_reading_too_stale_to_show_its_percentage_still_reminds`、`a_reading_taken_while_the_vendor_hub_is_running_still_reminds`。
 
 **另一条路**：过了 `very_stale_after` 的那一档当成上次已知值——不提醒、也不重新武装；或者照样提醒，但正文像悬停提示那样只说
 "{日期} 的读数"，不写百分比。站得住：Q161 已经定了"十天前的一个 62 画在托盘上就是一句假话"，而通知成了整个托盘里唯一还会把
 那个数说出来的地方；一台在抽屉里放了好几天的蓝牙键盘，托盘每启动一次就提醒一次。
 
 **推荐**：维持。那一次提醒每次运行最多一次，它提醒的那件事（这台多半已经没电了）多半是真的。若嫌正文写出了一个旧百分比，改法
-是 VeryStale 时正文换成日期那一句，关在 `src/tray/notify.rs` 的 `low_battery` 与上面那条用例。归 `/settle`。
+是 VeryStale 时正文换成日期那一句，关在 `src/tray/notify.rs` 的 `low_battery_notice` 与上面那条用例。归 `/settle`。
 
 ### Q201 —— 低电通知的措辞：电量带着来源标注，正文写出阈值
 
@@ -710,7 +710,36 @@ Reported / Derived Level 是项目内部的词，用户在通知里用不上它�
 
 **推荐**：维持——`crate::sources::level` 上写着两个来源要一路带到界面上（混用过一次就导致过错误结论），悬停提示里用户已经在读
 这几个字。若要让用户可见的文字统一去掉来源标注，那是悬停提示与通知一起改，不单改这里；通知这一半关在 `src/tray/notify.rs` 的
-`low_battery` 与 `tests/tray_notify.rs` 里的字符串。措辞归用户拍板，`/settle` 时问一句。
+`low_battery_notice` 与 `tests/tray_notify.rs` 里的字符串。措辞归用户拍板，`/settle` 时问一句。
+
+### Q202 —— "低于阈值""算不算充电中"，通知与图标状态各写了一遍
+
+**From:** resident-tray 票 08（低电通知）
+
+**取的路**：通知那一格的阈值与电量取自 `DeviceState::assess`（与图标状态同一个函数），但 `percent < 阈值` 这一比、
+`charging_now(..) == Some(true)` 这一问，`src/tray/notify.rs` 照 `src/round.rs` 的 `icon_state` 又写了一遍（后一问在
+`src/tray/hover.rs` 里已有一份）。没收成 `DeviceState` 上的方法：那要改 `src/round.rs`（票 03 的文件），本票的范围只到
+通知那一格。也不能直接问 `icon_state == Low`：暂停压过低电，上位机在跑时 `Ble` 顶上来的那一份就会既不提醒、也不重新武装
+（Q200 那条用例钉着）。
+
+**另一条路**：`DeviceState` 上加"低不低电""算不算充电中"两个方法，`icon_state`、悬停提示与通知都调它；顺手给 `Level` 一个
+`percent()`，收掉散在四处的 `Level::Reported(p) | Level::Derived(p)`。站得住：本票的 Standards review 提的正是它，"通知与
+图标答同一个问题"就从约定变成结构。
+
+**推荐**：做，搭下一张动 `src/round.rs` 的票（票 14 修 Q154 时最顺手）。行为不变、用例不动，改的是 `src/round.rs` 加方法、
+`src/tray/notify.rs` 与 `icon_state` 各换一两行。归 `/settle` 分派。
+
+### Q203 —— `src/tray/mod.rs` 模块文档说"通知与配置两格此刻还是空的"，通知那一半本票之后不成立了
+
+**From:** resident-tray 票 08（低电通知）
+
+**取的路**：没改。brief 明说路由那两个文件非动不可才动，这一句是文档，不影响行为。同一件事在 `src/shell/notify.rs` 里的那
+一句（"本票还没有谁弹通知"）在通知那一格之内，本票改了。
+
+**另一条路**：本票顺手把那一句改成只说配置那一格。站得住：一行文档，并行的票 05 不碰 `src/tray/mod.rs`，撞不上。
+
+**推荐**：交给票 09——它填上配置那一格时，这句话的另一半也不成立了，两半一起改成一句。归票 09（暂停中；复工时编排者在
+brief 里点一句）。
 
 ## Settled
 

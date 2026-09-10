@@ -47,9 +47,10 @@ impl Notify {
     ///   状态的优先顺序一致；上次已知值里记着的"充电中"不算（[`Provenance::charging_now`]）。
     /// - **电量 Unknown 什么都不算**：它不等于 0%（`CONTEXT.md`「Unknown」），也不等于回升了。
     ///
-    /// 阈值与电量取自 [`DeviceState::assess`]——这一轮判图标状态用的正是它，所以"这台低不低电"，通知与
-    /// 图标答的是同一个答案（[`DeviceState::low_battery`] 上写着它为什么交出来）。"低于"阈值才算，刚好
-    /// 等于还不算（`CONTEXT.md`「图标状态」）。
+    /// 阈值与电量取自 [`DeviceState::assess`]——这一轮判图标状态用的正是它，所以两边用的是同一个阈值
+    /// （单台覆盖，[`DeviceState::low_battery`] 上写着它为什么交出来）、同一个电量。"低于"阈值才算，刚好
+    /// 等于还不算（`CONTEXT.md`「图标状态」）；这一比与"算不算充电中"那一问，这里与图标状态各写了一遍
+    /// （parking lot Q202）。
     pub fn on_fetched(&mut self, config: &Config, fetched: &Fetched, out: &mut Vec<super::Action>) {
         let Some(device) = config
             .devices
@@ -71,23 +72,24 @@ impl Notify {
             self.reminded.remove(&device.id);
             return;
         }
-        match state.level() {
-            Some(level @ (Level::Reported(percent) | Level::Derived(percent)))
-                if percent < state.low_battery =>
-            {
-                if self.reminded.insert(device.id.clone()) {
-                    out.push(super::Action::Notify(low_battery(
-                        device,
-                        level,
-                        state.low_battery,
-                    )));
-                }
+        // 有读数就有电量：`level()` 只在没有读数时交 `None`，上面已经返回了。
+        let Some(level) = state.level() else {
+            return;
+        };
+        let percent = match level {
+            Level::Reported(percent) | Level::Derived(percent) => percent,
+            Level::Unknown => return,
+        };
+        if percent < state.low_battery {
+            if self.reminded.insert(device.id.clone()) {
+                out.push(super::Action::Notify(low_battery_notice(
+                    device,
+                    level,
+                    state.low_battery,
+                )));
             }
-            Some(Level::Reported(_) | Level::Derived(_)) => {
-                self.reminded.remove(&device.id);
-            }
-            // 有读数就有电量，`None` 走不到；写出来只为穷举。
-            Some(Level::Unknown) | None => {}
+        } else {
+            self.reminded.remove(&device.id);
         }
     }
 }
@@ -97,7 +99,7 @@ impl Notify {
 /// 电量那一段用 [`Level`] 的 `Display`，与悬停提示那一行一字不差（"15%（Reported Level）"）：两个来源
 /// 要一路带到界面上（`crate::sources::level`），同一个用户读的同一件事也不该有两种说法。阈值写出来，
 /// 是因为它可以单台覆盖：用户得看得出起作用的是哪一个（parking lot Q201）。
-fn low_battery(device: &Device, level: Level, threshold: u8) -> Notice {
+fn low_battery_notice(device: &Device, level: Level, threshold: u8) -> Notice {
     Notice {
         title: format!("{} 电量低", device.name),
         body: format!("{level}，低于低电量阈值 {threshold}%"),
