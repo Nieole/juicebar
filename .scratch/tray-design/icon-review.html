@@ -1,0 +1,803 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>juicebar 托盘图标设置</title>
+<style>
+:root{
+  --paper:#EEF1F4; --panel:#FFFFFF; --ink:#18212B; --ink2:#56616D; --rule:#CDD3DA;
+  --accent:#2F5FD0; --tb-dark:#1F1F1F; --tb-light:#F0F0F0;
+  --font:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","PingFang SC",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.6 var(--font)}
+main{max-width:1180px;margin:0 auto;padding:40px 28px 96px}
+h1{font-size:30px;line-height:1.2;font-weight:600;margin:0 0 6px;letter-spacing:-.01em}
+h2{font-size:20px;font-weight:600;margin:0 0 4px}
+p{margin:0 0 10px;max-width:72ch}
+.lede{color:var(--ink2);font-size:16px}
+section{margin-top:44px}
+.hint{color:var(--ink2);font-size:13.5px;max-width:80ch}
+code{font-family:"Cascadia Code",Consolas,monospace;font-size:.92em;background:#E2E7EC;padding:1px 5px;border-radius:4px}
+
+/* 控制条 */
+.controls{position:sticky;top:0;z-index:5;background:rgba(238,241,244,.94);backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--rule);margin:22px -28px 0;padding:12px 28px;display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center}
+.ctl{display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--ink2)}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:8px;overflow:hidden;background:var(--panel)}
+.seg button{border:0;background:transparent;font:inherit;font-size:13.5px;color:var(--ink);padding:5px 11px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--rule)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:#fff}
+.seg button:focus-visible,input:focus-visible,textarea:focus-visible,.copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input[type=range]{width:150px;accent-color:var(--accent)}
+.val{font-variant-numeric:tabular-nums;color:var(--ink);min-width:2.2em;display:inline-block}
+
+/* 1:1 任务栏 */
+.strip{border-radius:10px;overflow:hidden;margin-top:14px;border:1px solid var(--rule)}
+.taskbar{height:48px;display:flex;align-items:center;justify-content:flex-end;gap:2px;padding:0 10px;font-family:"Segoe UI Variable Text","Segoe UI",sans-serif}
+.taskbar.dark{background:var(--tb-dark);color:#fff}
+.taskbar.light{background:var(--tb-light);color:#1a1a1a}
+.tb-left{margin-right:auto;display:flex;gap:4px;align-items:center;opacity:.9}
+.tb-app{width:40px;height:40px;border-radius:5px;display:grid;place-items:center}
+.tb-app i{display:block;width:22px;height:22px;border-radius:5px}
+.tray-slot{width:32px;height:40px;border-radius:5px;display:grid;place-items:center;position:relative}
+.tray-slot:hover{background:rgba(127,127,127,.18)}
+.tray-slot canvas{image-rendering:pixelated;display:block}
+.tray-slot .lbl{position:absolute;top:100%;margin-top:6px;font-size:11px;white-space:nowrap;color:var(--ink2)}
+.sys{font-size:12px;line-height:1.25;text-align:right;padding:0 6px 0 10px}
+.chev{width:26px;text-align:center;font-size:12px;opacity:.85}
+.strip-labels{display:flex;justify-content:flex-end;gap:2px;padding:4px 10px 8px;background:var(--panel);font-size:11.5px;color:var(--ink2)}
+.strip-labels span{width:32px;text-align:center;white-space:nowrap;overflow:visible}
+
+/* 标本格 */
+.spec{margin-top:14px;display:grid;gap:0;border:1px solid var(--rule);border-radius:10px;overflow:hidden;background:var(--panel)}
+.spec .hd,.spec .rh{font-size:12.5px;color:var(--ink2);padding:8px 10px}
+.spec .hd{background:#F6F8FA;border-bottom:1px solid var(--rule);font-weight:600;color:var(--ink)}
+.spec .rh{border-right:1px solid var(--rule);display:flex;flex-direction:column;justify-content:center}
+.spec .rh b{color:var(--ink);font-weight:600;font-size:13.5px}
+.cell{padding:12px 10px;display:flex;align-items:center;gap:14px;border-bottom:1px solid #E6EAEE}
+.cell.on-dark{background:var(--tb-dark)}
+.cell.on-light{background:var(--tb-light)}
+.cell canvas{image-rendering:pixelated;display:block}
+.cell .one{display:grid;place-items:center;width:36px;height:36px}
+.cell .mag{border-radius:2px}
+.row-last .cell,.row-last .rh{border-bottom:0}
+
+/* 菜单样稿 */
+.menus{display:flex;flex-wrap:wrap;gap:28px;margin-top:14px}
+.desk{padding:28px;border-radius:10px;min-width:330px}
+.desk.dark{background:#0F2433}
+.desk.light{background:#CFE0EE}
+.menu{width:300px;border-radius:8px;padding:4px;font-size:14px;font-family:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.28)}
+.menu.dark{background:#2C2C2C;color:#fff;border:1px solid #3d3d3d}
+.menu.light{background:#F9F9F9;color:#1a1a1a;border:1px solid #e3e3e3}
+.mi{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:4px}
+.mi:hover{background:rgba(127,127,127,.16)}
+.mi .ck{width:14px;text-align:center}
+.mi .lv{margin-left:auto;font-variant-numeric:tabular-nums}
+.mi .sub{font-size:12px;opacity:.62}
+.mi.dim{opacity:.62}
+.msep{height:1px;margin:4px 6px}
+.menu.dark .msep{background:#454545}
+.menu.light .msep{background:#e2e2e2}
+.mcap{font-size:12px;opacity:.6;padding:6px 10px 2px}
+
+/* 在托盘里改设置：级联菜单 */
+.cascade{position:relative;display:flex;align-items:flex-start;margin-top:14px;padding:28px;border-radius:10px;overflow-x:auto;min-height:560px}
+.cascade.dark,.subsheet.dark{background:#0F2433}
+.cascade.light,.subsheet.light{background:#CFE0EE}
+.cascade .menu{flex:none}
+.cascade .menu + .menu{margin-left:-8px}
+.menu.wide{width:340px}
+.mi[tabindex]{cursor:pointer}
+.mi[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.mi.open{background:rgba(127,127,127,.24)}
+.mi .acc{margin-left:auto;opacity:.6;font-size:13px;white-space:nowrap;padding-left:14px}
+.mi .arr{opacity:.75;margin-left:8px}
+.mi .arr.push{margin-left:auto}
+.mi .pv{display:grid;place-items:center;min-width:20px}
+.mi .pv canvas{image-rendering:pixelated;display:block}
+.mi .note{font-size:12px;opacity:.55;margin-left:auto;padding-left:10px;white-space:nowrap}
+.subhd{font-size:16px;font-weight:600;margin:26px 0 4px}
+.subsheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px;margin-top:14px;padding:22px;border-radius:10px}
+.subsheet .menu{width:100%}
+.subsheet .cap{font-size:12.5px;margin:0 0 6px 4px}
+.subsheet.dark .cap{color:#AFC3D3}
+.subsheet.light .cap{color:#3B5163}
+
+/* 设置项 */
+.qs{margin-top:14px;display:grid;gap:14px}
+.q{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.q{min-width:0}
+.q legend{float:left;width:100%;padding:0;margin:0}
+.q legend + *{clear:both}
+.q h3{font-size:15px;margin:0 0 3px;font-weight:600}
+.q .why{font-size:13px;color:var(--ink2);margin:0 0 9px;max-width:86ch}
+.opts{display:flex;flex-wrap:wrap;gap:6px 16px}
+.opts label{display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer}
+.opts input{accent-color:var(--accent)}
+.rec{font-size:12px;color:var(--accent);margin-left:2px}
+textarea{width:100%;min-height:190px;margin-top:10px;font:13px/1.55 "Cascadia Code",Consolas,monospace;border:1px solid var(--rule);border-radius:8px;padding:10px;background:#FBFCFD;color:var(--ink)}
+.copy{margin-top:8px;border:0;background:var(--ink);color:#fff;font:inherit;font-size:14px;padding:8px 16px;border-radius:8px;cursor:pointer}
+.copied{margin-left:10px;font-size:13px;color:var(--ink2)}
+
+@media (max-width:760px){
+  main{padding:28px 16px 80px}
+  .controls{margin:18px -16px 0;padding:10px 16px}
+  .scroll{overflow-x:auto}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>托盘图标设置</h1>
+  <p class="lede">托盘上只有 16 个像素，图标怎么画由 8 项设置决定。这一页把每个选项放回它真正要待的地方，按你屏幕的真实像素画出来。页底生成的 <code>[tray]</code> 表，就是托盘将来要读的配置。</p>
+  <p class="hint"><b>已定稿（2026-09-10）。</b>8 项全部是用户设置，决定与理由记在 <code>docs/adr/0005</code>。</p>
+  <p class="hint">浏览器缩放请保持 100%，1:1 对照条才是真实大小。当前检测到的显示缩放：<b id="dprInfo">—</b>，对应托盘图标 <b id="autoSize">—</b> 像素。</p>
+</header>
+
+<div class="controls" role="toolbar" aria-label="审阅选项">
+  <div class="ctl">方向
+    <span class="seg" data-key="dir">
+      <button data-v="num">A 纯数字</button><button data-v="bat">B 电池</button><button data-v="ring">C 圆环</button><button data-v="bar">D 数字+底条</button>
+    </span>
+  </div>
+  <div class="ctl">字形
+    <span class="seg" data-key="glyph">
+      <button data-v="block">粗块</button><button data-v="fine">细体</button><button data-v="sys">系统字体</button>
+    </span>
+  </div>
+  <div class="ctl"><label for="lvl">电量</label>
+    <input id="lvl" type="range" min="0" max="100" value="57"><span class="val" id="lvlv">57</span>
+  </div>
+  <div class="ctl">100 画成
+    <span class="seg" data-key="full">
+      <button data-v="digits">100</button><button data-v="cap">99</button><button data-v="block">满格</button>
+    </span>
+  </div>
+  <div class="ctl">细看底色
+    <span class="seg" data-key="theme">
+      <button data-v="dark">深</button><button data-v="light">浅</button>
+    </span>
+  </div>
+  <div class="ctl">1:1 尺寸
+    <span class="seg" data-key="size">
+      <button data-v="auto">自动</button><button data-v="16">16</button><button data-v="20">20</button><button data-v="24">24</button><button data-v="32">32</button>
+    </span>
+  </div>
+</div>
+
+<section aria-labelledby="h-strip">
+  <h2 id="h-strip">放回任务栏</h2>
+  <p class="hint">Windows 11 的深色与浅色任务栏，在真实设备像素上绘制。托盘区里并排放的是同一个方向在各个状态下的样子——真实的托盘上只会出现其中一个。鼠标移上去能看到状态名。</p>
+  <div id="strips"></div>
+</section>
+
+<section aria-labelledby="h-cmp">
+  <h2 id="h-cmp">四个方向并排</h2>
+  <p class="hint">每格左边是 1:1 真实大小，右边是 16 像素放大 6 倍、带像素格。先在这里挑方向，再往下细看。行头写着这个状态在词汇表里叫什么、用户该做什么。</p>
+  <div class="scroll"><div id="compare"></div></div>
+</section>
+
+<section aria-labelledby="h-det">
+  <h2 id="h-det">选中方向的四个尺寸</h2>
+  <p class="hint">16 / 20 / 24 / 32 分别对应 100% / 125% / 150% / 200% 显示缩放。都放大到差不多的显示尺寸，好比较笔画在每一档是怎么落到像素上的。</p>
+  <div class="scroll"><div id="detail"></div></div>
+</section>
+
+<section aria-labelledby="h-menu">
+  <h2 id="h-menu">右键菜单</h2>
+  <p class="hint">原生菜单，不带 GUI 框架。每台 Device 一行；整行 <code>status</code> 太长，这里只放电量、来源和多久前。Primary Device 前面打勾。“图标样式”和“菜单显示”两个子菜单是改设置的入口，展开后的样子在下一节。</p>
+  <div class="menus" id="menus"></div>
+</section>
+
+<section aria-labelledby="h-set">
+  <h2 id="h-set">在托盘里改设置</h2>
+  <p class="hint">README 定的是“原生菜单，零 GUI 框架”，所以设置不开窗口，全部挂在右键菜单的子菜单里：“图标样式”管图标的六项，“菜单显示”管菜单自己的两项。“图标样式”里每一行右边写着现在的值；最里一层的每个选项前面，是它按你屏幕的托盘尺寸画出来的样子，选之前就看得到。点一下立刻生效，并按 ADR-0003 格式保留地写回 <code>config.toml</code>。</p>
+  <p class="hint">这组菜单能点：点第二层的某一行换出它的子菜单，点最里一层的选项就真的改设置，页面上所有预览都会跟着变。底色跟着上面的“细看底色”。</p>
+  <div id="cascade" class="cascade" aria-label="右键菜单的设置路径，可操作"></div>
+  <h3 class="subhd">全部子菜单</h3>
+  <p class="hint">真实的菜单一次只展开一条路径。这里把八项的子菜单全部摊开，当作规格来看。</p>
+  <div id="subsheet" class="subsheet"></div>
+</section>
+
+<section aria-labelledby="h-q">
+  <h2 id="h-q">设置项</h2>
+  <p class="hint">托盘做出来之后，这 8 项会成为 <code>config.toml</code> 里的 <code>[tray]</code> 表，右键菜单里也能改。每个选项都连着上面的预览，点一下就能看到它画出来的样子。标“默认”的是不写这一项时用的值。你的选择记在这个浏览器里，关掉再开不会丢。</p>
+  <div class="qs" id="qs"></div>
+  <textarea id="summary" readonly aria-label="生成的 tray 配置"></textarea>
+  <button class="copy" id="copy">复制配置</button><span class="copied" id="copied" role="status"></span>
+</section>
+
+<p class="hint" style="margin-top:48px">出处：<code>.scratch/battery-readout/spec.md</code> 的 Out of Scope（图标先审后写的门槛、四状态 × 四尺寸、完全没有已知值时画什么）；<code>README.md</code> 的设计要点（单图标画 Primary Device 的电量数字、颜色承载状态、原生菜单）；状态的名字一律按 <code>CONTEXT.md</code>。</p>
+</main>
+<script>
+(() => {
+'use strict';
+
+/* ---------- 像素字形：每个数字是一张位图，按整数倍放大，落在整像素上 ---------- */
+const F35 = { w:3, h:5, g:{
+  '0':['111','101','101','101','111'], '1':['010','110','010','010','111'],
+  '2':['111','001','111','100','111'], '3':['111','001','111','001','111'],
+  '4':['101','101','111','001','001'], '5':['111','100','111','001','111'],
+  '6':['111','100','111','101','111'], '7':['111','001','001','001','001'],
+  '8':['111','101','111','101','111'], '9':['111','101','111','001','111'],
+  '?':['111','001','010','000','010'], '-':['000','000','111','000','000'],
+  '!':['010','010','010','000','010'] }};
+const F57 = { w:5, h:7, g:{
+  '0':['01110','10001','10011','10101','11001','10001','01110'],
+  '1':['00100','01100','00100','00100','00100','00100','01110'],
+  '2':['01110','10001','00001','00010','00100','01000','11111'],
+  '3':['11111','00010','00100','00010','00001','10001','01110'],
+  '4':['00010','00110','01010','10010','11111','00010','00010'],
+  '5':['11111','10000','11110','00001','00001','10001','01110'],
+  '6':['00110','01000','10000','11110','10001','10001','01110'],
+  '7':['11111','00001','00010','00100','01000','01000','01000'],
+  '8':['01110','10001','10001','01110','10001','10001','01110'],
+  '9':['01110','10001','10001','01111','00001','00010','01100'],
+  '?':['01110','10001','00001','00010','00100','00000','00100'],
+  '-':['00000','00000','00000','11111','00000','00000','00000'],
+  '!':['00100','00100','00100','00100','00100','00000','00100'] }};
+
+/* 找能塞进 W×H 的最大整数倍。tall=true 时竖向可以比横向多放大一档（粗块用，数字更高更好认） */
+function fitBitmap(font, str, W, H, tall) {
+  const n = str.length;
+  for (let sx = 8; sx >= 1; sx--) {
+    const w = n * font.w * sx + (n - 1) * sx;
+    if (w > W) continue;
+    const syMax = Math.floor(H / font.h);
+    const sy = Math.min(syMax, tall ? sx + 1 : sx);
+    if (sy < 1 || (!tall && sy < sx)) continue;
+    return { sx, sy, w, h: font.h * sy };
+  }
+  return null;
+}
+function drawBitmap(ctx, font, str, x, y, sx, sy, color) {
+  ctx.fillStyle = color;
+  for (let i = 0; i < str.length; i++) {
+    const gl = font.g[str[i]]; if (!gl) continue;
+    const ox = x + i * (font.w + 1) * sx;
+    for (let r = 0; r < font.h; r++)
+      for (let c = 0; c < font.w; c++)
+        if (gl[r][c] === '1') ctx.fillRect(ox + c * sx, y + r * sy, sx, sy);
+  }
+}
+/* 在方框里居中画一串字；按字形选项挑字体，放不下就退到更小的字体 */
+function drawText(ctx, str, box, color, glyph) {
+  if (glyph === 'sys') {
+    for (let px = Math.floor(box.h * 1.35); px >= 6; px--) {
+      ctx.font = `700 ${px}px "Segoe UI","Microsoft YaHei UI",sans-serif`;
+      const m = ctx.measureText(str);
+      const asc = m.actualBoundingBoxAscent, desc = m.actualBoundingBoxDescent;
+      if (m.width <= box.w && asc + desc <= box.h) {
+        ctx.fillStyle = color; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+        ctx.fillText(str, box.x + (box.w - m.width) / 2, box.y + (box.h - (asc + desc)) / 2 + asc);
+        return true;
+      }
+    }
+    return false;
+  }
+  const order = glyph === 'fine' ? [[F57, false], [F35, false]] : [[F35, true]];
+  for (const [font, tall] of order) {
+    const f = fitBitmap(font, str, box.w, box.h, tall);
+    if (f) {
+      drawBitmap(ctx, font, str,
+        box.x + Math.floor((box.w - f.w) / 2), box.y + Math.floor((box.h - f.h) / 2), f.sx, f.sy, color);
+      return true;
+    }
+  }
+  return false;
+}
+
+/* ---------- 颜色与状态 ---------- */
+const PAL = {
+  dark:  { bg:'#1F1F1F', fg:'#FFFFFF', red:'#FF5F57', green:'#4CD98A', gray:'#8E949B', amber:'#F2B233', track:'rgba(255,255,255,.22)', grid:'rgba(255,255,255,.08)' },
+  light: { bg:'#F0F0F0', fg:'#1C1C1C', red:'#D1242F', green:'#1B8A3F', gray:'#8A8F96', amber:'#B87E00', track:'rgba(0,0,0,.17)',     grid:'rgba(0,0,0,.08)' },
+};
+/* 名字按 CONTEXT.md。readme 标明它在 README 的“四状态”里落在哪一格 */
+const STATES = [
+  { k:'normal',  short:'正常', name:'正常',     term:'新鲜的 Reading',                          todo:'不用管',             readme:'默认色', level:'L', color:'fg' },
+  { k:'low',     short:'低电', name:'低电',     term:'Reading 低于 low_battery（20%）',          todo:'该充电了',           readme:'红',     level:12,  color:'red' },
+  { k:'chg',     short:'充电', name:'充电中',   term:'Reading 的充电态为“是”',                   todo:'不用管',             readme:'绿',     level:'L', color:'green' },
+  { k:'stale',   short:'陈旧', name:'Stale',    term:'拿上次已知值顶上，行尾写“已陈旧”',        todo:'等一等，或看看设备', readme:'灰',     level:'L', color:'gray' },
+  { k:'paused',  short:'暂停', name:'暂停',     term:'厂商 HUB 在跑，我们没去问',               todo:'关掉 HUB',           readme:'灰',     level:'L', color:'gray', mark:'pause' },
+  { k:'fail',    short:'失败', name:'取数失败', term:'失联、读取异常，或一条 Endpoint 都没配',  todo:'插线、配对，或查权限', readme:'灰',   text:'!',  color:'gray' },
+  { k:'unknown', short:'未知', name:'Unknown',  term:'设备答了，但电量字段不可采信',           todo:'做不了什么',         readme:'灰',     text:'?',  color:'gray' },
+  { k:'none',    short:'无值', name:'无已知值', term:'一次读数都没有过（spec 留给这一步定）',  todo:'等第一次读到',       readme:'没写',   text:'--', color:'gray' },
+];
+
+/* 100 怎么画：'digits' 画三位，'cap' 画 99，'block' 画满格符号（返回 null） */
+function levelText(L, full) {
+  if (L >= 100) { if (full === 'cap') return '99'; if (full === 'block') return null; }
+  return String(L);
+}
+function fullBlock(ctx, box, color) {
+  const i = Math.max(1, Math.round(Math.min(box.w, box.h) * 0.12));
+  ctx.fillStyle = color;
+  ctx.fillRect(box.x + i, box.y + i, box.w - 2 * i, box.h - 2 * i);
+}
+
+/* 充电闪电与程序图标：同样是整数倍放大的位图 */
+const BOLT = { w:4, h:7, g:{ b:['0011','0110','1100','1111','0011','0110','1100'] } };
+const LOGO = { w:7, h:7, g:{ j:['0000011','0000110','1111111','0111110','0111110','0111110','0011100'] } };
+
+/* 画中间那一块：数字、符号、满格、空、或程序图标 */
+function drawSym(ctx, txt, box, color, glyph) {
+  if (txt === null) return fullBlock(ctx, box, color);
+  if (txt === '') return;
+  if (txt === '@logo') {
+    const f = fitBitmap(LOGO, 'j', box.w, box.h, false);
+    if (f) drawBitmap(ctx, LOGO, 'j', box.x + Math.floor((box.w - f.w) / 2), box.y + Math.floor((box.h - f.h) / 2), f.sx, f.sy, color);
+    return;
+  }
+  drawText(ctx, txt, box, color, glyph);
+}
+
+/* ---------- 四个方向 ----------
+ * o 是全部设置：dir 方向、glyph 字形、full 100 怎么画、gray 灰怎么拆、
+ * none 无已知值画什么、chg 充电标记，外加预览用的 L 电量与 theme 底色 */
+function drawIcon(cv, S, st, o) {
+  cv.width = S; cv.height = S;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, S, S); ctx.imageSmoothingEnabled = false;
+  const P = PAL[o.theme];
+  const col = st.color === 'fg' ? P.fg : P[st.color];
+  const u = Math.max(1, Math.round(S / 16));             // 一个“笔画单位”，16 像素时是 1
+  const L = st.text ? null : (st.level === 'L' ? o.L : st.level);
+
+  /* 没有数的状态画哪个符号。“全部一个灰”时，取数失败与 Unknown 也用无已知值那个符号 */
+  const noneSym = { dash:'--', q:'?', empty:'', logo:'@logo' }[o.none];
+  let sym = st.text || null;
+  if (st.k === 'none' || (o.gray === 'one' && (st.k === 'fail' || st.k === 'unknown'))) sym = noneSym;
+  const txt = sym !== null ? sym : levelText(L, o.full);
+
+  /* 充电闪电占掉左边一条，方向在剩下的 [ax, S) 里画——数字因此变窄，这是它的代价 */
+  const bh = Math.max(2, Math.round(S / 8));              // D 底条的高度
+  let ax = 0;
+  if (st.k === 'chg' && (o.chg === 'boltall' || (o.chg === 'bolt24' && S >= 24))) {
+    const hb = o.dir === 'bar' ? S - bh - u : S;           // D 里闪电只占数字那一块，别压到底条上
+    const sx = Math.max(1, Math.round(S / 16)), sy = Math.max(1, Math.floor(hb / 7));
+    drawBitmap(ctx, BOLT, 'b', 0, Math.floor((hb - BOLT.h * sy) / 2), sx, sy, P.green);
+    ax = BOLT.w * sx + u;
+  }
+  const aw = S - ax;
+
+  if (o.dir === 'num') {
+    const box = { x:ax, y:0, w:aw, h:S };
+    if (txt === '') {                                     // 空的轮廓
+      ctx.fillStyle = col;
+      ctx.fillRect(ax + u, u, aw - 2 * u, u); ctx.fillRect(ax + u, S - 2 * u, aw - 2 * u, u);
+      ctx.fillRect(ax + u, u, u, S - 2 * u); ctx.fillRect(S - 2 * u, u, u, S - 2 * u);
+    } else drawSym(ctx, txt, box, col, o.glyph);
+  }
+
+  if (o.dir === 'bar') {
+    const box = { x:ax, y:0, w:aw, h:S - bh - u };
+    const numCol = st.color === 'gray' ? P.gray : P.fg;   // 数字始终最高对比，状态交给底条
+    drawSym(ctx, txt, box, numCol, o.glyph);
+    ctx.fillStyle = P.track; ctx.fillRect(0, S - bh, S, bh);
+    if (L !== null) { ctx.fillStyle = col; ctx.fillRect(0, S - bh, Math.max(u, Math.round(S * L / 100)), bh); }
+  }
+
+  if (o.dir === 'bat') {
+    const nub = u, bw = u;
+    const bx = ax, by = Math.round(S * 0.22), bwid = aw - nub, bht = S - 2 * by;
+    const edge = st.color === 'fg' ? P.fg : col;
+    ctx.fillStyle = edge;
+    ctx.fillRect(bx, by, bwid, bw); ctx.fillRect(bx, by + bht - bw, bwid, bw);
+    ctx.fillRect(bx, by, bw, bht); ctx.fillRect(bx + bwid - bw, by, bw, bht);
+    const nh = Math.max(2, Math.round(bht / 2));
+    ctx.fillRect(bx + bwid, by + Math.round((bht - nh) / 2), nub, nh);
+    const inner = { x: bx + bw + u, y: by + bw + u, w: bwid - 2 * bw - 2 * u, h: bht - 2 * bw - 2 * u };
+    const showNum = S >= 24;
+    if (L !== null) {
+      ctx.globalAlpha = showNum ? 0.45 : 1;
+      ctx.fillStyle = col;
+      ctx.fillRect(inner.x, inner.y, Math.max(u, Math.round(inner.w * L / 100)), inner.h);
+      ctx.globalAlpha = 1;
+    }
+    if (sym !== null) drawSym(ctx, sym, inner, col, o.glyph);
+    else if (showNum) drawSym(ctx, txt, inner, P.fg, o.glyph);
+  }
+
+  if (o.dir === 'ring') {
+    const sw = Math.max(2, Math.round(S / 8));
+    const cx = ax + aw / 2, r = aw / 2 - sw / 2;
+    ctx.lineWidth = sw; ctx.lineCap = 'butt';
+    ctx.strokeStyle = P.track; ctx.beginPath(); ctx.arc(cx, S / 2, r, 0, Math.PI * 2); ctx.stroke();
+    if (L !== null) {
+      ctx.strokeStyle = col; ctx.beginPath();
+      ctx.arc(cx, S / 2, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0.02, L / 100)); ctx.stroke();
+    }
+    const pad = sw + u;
+    const box = { x: ax + pad, y: Math.round((S - aw) / 2) + pad, w: aw - 2 * pad, h: aw - 2 * pad };
+    const numCol = st.color === 'gray' ? P.gray : P.fg;
+    drawSym(ctx, txt, box, txt === null ? col : numCol, o.glyph);
+  }
+
+  if (st.mark === 'pause' && o.gray === 'numsym+pause') { // 暂停：右上角一个琥珀点
+    const d = Math.max(2, Math.round(S / 7));
+    ctx.fillStyle = P.amber; ctx.fillRect(S - d, 0, d, d);
+  }
+  return cv;
+}
+
+/* 放大：最近邻，外加像素格 */
+function magnify(src, S, k, theme, grid) {
+  const m = document.createElement('canvas');
+  m.width = S * k; m.height = S * k;
+  const c = m.getContext('2d');
+  c.imageSmoothingEnabled = false;
+  c.fillStyle = PAL[theme].bg; c.fillRect(0, 0, m.width, m.height);
+  c.drawImage(src, 0, 0, S * k, S * k);
+  if (grid) {
+    c.fillStyle = PAL[theme].grid;
+    for (let i = 1; i < S; i++) { c.fillRect(i * k, 0, 1, m.height); c.fillRect(0, i * k, m.width, 1); }
+  }
+  m.className = 'mag';
+  m.style.width = (S * k) + 'px'; m.style.height = (S * k) + 'px';
+  return m;
+}
+
+window.__jb = { drawIcon, magnify, STATES, PAL };
+})();
+</script>
+<script>
+(() => {
+'use strict';
+const { drawIcon, magnify, STATES } = window.__jb;
+const KEY = 'jb-icon-settings-v2';
+const SIZES = [16, 20, 24, 32];
+const MAG = { 16: 6, 20: 5, 24: 4, 32: 3 };
+const DIRS = [
+  { v:'num',  name:'A 纯数字' }, { v:'bat', name:'B 电池' },
+  { v:'ring', name:'C 圆环' },   { v:'bar', name:'D 数字+底条' },
+];
+/* 八项设置的默认值，外加三个只管预览的旋钮（L 电量、theme 底色、size 1:1 尺寸） */
+const DEFAULTS = { dir:'bar', glyph:'block', full:'block', gray:'numsym', none:'dash', chg:'color', src:'yes', prim:'both' };
+const set = Object.assign({ L:57, theme:'dark', size:'auto' }, DEFAULTS);
+
+function load() {
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (s) Object.assign(set, s);
+  } catch (e) { /* 读不到存档就用默认值 */ }
+}
+function save() { try { localStorage.setItem(KEY, JSON.stringify(set)); } catch (e) { /* 存不了不影响审阅 */ } }
+
+const dpr = () => window.devicePixelRatio || 1;
+function autoSize() { const t = 16 * dpr(); return SIZES.reduce((a, b) => Math.abs(b - t) < Math.abs(a - t) ? b : a); }
+function oneToOne() { return set.size === 'auto' ? autoSize() : Number(set.size); }
+function icon(S, st, theme, dir) {
+  return drawIcon(document.createElement('canvas'), S, st, {
+    dir: dir || set.dir, glyph: set.glyph, full: set.full, gray: set.gray, none: set.none, chg: set.chg,
+    L: set.L, theme });
+}
+/* 1 个画布像素 = 1 个设备像素：CSS 尺寸要除以缩放 */
+function trueSize(cv, S) { cv.style.width = (S / dpr()) + 'px'; cv.style.height = (S / dpr()) + 'px'; return cv; }
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+/* ---------- 1:1 任务栏 ---------- */
+function renderStrips() {
+  const host = document.getElementById('strips'); host.innerHTML = '';
+  const S = oneToOne();
+  for (const theme of ['dark', 'light']) {
+    const strip = el('div', 'strip');
+    const tb = el('div', 'taskbar ' + theme);
+    tb.setAttribute('aria-label', (theme === 'dark' ? '深色' : '浅色') + '任务栏，1:1 真实像素');
+    const left = el('div', 'tb-left');
+    for (const c of ['#3B82C4', '#E0A23B', '#5AA469']) { const a = el('span', 'tb-app'); const i = el('i'); i.style.background = c; a.appendChild(i); left.appendChild(a); }
+    tb.appendChild(left);
+    tb.appendChild(el('span', 'chev', '⌃'));
+    for (const st of STATES) {
+      const slot = el('span', 'tray-slot'); slot.title = st.name + '：' + st.term;
+      slot.appendChild(trueSize(icon(S, st, theme), S)); tb.appendChild(slot);
+    }
+    const sys = el('div', 'sys'); sys.style.width = '78px'; sys.innerHTML = '11:03<br>2026/9/10'; tb.appendChild(sys);
+    strip.appendChild(tb);
+
+    const lab = el('div', 'strip-labels');
+    const sp = el('span'); sp.style.marginRight = 'auto'; sp.style.width = '0'; lab.appendChild(sp);
+    const sc = el('span'); sc.style.width = '26px'; lab.appendChild(sc);
+    for (const st of STATES) lab.appendChild(el('span', null, st.short));
+    const ss = el('span'); ss.style.width = '78px'; lab.appendChild(ss);
+    strip.appendChild(lab);
+    host.appendChild(strip);
+  }
+  const note = el('p', 'hint');
+  note.style.marginTop = '10px';
+  note.textContent = set.size === 'auto'
+    ? `这两条用的是 ${S} 像素的图标——你的屏幕在托盘里实际会用这一档。`
+    : `这两条强制用 ${S} 像素的图标，按设备像素 1:1 画。你的屏幕实际会用 ${autoSize()} 像素那一档。`;
+  host.appendChild(note);
+}
+
+/* ---------- 标本格：行是状态 ---------- */
+function rowHead(st) {
+  const rh = el('div', 'rh');
+  rh.appendChild(el('b', null, st.name));
+  rh.appendChild(el('span', null, st.term));
+  rh.appendChild(el('span', null, '用户该做：' + st.todo));
+  rh.appendChild(el('span', null, 'README 里是：' + st.readme));
+  return rh;
+}
+function specGrid(cols, headers, cellFn) {
+  const g = el('div', 'spec');
+  g.style.gridTemplateColumns = '220px repeat(' + cols + ', minmax(150px, 1fr))';
+  g.appendChild(el('div', 'hd', '状态'));
+  for (const h of headers) g.appendChild(el('div', 'hd', h));
+  STATES.forEach((st, i) => {
+    const last = i === STATES.length - 1;
+    const rh = rowHead(st); if (last) rh.style.borderBottom = '0';
+    g.appendChild(rh);
+    for (let c = 0; c < cols; c++) {
+      const cell = el('div', 'cell on-' + set.theme); if (last) cell.style.borderBottom = '0';
+      cellFn(cell, st, c); g.appendChild(cell);
+    }
+  });
+  return g;
+}
+function renderCompare() {
+  const host = document.getElementById('compare'); host.innerHTML = '';
+  const S = oneToOne();
+  host.appendChild(specGrid(4, DIRS.map(d => d.name + (d.v === set.dir ? '（选中）' : '')), (cell, st, c) => {
+    const d = DIRS[c].v;
+    const one = el('span', 'one'); one.appendChild(trueSize(icon(S, st, set.theme, d), S)); cell.appendChild(one);
+    cell.appendChild(magnify(icon(16, st, set.theme, d), 16, MAG[16], set.theme, true));
+  }));
+}
+function renderDetail() {
+  const host = document.getElementById('detail'); host.innerHTML = '';
+  const pct = { 16: '100%', 20: '125%', 24: '150%', 32: '200%' };
+  const dname = DIRS.find(d => d.v === set.dir).name;
+  host.appendChild(specGrid(4, SIZES.map(s => `${dname}，${s} 像素（${pct[s]}）`), (cell, st, c) => {
+    const S = SIZES[c];
+    const one = el('span', 'one'); one.appendChild(trueSize(icon(S, st, set.theme), S)); cell.appendChild(one);
+    cell.appendChild(magnify(icon(S, st, set.theme), S, MAG[S], set.theme, true));
+  }));
+}
+
+/* ---------- 右键菜单 ---------- */
+/* 菜单项与菜单：三处共用（上面的样稿、级联菜单、全部子菜单） */
+function mItem({ role = 'menuitem', check = '', label = '', acc, arrow, pv, open, dim, note, onPick }) {
+  const it = el('div', 'mi' + (open ? ' open' : '') + (dim ? ' dim' : ''));
+  it.setAttribute('role', role);
+  if (role !== 'menuitem') it.setAttribute('aria-checked', String(!!check));
+  if (arrow) { it.setAttribute('aria-haspopup', 'menu'); it.setAttribute('aria-expanded', String(!!open)); }
+  it.appendChild(el('span', 'ck', check));
+  if (pv) { const p = el('span', 'pv'); p.appendChild(pv); it.appendChild(p); }
+  it.appendChild(el('span', null, label));
+  if (note) it.appendChild(el('span', 'note', note));
+  if (acc) it.appendChild(el('span', 'acc', acc));
+  if (arrow) it.appendChild(el('span', acc || note ? 'arr' : 'arr push', '›'));
+  if (onPick) {
+    it.tabIndex = 0;
+    it.addEventListener('click', onPick);
+    it.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(); } });
+  }
+  return it;
+}
+function mMenu(theme, label, items, wide) {
+  const m = el('div', 'menu ' + theme + (wide ? ' wide' : ''));
+  m.setAttribute('role', 'menu'); m.setAttribute('aria-label', label);
+  for (const it of items) m.appendChild(it === '-' ? el('div', 'msep') : it);
+  return m;
+}
+function devItem(name, sub, lv, check, dim) {
+  const it = el('div', 'mi' + (dim ? ' dim' : '')); it.setAttribute('role', 'menuitem');
+  it.appendChild(el('span', 'ck', check));
+  const tx = el('span'); tx.appendChild(el('div', null, name));
+  if (set.src === 'yes') tx.appendChild(el('div', 'sub', sub));
+  it.appendChild(tx); it.appendChild(el('span', 'lv', lv));
+  return it;
+}
+
+const STYLE_KEYS = ['dir', 'glyph', 'full', 'gray', 'none', 'chg'];
+const PREVIEW_STATE = { dir:'normal', glyph:'normal', full:'normal', none:'none', chg:'chg' };
+const nav = { top:'style', sub:'dir' };                  // 级联菜单现在展开到哪一条路径
+const byKey = k => SETTINGS.find(s => s.k === k);
+const optLabel = (s, v) => (s.opts.find(o => o[0] === v) || [, v])[1];
+
+/* 一级菜单。live=true 时“图标样式”“菜单显示”两行能点，用在级联菜单里 */
+function topMenu(theme, live) {
+  const L = set.L >= 100 ? '100' : String(set.L);
+  const go = top => live ? () => { nav.top = top; renderCascade(); } : null;
+  return mMenu(theme, '托盘右键菜单，' + (theme === 'dark' ? '深色' : '浅色'), [
+    devItem('Dragonfly 3 Master+', '来自 Dongle24G，0 秒前', L + '%', set.prim === 'both' ? '✓' : ''),
+    devItem('VGN Neon75', '2.4G 读不到，也没有上次已知值', '取数失败', '', true),
+    '-',
+    el('div', 'mcap', '托盘上画哪一台'),
+    mItem({ role:'menuitemradio', check:'•', label:'自动（电量最低）' }),
+    mItem({ role:'menuitemradio', label:'Dragonfly 3 Master+' }),
+    mItem({ role:'menuitemradio', label:'VGN Neon75' }),
+    '-',
+    mItem({ label:'图标样式', arrow:true, open: live && nav.top === 'style', onPick: go('style') }),
+    mItem({ label:'菜单显示', arrow:true, open: live && nav.top === 'menu',  onPick: go('menu') }),
+    mItem({ role:'menuitemcheckbox', label:'开机自启' }),
+    '-',
+    mItem({ label:'打开配置文件' }),
+    mItem({ label:'退出' }),
+  ]);
+}
+/* 第二层：图标样式。每一行右边写着现在的值 */
+function styleMenu(theme, live) {
+  const items = STYLE_KEYS.map(k => {
+    const s = byKey(k);
+    return mItem({ label: s.m, acc: optLabel(s, set[k]), arrow: true, open: live && nav.sub === k,
+      onPick: live ? () => { nav.sub = k; renderCascade(); } : null });
+  });
+  items.push('-');
+  items.push(mItem({ label:'恢复默认', onPick: () => { for (const k of STYLE_KEYS) set[k] = DEFAULTS[k]; save(); renderAll(); } }));
+  return mMenu(theme, '图标样式', items, true);
+}
+/* 第二层：菜单显示。两项都是开关 */
+function menuShowMenu(theme) {
+  return mMenu(theme, '菜单显示', [
+    mItem({ role:'menuitemcheckbox', check: set.src === 'yes' ? '✓' : '', label: byKey('src').m,
+      onPick: () => { set.src = set.src === 'yes' ? 'no' : 'yes'; save(); renderAll(); } }),
+    mItem({ role:'menuitemcheckbox', check: set.prim === 'both' ? '✓' : '', label: byKey('prim').m,
+      onPick: () => { set.prim = set.prim === 'both' ? 'radio' : 'both'; save(); renderAll(); } }),
+  ], true);
+}
+/* 选项前面的预览小图：只把这一项换成该选项，其余设置照旧，按托盘的真实尺寸画。
+ * “灰状态”一张图说不清，画成 Stale、暂停、取数失败三个并排 */
+function optPreview(s, v, theme) {
+  const S = oneToOne();
+  const o = Object.assign({}, set, { [s.k]: v });
+  const keys = s.k === 'gray' ? ['stale', 'paused', 'fail'] : [PREVIEW_STATE[s.k]];
+  const gap = Math.max(2, Math.round(S / 6));
+  const cv = document.createElement('canvas');
+  cv.width = keys.length * S + (keys.length - 1) * gap; cv.height = S;
+  const ctx = cv.getContext('2d');
+  keys.forEach((k, i) => {
+    const one = drawIcon(document.createElement('canvas'), S, STATES.find(x => x.k === k), {
+      dir:o.dir, glyph:o.glyph, full:o.full, gray:o.gray, none:o.none, chg:o.chg,
+      L: s.k === 'full' ? 100 : o.L, theme });
+    ctx.drawImage(one, i * (S + gap), 0);
+  });
+  cv.style.width = (cv.width / dpr()) + 'px'; cv.style.height = (S / dpr()) + 'px';
+  return cv;
+}
+/* 最里一层：某一项设置的全部选项 */
+function optionMenu(theme, k) {
+  const s = byKey(k);
+  return mMenu(theme, s.m, s.opts.map(([v, label]) => mItem({
+    role:'menuitemradio', check: set[k] === v ? '•' : '', label, pv: optPreview(s, v, theme),
+    note: k === 'dir' && v === 'bat' ? '16、20 像素不显示数字' : (DEFAULTS[k] === v ? '默认' : ''),
+    onPick: () => { set[k] = v; save(); renderAll(); } })), true);
+}
+
+function renderMenus() {
+  const host = document.getElementById('menus'); host.innerHTML = '';
+  for (const theme of ['dark', 'light']) {
+    const desk = el('div', 'desk ' + theme); desk.appendChild(topMenu(theme, false)); host.appendChild(desk);
+  }
+}
+function renderCascade() {
+  const host = document.getElementById('cascade'); host.innerHTML = '';
+  const theme = set.theme; host.className = 'cascade ' + theme;
+  const m1 = topMenu(theme, true); host.appendChild(m1);
+  const m2 = nav.top === 'style' ? styleMenu(theme, true) : menuShowMenu(theme); host.appendChild(m2);
+  const m3 = nav.top === 'style' ? optionMenu(theme, nav.sub) : null; if (m3) host.appendChild(m3);
+  /* 子菜单的第一项对齐到打开它的那一行，像真的级联菜单 */
+  const pad = parseFloat(getComputedStyle(host).paddingTop);
+  const align = (menu, parent) => {
+    const row = parent.querySelector('.mi.open');
+    if (row) menu.style.marginTop = Math.max(0, row.offsetTop - pad - 4) + 'px';
+  };
+  align(m2, m1); if (m3) align(m3, m2);
+}
+function renderSubsheet() {
+  const host = document.getElementById('subsheet'); host.innerHTML = '';
+  host.className = 'subsheet ' + set.theme;
+  const block = (cap, menu) => { const w = el('div'); w.appendChild(el('p', 'cap', cap)); w.appendChild(menu); host.appendChild(w); };
+  for (const k of STYLE_KEYS) block('图标样式 › ' + byKey(k).m, optionMenu(set.theme, k));
+  block('菜单显示', menuShowMenu(set.theme));
+}
+
+/* ---------- 设置项 ----------
+ * 每一项：页面里的取值 → config.toml 里的取值。key 是 [tray] 表里的键名 */
+const SETTINGS = [
+  { k:'dir', key:'style', t:'图标画法', m:'画法',
+    why:'16 像素上，B 画不下数字，而且取数失败、Unknown、无已知值三个状态会长得一样；C 留给数字的只有 10 像素见方。D 把“看得清”和“表达状态”拆开：数字永远是最高对比色，红绿交给底下 2 像素的条。',
+    opts:[['num','A 纯数字','number'],['bat','B 电池','battery'],['ring','C 圆环','ring'],['bar','D 数字+底条','bar']] },
+  { k:'glyph', key:'glyph', t:'数字字形', m:'字形',
+    why:'16 像素上，粗块把 3×5 的格子放大成每位 6 像素宽、10 到 15 像素高，笔画整齐落在像素上。系统字体会被抗锯齿糊出灰边；细体放两位就只剩 5×7。',
+    opts:[['block','粗块','block'],['fine','细体','fine'],['sys','系统字体','system']] },
+  { k:'full', key:'full', t:'满电 100 怎么画', m:'满电 100',
+    why:'三位数在 16 像素里每位只剩 3×5。画成 99 能保住两位数的大小，代价是满电时图标上那个数不是真值。满格是一个一眼能认的独立符号。',
+    opts:[['digits','照画 100','digits'],['cap','画成 99','cap_99'],['block','满格符号','block']] },
+  { k:'gray', key:'gray', t:'灰状态怎么区分', m:'灰状态',
+    why:'Stale、暂停、取数失败、Unknown 要用户做的事都不同。“一个灰”是 README 的原样：有数的显示灰数字，没数的都画同一个符号。“两种”让灰数字表示“这个数不是现在的”，灰符号表示“手上没有数”。',
+    opts:[['one','全部一个灰','one'],['numsym','灰数字与灰符号两种','split'],['numsym+pause','两种，另给暂停加琥珀点','split_pause']] },
+  { k:'none', key:'no_last_known', t:'一次读数都没有过时画什么', m:'没有读数时',
+    why:'spec 把这个问题留到了这一步。选问号会和 Unknown 撞在一起；选空轮廓，在纯数字那个画法里托盘上就只剩一个框。',
+    opts:[['dash','两道横线 --','dash'],['q','问号','question'],['empty','空的轮廓','outline'],['logo','程序图标','logo']] },
+  { k:'chg', key:'charging', t:'充电中的标记', m:'充电标记',
+    why:'闪电占掉图标左边一条，数字跟着变窄——在 16 像素上这个代价最明显。颜色本来已经在承载这件事。',
+    opts:[['color','只靠绿色','color'],['bolt24','24 像素以上加闪电','bolt_large'],['boltall','所有尺寸都加闪电','bolt']] },
+  { k:'src', key:'menu_source', t:'菜单里写不写来源', m:'写出来源和多久前', bool:true,
+    why:'2.4G 是当场问出来的，Ble 是 Windows 攒的缓存，可能过期几个月。README 要求这两种在界面上分得开；图标里放不下，菜单里放得下。',
+    opts:[['yes','写来源和多久前',true],['no','只写电量',false]] },
+  { k:'prim', key:'primary_mark', t:'菜单里 Primary Device 标在哪', m:'在设备列表里标出 Primary Device',
+    why:'上面打勾的是“这一轮托盘画的是谁”，下面单选的是“你的设置”。设成自动时两者不同。',
+    opts:[['both','两处都标','both'],['radio','只留单选','radio']] },
+];
+function renderSettings() {
+  const host = document.getElementById('qs'); host.innerHTML = '';
+  for (const s of SETTINGS) {
+    const box = el('fieldset', 'q'); box.style.margin = '0';
+    const lg = el('legend'); lg.appendChild(el('h3', null, s.t)); box.appendChild(lg);
+    box.appendChild(el('p', 'why', s.why));
+    const opts = el('div', 'opts');
+    for (const [v, label] of s.opts) {
+      const lb = el('label'); const r = el('input'); r.type = 'radio'; r.name = 's-' + s.k; r.value = v;
+      r.addEventListener('change', () => { set[s.k] = v; save(); renderAll(); });
+      lb.appendChild(r); lb.appendChild(document.createTextNode(label));
+      if (DEFAULTS[s.k] === v) lb.appendChild(el('span', 'rec', '默认'));
+      opts.appendChild(lb);
+    }
+    box.appendChild(opts); host.appendChild(box);
+  }
+}
+function syncSettings() {
+  for (const s of SETTINGS)
+    document.querySelectorAll(`input[name="s-${s.k}"]`).forEach(r => { r.checked = r.value === set[s.k]; });
+}
+/* 生成 config.toml 里的 [tray] 表。注释写在键的上一行，和 config.example.toml 的写法一致 */
+function renderConfig() {
+  const lines = ['# 托盘图标与右键菜单。每一项都有默认值，不写就用默认值。', '[tray]'];
+  for (const s of SETTINGS) {
+    const hit = s.opts.find(o => o[0] === set[s.k]);
+    const val = s.bool ? String(hit[2]) : `"${hit[2]}"`;
+    const choices = s.opts.map(o => (s.bool ? String(o[2]) : `"${o[2]}"`) + ' ' + o[1]).join('，');
+    lines.push('', `# ${s.t}：${choices}`);
+    lines.push(`${s.key} = ${val}` + (DEFAULTS[s.k] === set[s.k] ? '' : '    # 改过，默认不是这个'));
+  }
+  document.getElementById('summary').value = lines.join('\n');
+}
+
+/* ---------- 控制条 ---------- */
+function syncControls() {
+  document.querySelectorAll('.seg').forEach(seg => {
+    const key = seg.dataset.key;
+    seg.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(String(set[key]) === b.dataset.v)));
+  });
+  document.getElementById('lvl').value = set.L;
+  document.getElementById('lvlv').textContent = set.L;
+  document.getElementById('dprInfo').textContent = Math.round(dpr() * 100) + '%';
+  document.getElementById('autoSize').textContent = autoSize();
+}
+function renderAll() {
+  syncControls(); syncSettings();
+  renderStrips(); renderCompare(); renderDetail(); renderMenus(); renderCascade(); renderSubsheet(); renderConfig();
+}
+
+document.querySelectorAll('.seg').forEach(seg => {
+  seg.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    set[seg.dataset.key] = b.dataset.v; save(); renderAll();
+  });
+});
+document.getElementById('lvl').addEventListener('input', e => { set.L = Number(e.target.value); save(); renderAll(); });
+document.getElementById('copy').addEventListener('click', async () => {
+  const ta = document.getElementById('summary'); const msg = document.getElementById('copied');
+  try { await navigator.clipboard.writeText(ta.value); msg.textContent = '已复制。'; }
+  catch (e) { ta.focus(); ta.select(); msg.textContent = document.execCommand('copy') ? '已复制。' : '复制不了，请手动全选复制。'; }
+});
+/* 换屏幕或改缩放时，1:1 的那一档会变 */
+let mq;
+function watchDpr() {
+  if (mq) mq.removeEventListener('change', onDpr);
+  mq = matchMedia(`(resolution: ${dpr()}dppx)`); mq.addEventListener('change', onDpr);
+}
+function onDpr() { watchDpr(); renderAll(); }
+
+load(); renderSettings(); watchDpr(); renderAll();
+})();
+</script>
+</body>
+</html>
