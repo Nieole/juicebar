@@ -14,6 +14,7 @@
 #![allow(dead_code)]
 
 pub mod fixtures;
+pub mod tray;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;

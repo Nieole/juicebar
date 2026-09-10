@@ -255,10 +255,39 @@ pub fn read_or_last_known(
     general: &General,
     now: Timestamp,
 ) -> Result<RowReading, NoReading> {
+    read_or_last_known_with_reason(device, endpoints, paused_by, last_known, general, now).row
+}
+
+/// [`read_or_last_known`] 交的那一份，连同它在退到上次已知值那一支里咽下去的那句原因。
+///
+/// 那一支交出去的是一份读数（上次已知值），这一次取数为什么没读到在那一份里没有位置；命令行用不上它
+/// ——那一行只标"上次已知值"——而托盘要把它写进日志：图标上那只是一个灰的旧数，这却是最常见的那一种
+/// 失败（设备收进了抽屉、接收器拔了，或者没有管理员权限，`docs/gaps.md`）。
+pub struct Outcome {
+    /// 交给这一轮的那一份，与 [`read_or_last_known`] 交的一模一样。
+    pub row: Result<RowReading, NoReading>,
+    /// 退到了上次已知值时，这一次取数自己为什么没读到。
+    ///
+    /// 读到了是 `None`；退不到时也是 `None`——那时原因就是 `row` 的 `Err`，不在两处各放一份。
+    pub fell_back_because: Option<NoReading>,
+}
+
+/// 同 [`read_or_last_known`]，外加退到上次已知值时这一次取数自己的原因（[`Outcome`]）。
+///
+/// 记账、退路、暂停那一维的判法全在这一个函数里，[`read_or_last_known`] 只是丢掉那句原因的简写：
+/// 两份各写一遍，退路那一支迟早会漂开。
+pub fn read_or_last_known_with_reason(
+    device: &Device,
+    endpoints: &dyn Endpoints,
+    paused_by: Option<&VendorHub>,
+    last_known: &mut LastKnown,
+    general: &General,
+    now: Timestamp,
+) -> Outcome {
     match read(device, endpoints, paused_by, now) {
         Ok(reading) => {
             last_known.record(&device.id, &reading, now);
-            Ok(RowReading {
+            let row = Ok(RowReading {
                 reading,
                 provenance: Provenance::JustRead,
                 // **读到了也可能有 Endpoint 让开过**：`Ble` 顶上的那一刻，两条 HID 一个都
@@ -272,24 +301,48 @@ pub fn read_or_last_known(
                 paused_by: paused_by
                     .filter(|_| !yielded_to(paused_by, &endpoints.present(device)).is_empty())
                     .cloned(),
-            })
+            });
+            Outcome {
+                row,
+                fell_back_because: None,
+            }
         }
         // 历史值只在这一支里被问到：读得到的时候它不参与竞争。让它参与，一份存了半天的
         // 读数就可能盖掉当场问出来的那个数——而这条链路上其余每一处守的都是相反的规矩
         // （Endpoint 优先级、`Ble` 排最后）。
-        Err(no_reading) => {
-            // 暂停这一维要跟着历史值一起交出去：那一行末尾非说一句不可（parking lot Q40
-            // 给本票的原话），而说得出话的只有取数那一步——它才知道这一次让开了什么。
-            let paused_by = no_reading.paused_by().cloned();
-            last_known
-                .reading_for(&device.id, general, now)
-                .map(|reading| RowReading {
-                    reading,
-                    provenance: Provenance::LastKnown,
-                    paused_by,
-                })
-                .ok_or(no_reading)
-        }
+        Err(no_reading) => fall_back_to_last_known(device, no_reading, last_known, general, now),
+    }
+}
+
+/// 这一次取数没读到（`no_reading`）：退到状态文件里的上次已知值，退不到就交出那句原因。
+///
+/// [`read_or_last_known_with_reason`] 读不到的那一支就是它。托盘在连本机都枚举不了、根本没法去读的时候
+/// 也走它：那时一样该拿上次已知值顶上（`CONTEXT.md`「上次已知值」），而不是让一个灰的旧数跳成取数失败。
+///
+/// **它只读 `last_known`、不记账**：拿出来的历史值不许再喂回去（[`read_or_last_known`] 上写了为什么）。
+pub fn fall_back_to_last_known(
+    device: &Device,
+    no_reading: NoReading,
+    last_known: &LastKnown,
+    general: &General,
+    now: Timestamp,
+) -> Outcome {
+    // 暂停这一维要跟着历史值一起交出去：那一行末尾非说一句不可（parking lot Q40
+    // 给本票的原话），而说得出话的只有取数那一步——它才知道这一次让开了什么。
+    let paused_by = no_reading.paused_by().cloned();
+    match last_known.reading_for(&device.id, general, now) {
+        Some(reading) => Outcome {
+            row: Ok(RowReading {
+                reading,
+                provenance: Provenance::LastKnown,
+                paused_by,
+            }),
+            fell_back_because: Some(no_reading),
+        },
+        None => Outcome {
+            row: Err(no_reading),
+            fell_back_because: None,
+        },
     }
 }
 
