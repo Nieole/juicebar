@@ -30,7 +30,8 @@ try {
   rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
 
-const m = dom.match(/<pre id="baselines">([\s\S]*?)<\/pre>/);
+// 紧跟着 `{` 的那一个：设计稿脚本的注释里也写着 `<pre id="baselines">` 这几个字。
+const m = dom.match(/<pre id="baselines">(\{[\s\S]*?)<\/pre>/);
 if (!m) throw new Error('页面里没有 <pre id="baselines">：导出入口没跑起来');
 const text = m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 const { files, unmatched } = JSON.parse(text);

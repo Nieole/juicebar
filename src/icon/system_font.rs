@@ -30,11 +30,12 @@ pub(super) fn draw(c: &mut Canvas, s: &str, rect: Rect, color: Rgba) {
     let largest = (f64::from(rect.h) * 1.35).floor() as i32;
     for px in (6..=largest).rev() {
         let Some(ink) = rasterize(s, px) else {
-            return; // GDI 不肯画：这一块留空，别的照画
+            // 交不出一个完整的字（GDI 不肯画，或草稿纸没装下）：这一块留空，别的照画。
+            // 半个字比没有字更像是在说一个数。
+            return;
         };
         if ink.w <= rect.w && ink.h <= rect.h {
-            let x0 = rect.x + (rect.w - ink.w).div_euclid(2);
-            let y0 = rect.y + (rect.h - ink.h).div_euclid(2);
+            let (x0, y0) = rect.center(ink.w, ink.h);
             for y in 0..ink.h {
                 for x in 0..ink.w {
                     let a = ink.coverage[(y * ink.w + x) as usize];
@@ -131,16 +132,14 @@ impl Page {
                 return None;
             }
             let mut bits: *mut c_void = std::ptr::null_mut();
-            let Ok(dib) = CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0)
-            else {
+            let dib = CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0)
+                .ok()
+                .map(|dib| Owned::new(dib)) // 先接管，下一步若丢掉它也会被删掉
+                .filter(|_| !bits.is_null());
+            let Some(dib) = dib else {
                 let _ = DeleteDC(dc);
                 return None;
             };
-            let dib = Owned::new(dib);
-            if bits.is_null() {
-                let _ = DeleteDC(dc);
-                return None;
-            }
             std::ptr::write_bytes(bits.cast::<u8>(), 0, (w * h * 4) as usize);
             let old = SelectObject(dc, HGDIOBJ::from(*dib));
             Some(Self {

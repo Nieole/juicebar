@@ -53,11 +53,11 @@ fn picks_the_nearest_of_the_four_icon_sizes_for_the_display_scale() {
 
 /// 缺省样式（D 数字+底条、粗块字形）下，有数的五个状态：数字始终是最高对比色，状态交给底条。
 #[test]
-fn the_default_icon_draws_the_level_in_block_digits_over_a_bar() {
+fn the_default_icon_draws_the_percentage_in_block_digits_over_a_bar() {
     assert_matches_design(
         baselines("default")
             .into_iter()
-            .filter(|b| b.level.is_some()),
+            .filter(|b| b.percent.is_some()),
     );
 }
 
@@ -68,13 +68,13 @@ fn the_default_icon_draws_a_gray_symbol_where_there_is_no_number() {
     assert_matches_design(
         baselines("default")
             .into_iter()
-            .filter(|b| b.level.is_none()),
+            .filter(|b| b.percent.is_none()),
     );
 }
 
 /// A 纯数字：整个图标就是那个数，颜色就是状态。
 #[test]
-fn the_number_style_fills_the_icon_with_the_level_in_the_state_color() {
+fn the_number_style_fills_the_icon_with_the_percentage_in_the_state_color() {
     assert_matches_design(baselines("style-number"));
 }
 
@@ -94,9 +94,10 @@ fn the_ring_style_sweeps_clockwise_from_twelve_with_the_number_inside() {
     assert_matches_design(baselines("style-ring"));
 }
 
-/// 细体：5×7 的像素字，放不下就退到 3×5；横竖同一个倍数。
+/// 细体：5×7 的像素字，横竖同一个倍数。缺省的 D 在四档里都放得下 5×7；放不下时退到 3×5 的
+/// 那一支，在方框小的 C 圆环与 B 电池里才走得到，守在电量扫描那一组。
 #[test]
-fn the_fine_glyph_uses_five_by_seven_and_falls_back_to_three_by_five() {
+fn the_fine_glyph_draws_five_by_seven_digits() {
     assert_matches_design(baselines("glyph-fine"));
 }
 
@@ -141,11 +142,13 @@ fn a_charging_bolt_takes_a_strip_on_the_left_and_stays_off_the_bar() {
     }
 }
 
-/// 每个画法走一遍电量的两头与中间（0、1、50、99、100）：底条、电池那一格、圆环的最短一截与
-/// 满圈，一位数怎么居中，100 画成满格时各画法用什么颜色。
+/// 电量扫描：每个画法走一遍电量的两头与中间（0、1、50、99、100）——底条、电池那一格、圆环的
+/// 最短一截与满圈、一位数怎么居中。每个画法走四遍，各守一类"从缺省只改一项"碰不到的交叉：
+/// 正常；充电中（C 圆环里的满格用状态色，别的画法用数字色）；充电中加闪电（A、B、C 让出左边
+/// 一条，C 在 16、20 像素上宽度变成奇数）；细体（C、B 的方框放不下 5×7，退到 3×5）。
 #[test]
 fn every_style_follows_the_design_from_empty_to_full() {
-    assert_matches_design(baselines("levels"));
+    assert_matches_design(baselines("sweep"));
 }
 
 /// 暂停而且从没读到过：`CONTEXT.md` 说暂停期间显示上次已知值，可这时没有上次已知值。设计稿
@@ -193,7 +196,7 @@ fn a_pause_with_no_known_value_draws_the_no_value_symbol_and_keeps_its_dot() {
                 ),
                 settings: none.settings,
                 state: IconState::Paused,
-                level: None,
+                percent: None,
                 size: none.size,
                 theme: none.theme,
                 grid,
@@ -204,26 +207,26 @@ fn a_pause_with_no_known_value_draws_the_no_value_symbol_and_keeps_its_dot() {
 
 /// 电量超过 100 按 100 画，不画出三位以上的数，也不让底条、电池那一格、圆环溢出去。
 #[test]
-fn a_level_above_100_is_drawn_as_100() {
-    let full = baselines("levels")
+fn a_percentage_above_100_is_drawn_as_100() {
+    let full = baselines("sweep")
         .into_iter()
-        .filter(|b| b.level == Some(100));
+        .filter(|b| b.percent == Some(100));
     assert_matches_design(full.map(|b| Baseline {
         origin: format!("{} 电量给 255 来画", b.origin),
-        level: Some(255),
+        percent: Some(255),
         ..b
     }));
 }
 
 /// 取数失败、Unknown、无已知值没有电量可画：调用方顺手给了一个数，图标也不因此变样。
 #[test]
-fn the_states_without_a_number_ignore_a_level_if_one_is_given() {
+fn the_states_without_a_number_ignore_a_percentage_if_one_is_given() {
     let symbols = baselines("default")
         .into_iter()
-        .filter(|b| b.level.is_none());
+        .filter(|b| b.percent.is_none());
     assert_matches_design(symbols.map(|b| Baseline {
         origin: format!("{} 电量给 57 来画", b.origin),
-        level: Some(57),
+        percent: Some(57),
         ..b
     }));
 }
@@ -233,22 +236,17 @@ fn the_states_without_a_number_ignore_a_level_if_one_is_given() {
 /// 上面那些用例照样全绿——只是比到的少了。
 #[test]
 fn the_baselines_cover_every_value_of_every_setting_in_all_states_sizes_and_themes() {
-    let mut groups = vec![("default".to_string(), None)];
-    for &(key, values, default) in SETTINGS {
-        for &value in values {
-            // 系统字体豁免逐像素（ADR-0005）；"100 怎么画"连缺省值也单独一组，因为缺省那组的电量
-            // 不是 100，看不出这一项。
-            if (key, value) == ("glyph", "system") || (value == default && key != "full") {
-                continue;
-            }
-            groups.push((format!("{key}-{value}"), Some(format!("{key}={value}"))));
+    let mut groups = vec![("default".to_string(), IconSettings::default())];
+    for &(key, value, set) in VALUES {
+        // 系统字体豁免逐像素（ADR-0005）；"100 怎么画"连缺省值也单独一组，因为缺省那组的电量
+        // 不是 100，看不出这一项。
+        let is_default = only(set) == IconSettings::default();
+        if (key, value) == ("glyph", "system") || (is_default && key != "full") {
+            continue;
         }
+        groups.push((format!("{key}-{value}"), only(set)));
     }
-    for (group, tag) in groups {
-        let mut want = IconSettings::default();
-        if let Some(kv) = &tag {
-            apply(&mut want, kv);
-        }
+    for (group, want) in groups {
         let found = baselines(&group);
         for b in &found {
             assert_eq!(b.settings, want, "{} 用的设置不是这一组该用的", b.origin);
@@ -271,7 +269,7 @@ struct Baseline {
     origin: String,
     settings: IconSettings,
     state: IconState,
-    level: Option<u8>,
+    percent: Option<u8>,
     size: IconSize,
     theme: Theme,
     grid: Vec<String>,
@@ -290,7 +288,7 @@ fn baselines(group: &str) -> Vec<Baseline> {
             continue;
         };
         let tokens: Vec<&str> = head.split_whitespace().collect();
-        let [state, level, size, theme, overrides @ ..] = tokens.as_slice() else {
+        let [state, percent, size, theme, overrides @ ..] = tokens.as_slice() else {
             panic!("{path}：认不出这一节的节头：{line}");
         };
         let mut settings = IconSettings::default();
@@ -305,7 +303,7 @@ fn baselines(group: &str) -> Vec<Baseline> {
             origin: format!("tests/icon_baselines/{group}.txt「{head}」"),
             settings,
             state: icon_state(state),
-            level: (*level != "-").then(|| level.parse().expect("电量是 0–100 的整数")),
+            percent: (*percent != "-").then(|| percent.parse().expect("电量是 0–100 的整数")),
             size: match *size {
                 "16" => IconSize::Px16,
                 "20" => IconSize::Px20,
@@ -340,45 +338,58 @@ fn icon_state(name: &str) -> IconState {
     }
 }
 
-/// ADR-0005 管图标的六个键：全部取值，与缺省值。
-const SETTINGS: &[(&str, &[&str], &str)] = &[
-    ("style", &["number", "battery", "ring", "bar"], "bar"),
-    ("glyph", &["block", "fine", "system"], "block"),
-    ("full", &["digits", "cap_99", "block"], "block"),
-    ("gray", &["one", "split", "split_pause"], "split"),
-    (
-        "no_last_known",
-        &["dash", "question", "outline", "logo"],
-        "dash",
-    ),
-    ("charging", &["color", "bolt_large", "bolt"], "color"),
+/// 一项设置的一个取值：`[tray]` 表里的键与取值（ADR-0005 的对外契约），与它落到类型化设置上的样子。
+type Value = (&'static str, &'static str, fn(&mut IconSettings));
+
+/// ADR-0005 管图标的六个键的全部取值。哪个是缺省值不另写：套在缺省设置上、设置不变的那个就是。
+const VALUES: &[Value] = &[
+    ("style", "number", |s| s.style = Style::Number),
+    ("style", "battery", |s| s.style = Style::Battery),
+    ("style", "ring", |s| s.style = Style::Ring),
+    ("style", "bar", |s| s.style = Style::Bar),
+    ("glyph", "block", |s| s.glyph = Glyph::Block),
+    ("glyph", "fine", |s| s.glyph = Glyph::Fine),
+    ("glyph", "system", |s| s.glyph = Glyph::System),
+    ("full", "digits", |s| s.full = Full::Digits),
+    ("full", "cap_99", |s| s.full = Full::Cap99),
+    ("full", "block", |s| s.full = Full::Block),
+    ("gray", "one", |s| s.gray = Gray::One),
+    ("gray", "split", |s| s.gray = Gray::Split),
+    ("gray", "split_pause", |s| s.gray = Gray::SplitPause),
+    ("no_last_known", "dash", |s| {
+        s.no_last_known = NoLastKnown::Dash
+    }),
+    ("no_last_known", "question", |s| {
+        s.no_last_known = NoLastKnown::Question
+    }),
+    ("no_last_known", "outline", |s| {
+        s.no_last_known = NoLastKnown::Outline
+    }),
+    ("no_last_known", "logo", |s| {
+        s.no_last_known = NoLastKnown::Logo
+    }),
+    ("charging", "color", |s| s.charging = Charging::Color),
+    ("charging", "bolt_large", |s| {
+        s.charging = Charging::BoltLarge
+    }),
+    ("charging", "bolt", |s| s.charging = Charging::Bolt),
 ];
 
-/// 节头里的设置写成 `[tray]` 表的键与取值（ADR-0005 的对外契约）。
+/// 节头里的一个 `键=取值`，套到设置上。
 fn apply(settings: &mut IconSettings, kv: &str) {
-    match kv.split_once('=').expect("设置写成 键=取值") {
-        ("style", "number") => settings.style = Style::Number,
-        ("style", "battery") => settings.style = Style::Battery,
-        ("style", "ring") => settings.style = Style::Ring,
-        ("style", "bar") => settings.style = Style::Bar,
-        ("glyph", "block") => settings.glyph = Glyph::Block,
-        ("glyph", "fine") => settings.glyph = Glyph::Fine,
-        ("glyph", "system") => settings.glyph = Glyph::System,
-        ("full", "digits") => settings.full = Full::Digits,
-        ("full", "cap_99") => settings.full = Full::Cap99,
-        ("full", "block") => settings.full = Full::Block,
-        ("gray", "one") => settings.gray = Gray::One,
-        ("gray", "split") => settings.gray = Gray::Split,
-        ("gray", "split_pause") => settings.gray = Gray::SplitPause,
-        ("no_last_known", "dash") => settings.no_last_known = NoLastKnown::Dash,
-        ("no_last_known", "question") => settings.no_last_known = NoLastKnown::Question,
-        ("no_last_known", "outline") => settings.no_last_known = NoLastKnown::Outline,
-        ("no_last_known", "logo") => settings.no_last_known = NoLastKnown::Logo,
-        ("charging", "color") => settings.charging = Charging::Color,
-        ("charging", "bolt_large") => settings.charging = Charging::BoltLarge,
-        ("charging", "bolt") => settings.charging = Charging::Bolt,
-        _ => panic!("{kv} 不是 ADR-0005 里的一个键与取值"),
-    }
+    let (key, value) = kv.split_once('=').expect("设置写成 键=取值");
+    let &(_, _, set) = VALUES
+        .iter()
+        .find(|&&(k, v, _)| (k, v) == (key, value))
+        .unwrap_or_else(|| panic!("{kv} 不是 ADR-0005 里的一个键与取值"));
+    set(settings);
+}
+
+/// 从缺省设置出发只改这一项，得到的设置。
+fn only(set: fn(&mut IconSettings)) -> IconSettings {
+    let mut settings = IconSettings::default();
+    set(&mut settings);
+    settings
 }
 
 /// `palette.txt`：这种调色下，每个字符是哪个 RGBA（颜色不预乘）。
@@ -446,7 +457,7 @@ fn assert_matches_design(cases: impl IntoIterator<Item = Baseline>) {
     let mut failures = Vec::new();
     for b in cases {
         total += 1;
-        let icon = render(b.settings, b.state, b.level, b.size, b.theme);
+        let icon = render(b.settings, b.state, b.percent, b.size, b.theme);
         let pal = match b.theme {
             Theme::Dark => &dark,
             Theme::Light => &light,
@@ -548,15 +559,46 @@ fn describe(b: &Baseline, got: &[String], icon: &IconBitmap) -> String {
 // 所以这几条只问结构：字放得下（只画在数字那个方框里）、居中、没有被截断、确实画了东西。
 // 对照物是同一组输入换成粗块字形画出来的那张——它已经与设计稿逐像素对上了。
 
+/// 图标上的一块矩形区域：左上角 (x, y)，宽 w、高 h，像素。
+#[derive(Debug, Clone, Copy)]
+struct Area {
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
+const fn area(x: u32, y: u32, w: u32, h: u32) -> Area {
+    Area { x, y, w, h }
+}
+
+impl Area {
+    fn contains(self, x: u32, y: u32) -> bool {
+        (self.x..self.x + self.w).contains(&x) && (self.y..self.y + self.h).contains(&y)
+    }
+
+    /// 区域里的每个像素，逐行。
+    fn cells(self) -> impl Iterator<Item = (u32, u32)> {
+        (self.y..self.y + self.h).flat_map(move |y| (self.x..self.x + self.w).map(move |x| (x, y)))
+    }
+
+    /// `inner` 在这块区域里左右、上下各留了多少白。
+    fn margins(self, inner: Area) -> ((u32, u32), (u32, u32)) {
+        let horizontal = (inner.x - self.x, self.x + self.w - (inner.x + inner.w));
+        let vertical = (inner.y - self.y, self.y + self.h - (inner.y + inner.h));
+        (horizontal, vertical)
+    }
+}
+
 /// 一张要检查的系统字体图标：输入，数字方框，以及方框里"没有字时"的不透明度。
 struct TextCase {
     settings: IconSettings,
     state: IconState,
-    level: u8,
+    percent: u8,
     size: IconSize,
     theme: Theme,
-    /// 数字那个方框 (x, y, 宽, 高)，照设计稿的几何逐档算出来的。
-    rect: (u32, u32, u32, u32),
+    /// 数字那个方框，照设计稿的几何逐档算出来的。
+    rect: Area,
     /// 方框里没有字的地方是什么不透明度：大多是全透明；B 电池里是电量那一格（满电时铺满方框）。
     bg_alpha: u8,
 }
@@ -590,26 +632,26 @@ fn text_cases() -> Vec<TextCase> {
             _ => 26,
         };
         for theme in THEMES {
-            let case = |settings, level, rect, bg_alpha| TextCase {
+            let case = |settings, percent, rect, bg_alpha| TextCase {
                 settings,
                 state: IconState::Normal,
-                level,
+                percent,
                 size,
                 theme,
                 rect,
                 bg_alpha,
             };
-            out.push(case(system(Style::Number), 57, (0, 0, s, s), 0));
-            out.push(case(system(Style::Bar), 57, (0, 0, s, bar_h), 0));
+            out.push(case(system(Style::Number), 57, area(0, 0, s, s), 0));
+            out.push(case(system(Style::Bar), 57, area(0, 0, s, bar_h), 0));
             if s >= 24 {
                 let battery = IconSettings {
                     full: Full::Digits,
                     ..system(Style::Battery)
                 };
                 let rect = if s == 24 {
-                    (4, 9, 14, 6)
+                    area(4, 9, 14, 6)
                 } else {
-                    (4, 11, 22, 10)
+                    area(4, 11, 22, 10)
                 };
                 out.push(case(battery, 100, rect, 115));
             }
@@ -623,22 +665,20 @@ fn ring_cases() -> Vec<TextCase> {
     let mut out = Vec::new();
     for size in SIZES {
         let rect = match size.px() {
-            16 => (3, 3, 10, 10),
-            20 => (4, 4, 12, 12),
-            24 => (5, 5, 14, 14),
-            _ => (6, 6, 20, 20),
+            16 => area(3, 3, 10, 10),
+            20 => area(4, 4, 12, 12),
+            24 => area(5, 5, 14, 14),
+            _ => area(6, 6, 20, 20),
         };
         for theme in THEMES {
-            let settings = system(Style::Ring);
-            let (state, level, bg_alpha) = (IconState::Low, 12, 0);
             out.push(TextCase {
-                settings,
-                state,
-                level,
+                settings: system(Style::Ring),
+                state: IconState::Low,
+                percent: 12,
                 size,
                 theme,
                 rect,
-                bg_alpha,
+                bg_alpha: 0,
             });
         }
     }
@@ -654,15 +694,10 @@ impl TextCase {
         render(
             settings,
             self.state,
-            Some(self.level),
+            Some(self.percent),
             self.size,
             self.theme,
         )
-    }
-
-    fn inside(&self, x: u32, y: u32) -> bool {
-        let (rx, ry, rw, rh) = self.rect;
-        (rx..rx + rw).contains(&x) && (ry..ry + rh).contains(&y)
     }
 
     fn describe(&self) -> String {
@@ -670,46 +705,33 @@ impl TextCase {
             "{:?} {:?} {} {}px {:?}",
             self.settings.style,
             self.state,
-            self.level,
+            self.percent,
             self.size.px(),
             self.theme
         )
     }
 
-    /// 方框里被字盖到的像素的外接矩形 (左, 上, 右, 下)，含两端；方框里一个字都没有就是 `None`。
+    /// 方框里被字盖到的那一块的外接矩形；方框里一个字都没有就是 `None`。
     ///
-    /// "被字盖到"：比方框里的底更不透明。C 圆环的方框角上压着圆环，那几格从粗块那张认出来、跳过。
-    fn ink(&self, text: &IconBitmap, block: &IconBitmap) -> Option<(u32, u32, u32, u32)> {
-        let (rx, ry, rw, rh) = self.rect;
-        let fg = match self.theme {
-            Theme::Dark => Rgba {
-                r: 0xFF,
-                g: 0xFF,
-                b: 0xFF,
-                a: 255,
-            },
-            Theme::Light => Rgba {
-                r: 0x1C,
-                g: 0x1C,
-                b: 0x1C,
-                a: 255,
-            },
-        };
-        let mut bbox: Option<(u32, u32, u32, u32)> = None;
-        for y in ry..ry + rh {
-            for x in rx..rx + rw {
-                let under = block.pixel(x, y);
-                let ring = self.settings.style == Style::Ring && under.a > 0 && under != fg;
-                if ring || text.pixel(x, y).a <= self.bg_alpha {
-                    continue;
-                }
-                bbox = Some(match bbox {
-                    None => (x, y, x, y),
-                    Some((l, t, r, b)) => (l.min(x), t.min(y), r.max(x), b.max(y)),
-                });
-            }
+    /// "被字盖到"：比方框里的底更不透明。C 圆环的方框角上压着圆环——粗块那张上不是前景色、又不
+    /// 透明的格子——那几格跳过。
+    fn ink(&self, text: &IconBitmap, block: &IconBitmap) -> Option<Area> {
+        let fg = palette(self.theme)
+            .into_iter()
+            .find_map(|(ch, color)| (ch == 'F').then_some(color))
+            .expect("palette.txt 里有前景色 F");
+        let covered = self.rect.cells().filter(|&(x, y)| {
+            let under = block.pixel(x, y);
+            let ring = self.settings.style == Style::Ring && under.a > 0 && under != fg;
+            !ring && text.pixel(x, y).a > self.bg_alpha
+        });
+        let (mut l, mut t, mut r, mut b) = (u32::MAX, u32::MAX, 0, 0);
+        let mut any = false;
+        for (x, y) in covered {
+            (l, t, r, b) = (l.min(x), t.min(y), r.max(x), b.max(y));
+            any = true;
         }
-        bbox
+        any.then(|| area(l, t, r - l + 1, b - t + 1))
     }
 }
 
@@ -720,15 +742,15 @@ fn the_system_font_is_rendered_text_not_a_pixel_font() {
     for case in text_cases().into_iter().chain(ring_cases()) {
         let text = case.render(Glyph::System);
         let block = case.render(Glyph::Block);
-        let (rx, ry, rw, rh) = case.rect;
-        let in_box = || (ry..ry + rh).flat_map(move |y| (rx..rx + rw).map(move |x| (x, y)));
         assert!(
-            in_box().any(|(x, y)| text.pixel(x, y) != block.pixel(x, y)),
+            case.rect
+                .cells()
+                .any(|(x, y)| text.pixel(x, y) != block.pixel(x, y)),
             "{}：系统字体画出来和粗块一模一样",
             case.describe()
         );
         assert!(
-            in_box().any(|(x, y)| {
+            case.rect.cells().any(|(x, y)| {
                 let a = text.pixel(x, y).a;
                 a > case.bg_alpha && a < 255 && block.pixel(x, y).a == case.bg_alpha
             }),
@@ -746,17 +768,15 @@ fn the_system_font_paints_only_inside_the_number_box() {
         let text = case.render(Glyph::System);
         let block = case.render(Glyph::Block);
         let s = case.size.px();
-        for y in 0..s {
-            for x in 0..s {
-                if !case.inside(x, y) {
-                    assert_eq!(
-                        text.pixel(x, y),
-                        block.pixel(x, y),
-                        "{}：系统字体画到了数字方框 {:?} 外面的 ({x}, {y})",
-                        case.describe(),
-                        case.rect
-                    );
-                }
+        for (x, y) in area(0, 0, s, s).cells() {
+            if !case.rect.contains(x, y) {
+                assert_eq!(
+                    text.pixel(x, y),
+                    block.pixel(x, y),
+                    "{}：系统字体画到了数字方框 {:?} 外面的 ({x}, {y})",
+                    case.describe(),
+                    case.rect
+                );
             }
         }
     }
@@ -768,22 +788,21 @@ fn the_system_font_draws_the_number_centered_in_its_box() {
     for case in text_cases().into_iter().chain(ring_cases()) {
         let text = case.render(Glyph::System);
         let block = case.render(Glyph::Block);
-        let (rx, ry, rw, rh) = case.rect;
-        let Some((l, t, r, b)) = case.ink(&text, &block) else {
+        let Some(ink) = case.ink(&text, &block) else {
             panic!("{}：数字方框里一个字都没画", case.describe());
         };
-        let (left, right) = (l - rx, rx + rw - 1 - r);
-        let (top, bottom) = (t - ry, ry + rh - 1 - b);
+        let ((left, right), (top, bottom)) = case.rect.margins(ink);
         assert!(
             left.abs_diff(right) <= 1 && top.abs_diff(bottom) <= 1,
             "{}：字没有居中——左右留白 {left} / {right}，上下留白 {top} / {bottom}",
             case.describe()
         );
-        let area = (r - l + 1) * (b - t + 1);
         assert!(
-            area >= 12,
-            "{}：字只占了 {area} 个像素的地方，不像一个数",
-            case.describe()
+            ink.w * ink.h >= 12,
+            "{}：字只占了 {}×{} 的地方，不像一个数",
+            case.describe(),
+            ink.w,
+            ink.h
         );
     }
 }
@@ -801,24 +820,25 @@ fn the_system_font_shrinks_a_number_that_does_not_fit_instead_of_cutting_it_off(
                     ..system(Style::Number)
                 },
                 state: IconState::Normal,
-                level: 88,
+                percent: 88,
                 size,
                 theme,
-                rect: (0, 0, s, s),
+                rect: area(0, 0, s, s),
                 bg_alpha: 0,
             };
-            let hundred = TextCase { level: 100, ..base };
+            let hundred = TextCase {
+                percent: 100,
+                ..base
+            };
             let height = |case: &TextCase| {
-                let (_, t, _, b) = case
-                    .ink(&case.render(Glyph::System), &case.render(Glyph::Block))
-                    .unwrap_or_else(|| panic!("{}：一个字都没画", case.describe()));
-                b - t + 1
+                case.ink(&case.render(Glyph::System), &case.render(Glyph::Block))
+                    .unwrap_or_else(|| panic!("{}：一个字都没画", case.describe()))
+                    .h
             };
             let (h88, h100) = (height(&base), height(&hundred));
             assert!(
                 h100 < h88,
-                "{}px {theme:?}：\"100\" 高 {h100}、\"88\" 高 {h88}——三位数没有换小一号的字",
-                s
+                "{s}px {theme:?}：\"100\" 高 {h100}、\"88\" 高 {h88}——三位数没有换小一号的字"
             );
         }
     }

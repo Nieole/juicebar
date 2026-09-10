@@ -119,7 +119,8 @@ pub enum Charging {
 
 /// 托盘图标为 Primary Device 画出的那一种状态，八选一（`CONTEXT.md`「图标状态」）。
 ///
-/// 每种状态画成什么颜色、什么符号，由 [`IconSettings`] 决定——所以这里只有名字，没有颜色。
+/// 状态本身只是一个名字。它画成什么符号、颜色落在数字上还是底条上、要不要闪电与琥珀点，由
+/// [`IconSettings`] 决定；每个状态用调色板里的哪种颜色则照设计稿的 `STATES`，由渲染器私下对照。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IconState {
     /// 正常。
@@ -128,7 +129,7 @@ pub enum IconState {
     Low,
     /// 充电中。
     Charging,
-    /// Stale：拿上次已知值顶上的那个数。
+    /// Stale：这份 Reading 的取得时刻距今已久，不该再当作现状。
     Stale,
     /// 暂停：厂商上位机在跑，我们没去问。
     Paused,
@@ -237,17 +238,19 @@ impl IconBitmap {
 
 /// 画一个图标。
 ///
-/// `level` 是要画的电量（0–100，超出按 100 画）；取数失败、Unknown、无已知值三个状态没有电量可画，
-/// 给了也不看。
+/// `percent` 是要画的那个电量百分比（0–100，超出按 100 画）：`sources::level` 已经在 Reported Level
+/// 与 Derived Level 之间选定的那一个。图标上只画数，不画它取自哪里——16 像素里放不下，来源由菜单行
+/// 与悬停提示写出来（`sources/level.rs`「两个来源必须一路带到界面上」说的是那一处）。取数失败、
+/// Unknown、无已知值三个状态没有电量可画，给了也不看。
 pub fn render(
     settings: IconSettings,
     state: IconState,
-    level: Option<u8>,
+    percent: Option<u8>,
     size: IconSize,
     theme: Theme,
 ) -> IconBitmap {
     let mut canvas = Canvas::new(size.px() as i32);
-    draw_icon(&mut canvas, settings, state, level, theme.palette());
+    draw_icon(&mut canvas, settings, state, percent, theme.palette());
     canvas.into_bitmap()
 }
 
@@ -314,6 +317,9 @@ impl IconState {
     }
 
     /// 是不是灰的那几个：灰状态的数字画成灰色，其余的数字画成前景色。
+    ///
+    /// "灰状态"是 ADR-0005 给这一组起的名字（`gray` 那一项设置就叫"灰状态怎么区分"）。它是按
+    /// 设计稿里的颜色归的组，不是按含义：低电也可能是一个 Stale 的上次已知值，却不在这一组里。
     fn is_gray(self) -> bool {
         !matches!(self, Self::Normal | Self::Low | Self::Charging)
     }
@@ -336,10 +342,10 @@ enum Mark {
 /// （设计稿：`L = st.text ? null : …`）。
 enum Middle {
     Symbol(Mark),
-    Level(i32),
+    Percent(i32),
 }
 
-fn middle(o: IconSettings, state: IconState, level: Option<u8>) -> Middle {
+fn middle(o: IconSettings, state: IconState, percent: Option<u8>) -> Middle {
     let text = |s: &str| Middle::Symbol(Mark::Text(s.to_string()));
     let no_last_known = || Middle::Symbol(no_last_known_mark(o.no_last_known));
     match state {
@@ -352,8 +358,8 @@ fn middle(o: IconSettings, state: IconState, level: Option<u8>) -> Middle {
         | IconState::Low
         | IconState::Charging
         | IconState::Stale
-        | IconState::Paused => match level {
-            Some(l) => Middle::Level(i32::from(l.min(100))),
+        | IconState::Paused => match percent {
+            Some(l) => Middle::Percent(i32::from(l.min(100))),
             // 有数的状态手上却没有数。走得到这里的正路只有一条：暂停，而且从没读到过——
             // `CONTEXT.md` 说暂停期间显示上次已知值，可这时没有。设计稿没画过这种情况（它的暂停
             // 永远带着一个数），这里画"没有读数时"那个符号：它说的正是"手上没有数"
@@ -374,7 +380,7 @@ fn no_last_known_mark(setting: NoLastKnown) -> Mark {
 }
 
 /// 电量画成什么：100 按"满电 100 怎么画"的设置，其余照写数字（设计稿的 `levelText`）。
-fn level_text(l: i32, full: Full) -> Mark {
+fn percent_text(l: i32, full: Full) -> Mark {
     match full {
         Full::Cap99 if l >= 100 => Mark::Text("99".to_string()),
         Full::Block if l >= 100 => Mark::FullBlock,
@@ -398,15 +404,26 @@ struct Rect {
     h: i32,
 }
 
+impl Rect {
+    /// 一块 `w` × `h` 的东西居中放进方框时的左上角。放不居中的那一个像素给右边、下边
+    /// （设计稿的 `box.x + Math.floor((box.w - f.w) / 2)`）。
+    fn center(self, w: i32, h: i32) -> (i32, i32) {
+        (
+            self.x + (self.w - w).div_euclid(2),
+            self.y + (self.h - h).div_euclid(2),
+        )
+    }
+}
+
 /// 设计稿的 `drawIcon`，一段一段对着抄：先定中间画什么，再画充电闪电，再画四个画法之一，
 /// 最后是暂停的琥珀点。
-fn draw_icon(c: &mut Canvas, o: IconSettings, state: IconState, level: Option<u8>, p: &Palette) {
+fn draw_icon(c: &mut Canvas, o: IconSettings, state: IconState, percent: Option<u8>, p: &Palette) {
     let s = c.size;
     let col = state.color(p);
     let u = 1.max(round(f64::from(s) / 16.0)); // 一个“笔画单位”，16 像素时是 1
-    let (l, txt) = match middle(o, state, level) {
+    let (l, txt) = match middle(o, state, percent) {
         Middle::Symbol(m) => (None, m),
-        Middle::Level(l) => (Some(l), level_text(l, o.full)),
+        Middle::Percent(l) => (Some(l), percent_text(l, o.full)),
     };
 
     // 充电闪电占掉左边一条，画法在剩下的 [ax, s) 里画——数字因此变窄，这是它的代价
@@ -558,9 +575,7 @@ fn draw_sym(c: &mut Canvas, txt: &Mark, rect: Rect, color: Rgba, glyph: Glyph) {
         Mark::Empty => {}
         Mark::Logo => {
             if let Some(f) = LOGO.fit(LOGO_CHAR, rect.w, rect.h, false) {
-                let x = rect.x + (rect.w - f.w).div_euclid(2);
-                let y = rect.y + (rect.h - f.h).div_euclid(2);
-                LOGO.draw(c, LOGO_CHAR, (x, y), (f.sx, f.sy), color);
+                LOGO.draw(c, LOGO_CHAR, rect.center(f.w, f.h), (f.sx, f.sy), color);
             }
         }
     }
@@ -575,9 +590,7 @@ fn draw_text(c: &mut Canvas, s: &str, rect: Rect, color: Rgba, glyph: Glyph) {
     };
     for &(font, tall) in order {
         if let Some(f) = font.fit(s, rect.w, rect.h, tall) {
-            let x = rect.x + (rect.w - f.w).div_euclid(2);
-            let y = rect.y + (rect.h - f.h).div_euclid(2);
-            font.draw(c, s, (x, y), (f.sx, f.sy), color);
+            font.draw(c, s, rect.center(f.w, f.h), (f.sx, f.sy), color);
             return;
         }
     }

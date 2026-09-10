@@ -883,11 +883,17 @@ function baselines() {
     const tag = cfg(k, v);
     write(tag.replace('=', '-'), group(Object.assign({}, base, { [k]: v }), full ? 100 : BASE_L, [tag]));
   }
-  /* 电量扫描走正常与充电中两个状态：C 圆环里的满格用状态色，别的画法用数字色，只有带颜色的状态看得出来 */
-  const sweepStates = ['normal', 'chg'].map(k => STATES.find(s => s.k === k)), sweep = [];
-  for (const [v] of byKey('dir').opts) for (const st of sweepStates) for (const L of SWEEP_L) for (const S of SIZES)
-    sweep.push(section(st, S, 'dark', Object.assign({}, base, { dir: v }), L, [cfg('dir', v)]));
-  write('levels', sweep);
+  /* 电量扫描：每个画法 × 下面四种 × 五个电量 × 四个尺寸。四种各守一类“只改一项”碰不到的交叉：
+   * 充电中——C 圆环里的满格用状态色，别的画法用数字色，只有带颜色的状态看得出来；
+   * 充电中加闪电——闪电让出左边一条，A、B、C 的几何都跟着挪（C 在 16、20 像素上宽度变成奇数）；
+   * 细体——方框小的画法（C 圆环、B 电池）放不下 5×7，退到 3×5 */
+  const st = k => STATES.find(s => s.k === k), sweep = [];
+  const variants = [[st('normal'), {}], [st('chg'), {}], [st('chg'), { chg: 'boltall' }], [st('normal'), { glyph: 'fine' }]];
+  for (const [v] of byKey('dir').opts) for (const [state, extra] of variants) for (const L of SWEEP_L) for (const S of SIZES) {
+    const o = Object.assign({}, base, { dir: v }, extra);
+    sweep.push(section(state, S, 'dark', o, L, [cfg('dir', v)].concat(Object.keys(extra).map(k => cfg(k, extra[k])))));
+  }
+  write('sweep', sweep);
   const lines = ['# 基准网格里每个字符是哪种颜色：底色 字符 R G B A（A 是不透明度，颜色不预乘）。“.”是全透明。',
     '# 由 .scratch/tray-design/icon-review.html 的“导出基准”从它的调色板 PAL 算出来，别手改。'];
   for (const t of themes) for (const [ch, q] of pal[t]) lines.push([t, ch].concat(q).join(' '));
