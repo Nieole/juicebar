@@ -1,14 +1,45 @@
-//! `juicebar caps` —— 打印一条 collection 声明的 Report ID。纯本地，不向设备发任何字节。
+//! `cargo run --example caps` —— 打印一条 collection 声明的 Report ID。纯本地，不向设备发任何字节。
 //!
 //! 存在的理由见 `hid::report_ids` 的文档注释：feature 报文的读写都拿缓冲区第 0 字节当
 //! 「要哪份 report」的入参，传错编号时驱动可能把缓冲区残留原样交回来，而那看起来和正常
 //! 回包毫无区别。接新设备时先跑这个，能省掉一整轮基于错误前提的推理。
+//!
+//! 与 `scan`、`probe` 一样是住在 `examples/` 里的诊断工具，不进发布构建，只调用库的公开面。
+
+mod common;
 
 use anyhow::{Result, bail};
+use clap::Parser;
 
-use crate::hid;
+use common::parse_hex_u16;
+use juicebar::hid;
 
-pub fn run(vid: u16, pid: u16, usage_page: Option<u16>, usage: Option<u16>) -> Result<()> {
+/// 打印一条 collection 声明的 Report ID。纯本地，不向设备发任何字节。
+#[derive(Parser)]
+struct Args {
+    #[arg(long, value_parser = parse_hex_u16)]
+    vid: u16,
+    #[arg(long, value_parser = parse_hex_u16)]
+    pid: u16,
+    /// 缩小到某个 usage page，如 ffff
+    #[arg(long, value_parser = parse_hex_u16)]
+    usage_page: Option<u16>,
+    /// 缩小到某个 usage，如 0002
+    #[arg(long, value_parser = parse_hex_u16)]
+    usage: Option<u16>,
+}
+
+fn main() -> Result<()> {
+    let Args {
+        vid,
+        pid,
+        usage_page,
+        usage,
+    } = Args::parse();
+    run(vid, pid, usage_page, usage)
+}
+
+fn run(vid: u16, pid: u16, usage_page: Option<u16>, usage: Option<u16>) -> Result<()> {
     let targets: Vec<hid::HidInfo> = hid::enumerate()?
         .into_iter()
         .filter(|d| d.vid == vid && d.pid == pid)
@@ -17,7 +48,7 @@ pub fn run(vid: u16, pid: u16, usage_page: Option<u16>, usage: Option<u16>) -> R
         .collect();
 
     if targets.is_empty() {
-        bail!("没有匹配的 collection，先跑 `juicebar scan` 看看有哪些");
+        bail!("没有匹配的 collection，先跑 `cargo run --example scan` 看看有哪些");
     }
 
     for t in &targets {

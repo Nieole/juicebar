@@ -1,9 +1,6 @@
 //! 命令行这一层：一个子命令一个模块，外加它们共用的那一点东西。
 
-pub mod caps;
 pub mod config_refresh;
-pub mod probe;
-pub mod scan;
 pub mod status;
 
 use std::path::{Path, PathBuf};
