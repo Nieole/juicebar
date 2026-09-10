@@ -241,7 +241,7 @@
 **取的路**：只把本票改写的几处注释里撑这一支的那个例子——"蓝牙地址写错的设备"——拿掉，行为一个字不动。
 那个例子在真机上落进的是**空列表**那一支：暂停期间只有 `Ble` 会被真去试（`VendorHub::pauses` 只让开两条
 HID），而 `SystemEndpoints` 下 `Ble` 在场的判据就是 `find_ble` 找到了那个地址——地址写错即不在场，不在场
-即没试过。反过来，在场的 `Ble` 一定读得出：快照来自 `bluetooth::enumerate`，它只收带电量属性的设备
+即没试过。反过来，在场的 `Ble` 一定读得出：快照来自 `bluetooth::enumerate`，它只收带电量属性的蓝牙条目
 （`src/bluetooth.rs` 那一处 `filter(|d| d.level.is_some())`），`from_ble_cache` 唯一的失败在真数据上碰不到。
 所以**真机上暂停那一行的原因列表永远是空的**，「；剩下的也没读到 —— {原因}」只有假枚举走得到
 （`keeps_the_reason_of_the_endpoints_it_did_try_while_paused` 喂的是一份没有电量的缓存，真枚举交不出这种
@@ -269,8 +269,8 @@ HID），而 `SystemEndpoints` 下 `Ble` 在场的判据就是 `find_ble` 找到
 
 **推荐**：改，归 `/settle` 拍板。`CONTEXT.md` 那一行走 domain-modeling（词汇表不该由一张措辞票顺手改）；
 `NoReading` 那一行搭下一张碰 `src/readout.rs` 的票——resident-tray 票 03 就排在本票之后，本来要重写这一带。
-不改的代价是下一个写暂停文案的人照着词汇表再许一次同样的诺，而托盘的暂停图标状态正在做。翻案的代价是两行
-文档，关在一处。
+不改的代价是下一个写暂停文案的人照着词汇表再许一次同样的诺，而托盘的暂停图标状态正在做。翻案的代价是两处
+文档各一行（`CONTEXT.md` 与 `src/readout.rs`），本票没落下任何要拆回的东西。
 
 ## Settled
 

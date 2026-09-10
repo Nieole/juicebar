@@ -95,7 +95,7 @@ pub fn read(
     // 该做的是关掉那个上位机。
     //
     // **剩下那几条自己的失败原因一起带走**（多半只有 `Ble` 一条）：它们是真去试过而失败了的，
-    // 关掉上位机也不会变好——那一行只说关掉之后会怎样，就把它们的毛病吞掉了。
+    // 那一行得交代它们。这份列表空不空怎么改变措辞，写在 `NoReading::Paused` 的 `failures` 上。
     if let Some(hub) = paused_by.filter(|_| !yielded.is_empty()) {
         return Err(NoReading::Paused {
             hub: hub.clone(),
