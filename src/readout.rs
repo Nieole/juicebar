@@ -310,25 +310,39 @@ pub fn read_or_last_known_with_reason(
         // 历史值只在这一支里被问到：读得到的时候它不参与竞争。让它参与，一份存了半天的
         // 读数就可能盖掉当场问出来的那个数——而这条链路上其余每一处守的都是相反的规矩
         // （Endpoint 优先级、`Ble` 排最后）。
-        Err(no_reading) => {
-            // 暂停这一维要跟着历史值一起交出去：那一行末尾非说一句不可（parking lot Q40
-            // 给本票的原话），而说得出话的只有取数那一步——它才知道这一次让开了什么。
-            let paused_by = no_reading.paused_by().cloned();
-            match last_known.reading_for(&device.id, general, now) {
-                Some(reading) => Outcome {
-                    row: Ok(RowReading {
-                        reading,
-                        provenance: Provenance::LastKnown,
-                        paused_by,
-                    }),
-                    fell_back_because: Some(no_reading),
-                },
-                None => Outcome {
-                    row: Err(no_reading),
-                    fell_back_because: None,
-                },
-            }
-        }
+        Err(no_reading) => fall_back_to_last_known(device, no_reading, last_known, general, now),
+    }
+}
+
+/// 这一次取数没读到（`no_reading`）：退到状态文件里的上次已知值，退不到就交出那句原因。
+///
+/// [`read_or_last_known_with_reason`] 读不到的那一支就是它。托盘在连本机都枚举不了、根本没法去读的时候
+/// 也走它：那时一样该拿上次已知值顶上（`CONTEXT.md`「上次已知值」），而不是让一个灰的旧数跳成取数失败。
+///
+/// **它只读 `last_known`、不记账**：拿出来的历史值不许再喂回去（[`read_or_last_known`] 上写了为什么）。
+pub fn fall_back_to_last_known(
+    device: &Device,
+    no_reading: NoReading,
+    last_known: &LastKnown,
+    general: &General,
+    now: Timestamp,
+) -> Outcome {
+    // 暂停这一维要跟着历史值一起交出去：那一行末尾非说一句不可（parking lot Q40
+    // 给本票的原话），而说得出话的只有取数那一步——它才知道这一次让开了什么。
+    let paused_by = no_reading.paused_by().cloned();
+    match last_known.reading_for(&device.id, general, now) {
+        Some(reading) => Outcome {
+            row: Ok(RowReading {
+                reading,
+                provenance: Provenance::LastKnown,
+                paused_by,
+            }),
+            fell_back_because: Some(no_reading),
+        },
+        None => Outcome {
+            row: Err(no_reading),
+            fell_back_because: None,
+        },
     }
 }
 

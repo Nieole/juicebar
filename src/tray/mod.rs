@@ -46,9 +46,6 @@ use crate::state::LastKnown;
 /// 托盘内核。
 pub struct Tray {
     config: Config,
-    /// 内核见过的最晚的"当下"。不是每个事件都带着时刻（点菜单就不带），在那种事件上要重算这一轮的
-    /// 关注点用它。
-    now: Timestamp,
     cadence: cadence::Cadence,
     round: round::Rounds,
     notify: notify::Notify,
@@ -76,7 +73,6 @@ impl Tray {
         cadence.on_tick(&config, now, &mut out);
         let tray = Self {
             config,
-            now,
             cadence,
             round,
             notify: notify::Notify::default(),
@@ -93,13 +89,11 @@ impl Tray {
         }
         match event {
             Event::Tick(now) => {
-                self.now = self.now.max(now);
                 self.cadence.on_tick(&self.config, now, &mut out);
                 self.round.on_tick(&self.config, now, &mut out);
             }
             Event::Fetched(fetched) => {
                 let fetched = *fetched;
-                self.now = self.now.max(fetched.at);
                 self.cadence.on_fetched(&self.config, &fetched);
                 self.notify.on_fetched(&self.config, &fetched, &mut out);
                 self.round.on_fetched(&self.config, fetched, &mut out);
@@ -135,7 +129,7 @@ pub enum Event {
 /// 某台 Device 的一次取数有了结果：取数线程交回来的全部东西。
 pub struct Fetched {
     /// 那台 Device 的 id。
-    pub device: String,
+    pub device_id: String,
     /// 这一次取数的"当下"：取数与陈旧判定共用的那一个（`crate::clock` 上写了为什么只问一次）。
     pub at: Timestamp,
     /// 交给这一轮的那一份（[`crate::readout::read_or_last_known`] 交的就是它）。

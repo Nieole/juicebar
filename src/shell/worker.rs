@@ -149,31 +149,29 @@ fn fetch(request: &FetchRequest, last_known: &mut LastKnown) -> Fetched {
     let pause = PauseCheck::detect(&request.general, &SystemProcesses);
     let endpoints = SystemEndpoints::enumerate();
     let at = SystemClock.now();
-    let (in_hand, fell_back_because) = match endpoints {
-        Ok(endpoints) => {
-            let outcome = readout::read_or_last_known_with_reason(
-                &request.device,
-                &endpoints,
-                pause.paused_by(),
-                last_known,
-                &request.general,
-                at,
-            );
-            (InHand::from(outcome.row), outcome.fell_back_because)
-        }
-        // 连本机有什么都问不出来：这一次取数失败，原因照实写。
-        Err(e) => (
-            InHand::NoReading(NoReading::Failed(anyhow!(
-                "读不到 —— 枚举不了本机的设备：{e:#}"
-            ))),
-            None,
+    let outcome = match endpoints {
+        Ok(endpoints) => readout::read_or_last_known_with_reason(
+            &request.device,
+            &endpoints,
+            pause.paused_by(),
+            last_known,
+            &request.general,
+            at,
+        ),
+        // 连本机有什么都问不出来，这一次取数就没法去读：原因照实写，照样退到上次已知值。
+        Err(e) => readout::fall_back_to_last_known(
+            &request.device,
+            NoReading::Failed(anyhow!("读不到 —— 枚举不了本机的设备：{e:#}")),
+            last_known,
+            &request.general,
+            at,
         ),
     };
     Fetched {
-        device: request.device.id.clone(),
+        device_id: request.device.id.clone(),
         at,
-        in_hand,
-        fell_back_because,
+        in_hand: InHand::from(outcome.row),
+        fell_back_because: outcome.fell_back_because,
         warning: pause.warning(),
     }
 }

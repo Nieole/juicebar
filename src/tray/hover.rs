@@ -32,11 +32,7 @@ pub fn text(round: &Round<'_>) -> String {
     if round.devices.is_empty() {
         return "配置里一个 Device 都没有".to_string();
     }
-    let primary = round
-        .primary
-        .primary_id()
-        .and_then(|id| round.devices.iter().find(|state| state.device.id == id));
-    fit(match (primary, round.primary) {
+    fit(match (round.primary_state(), round.primary) {
         (Some(state), _) => device_lines(state).join("\n"),
         // 一次笔误，得说出来：用户以为钉住了。
         (None, Selection::PinnedNotFound(id)) => {

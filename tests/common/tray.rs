@@ -177,7 +177,7 @@ pub fn failed(reason: &str) -> InHand {
 /// 某台 Device 的一次取数在 `at` 那一刻有了结果，手上是 `in_hand`；没有别的要交代。
 pub fn fetched(device: &str, at: Timestamp, in_hand: InHand) -> Event {
     Event::Fetched(Box::new(Fetched {
-        device: device.to_string(),
+        device_id: device.to_string(),
         at,
         in_hand,
         fell_back_because: None,
@@ -193,7 +193,7 @@ pub fn fetched_with_warning(
     warning: Warning,
 ) -> Event {
     Event::Fetched(Box::new(Fetched {
-        device: device.to_string(),
+        device_id: device.to_string(),
         at,
         in_hand,
         fell_back_because: None,
@@ -204,7 +204,7 @@ pub fn fetched_with_warning(
 /// 某台 Device 的一次取数在 `at` 那一刻没读到（原因 `reason`），退到了上次已知值 `last_known`。
 pub fn fell_back(device: &str, at: Timestamp, last_known: InHand, reason: &str) -> Event {
     Event::Fetched(Box::new(Fetched {
-        device: device.to_string(),
+        device_id: device.to_string(),
         at,
         in_hand: last_known,
         fell_back_because: Some(NoReading::Failed(anyhow!("{reason}"))),

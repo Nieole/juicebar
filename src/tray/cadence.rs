@@ -58,9 +58,9 @@ impl Cadence {
 
     /// 某台的一次取数有了结果：从那一次取数的"当下"起，隔 `poll_interval_24g` 再问它。
     pub fn on_fetched(&mut self, config: &Config, fetched: &Fetched) {
-        self.in_flight.remove(&fetched.device);
+        self.in_flight.remove(&fetched.device_id);
         let interval = config.general.poll_interval_24g;
         let next = Timestamp::from_unix_secs(fetched.at.as_unix_secs().saturating_add(interval));
-        self.due.insert(fetched.device.clone(), next);
+        self.due.insert(fetched.device_id.clone(), next);
     }
 }

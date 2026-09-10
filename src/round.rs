@@ -197,6 +197,14 @@ impl<'a> Round<'a> {
             warnings,
         }
     }
+
+    /// Primary Device 那一台这一轮的样子。选不出来（`PinnedNotFound` / `Undecided`）就没有。
+    ///
+    /// 托盘上画的、悬停提示写的都是它：两处各自拿 id 回名单里找一遍，迟早会有一处找的不是同一台。
+    pub fn primary_state(&self) -> Option<&DeviceState<'a>> {
+        let id = self.primary.primary_id()?;
+        self.devices.iter().find(|state| state.device.id == id)
+    }
 }
 
 /// 一台 Device 在这一轮里的样子。

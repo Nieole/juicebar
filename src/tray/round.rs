@@ -86,7 +86,7 @@ impl Rounds {
             .map(|device| {
                 (
                     device.id.clone(),
-                    on_record(last_known, device, config, now),
+                    in_hand_from_state_file(last_known, device, config, now),
                 )
             })
             .collect();
@@ -112,7 +112,7 @@ impl Rounds {
             &fetched.in_hand,
             InHand::Reading(row) if row.provenance == Provenance::JustRead
         );
-        self.in_hand.insert(fetched.device, fetched.in_hand);
+        self.in_hand.insert(fetched.device_id, fetched.in_hand);
         let warnings = fetched.warning.into_iter().collect();
         let selected = self.compose(config, fetched.at, warnings, out);
         let changed = selected.is_some() && selected != self.remembered;
@@ -174,11 +174,7 @@ impl Rounds {
         for warning in &round.warnings {
             out.push(super::Action::Log(warning.to_string()));
         }
-        let primary = round
-            .primary
-            .primary_id()
-            .and_then(|id| round.devices.iter().find(|state| state.device.id == id));
-        let icon = self.icon_for(primary);
+        let icon = self.icon_for(round.primary_state());
         let tooltip = hover::text(&round);
         let selected = round.primary.primary_id().map(str::to_owned);
         if self.shown_icon != Some(icon) {
@@ -222,7 +218,12 @@ impl Rounds {
 /// 这是托盘刚启动、第一次取数还没回来的那几秒：`CONTEXT.md` 的无已知值是"也没有上次已知值"，有就得
 /// 拿出来——一律标成上次已知值（因而一律 Stale），它没有为谁让开过什么（parking lot Q153 那一面：还没
 /// 取过数，就还没有什么让开过）。
-fn on_record(last_known: &LastKnown, device: &Device, config: &Config, now: Timestamp) -> InHand {
+fn in_hand_from_state_file(
+    last_known: &LastKnown,
+    device: &Device,
+    config: &Config,
+    now: Timestamp,
+) -> InHand {
     match last_known.reading_for(&device.id, &config.general, now) {
         Some(reading) => InHand::Reading(RowReading {
             reading,
@@ -239,7 +240,7 @@ fn on_record(last_known: &LastKnown, device: &Device, config: &Config, now: Time
 /// 最常见的那一种——设备收进了抽屉、接收器拔了，或者没有管理员权限）。**暂停不记**：那不是失败，是
 /// 我们主动没去问（`CONTEXT.md`「暂停」），上位机开着的每一分钟都记一行，只会把真的失败淹掉。
 fn log_failure(config: &Config, fetched: &Fetched, out: &mut Vec<super::Action>) {
-    let Some(device) = config.devices.iter().find(|d| d.id == fetched.device) else {
+    let Some(device) = config.devices.iter().find(|d| d.id == fetched.device_id) else {
         return;
     };
     if let InHand::NoReading(no_reading @ NoReading::Failed(_)) = &fetched.in_hand {
