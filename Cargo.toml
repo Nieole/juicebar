@@ -6,6 +6,14 @@ rust-version = "1.98"
 description = "把无线键鼠的电量常驻在 Windows 任务栏，不必打开厂商 hub"
 license = "MIT"
 
+# 程序本体。**关掉它的单元测试二进制**（`test = false`，main.rs 里也没有用例）：`build.rs` 给 bin 目标嵌了
+# 要求管理员权限的程序清单，而 bin 自己的单元测试二进制在 Cargo 眼里也是 bin 目标——它一带上清单，
+# 非管理员跑 `cargo test` 就会以 os error 740 起不来。
+[[bin]]
+name = "juicebar"
+path = "src/main.rs"
+test = false
+
 [dependencies]
 
 # Windows 原生 API，这个项目的两条数据来源都落在它上面：
@@ -23,10 +31,20 @@ license = "MIT"
 #       OpenProcess 去问，而那一步对系统进程会失败——一份缺项的名单，症状恰好是"暂停有时不触发"
 #   Win32_Graphics_Gdi —— CreateCompatibleDC / CreateDIBSection / CreateFontW / TextOutW，托盘图标的
 #       字形选"系统字体"时，让 Windows 把数字画在一块内存位图上（src/icon/system_font.rs）。选 GDI
-#       而不是 DirectWrite：只画几个数字、要的只是一张灰度覆盖率，GDI 不用起 COM、不用 D2D 渲染目标
+#       而不是 DirectWrite：只画几个数字、要的只是一张灰度覆盖率，GDI 不用起 COM、不用 D2D 渲染目标。
+#       托盘外壳也用它：CreateBitmap / CreateDIBSection 造出图标的颜色位图与掩码位图
+#   Win32_UI_WindowsAndMessaging —— 托盘外壳的那扇看不见的窗口、消息循环、计时器、右键菜单，以及把
+#       渲染器画好的位图做成图标（CreateIconIndirect）。托盘图标的回调只投给一扇窗口，没有窗口就没有托盘
+#   Win32_UI_Shell —— Shell_NotifyIconW：把图标放进任务栏通知区、改它、删它（src/shell/icon.rs）
+#   Win32_System_LibraryLoader —— GetModuleHandleW，注册窗口类要的那个模块句柄
+#   Win32_System_Registry —— RegGetValueW，读任务栏此刻是深色还是浅色（Personalize 下的
+#       SystemUsesLightTheme）。Windows 没给这件事一个 API，那个注册表值就是它公开的答案
+#   Win32_UI_HiDpi —— GetDpiForSystem，按显示缩放给图标选尺寸（icon::IconSize::for_dpi）
+#   Win32_System_Console —— AttachConsole：程序是窗口程序（双击不闪黑框），过渡期的 status 与
+#       config-refresh 借启动它的那个终端印字（src/main.rs）
 # 选 windows 而不是 windows-sys：HID 那一层要传 PHIDP_PREPARSED_DATA 这类不透明句柄并配对释放，
 # 有类型包装能少写一批 unsafe。
-windows = { version = "0.62.2", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp", "Win32_Graphics_Gdi"] }
+windows = { version = "0.62.2", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_HiDpi", "Win32_System_Console"] }
 
 # 子命令 status / scan / probe / run。derive 是为了让子命令定义和帮助文本住在一处。
 clap = { version = "4.6.6", features = ["derive"] }

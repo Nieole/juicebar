@@ -481,6 +481,52 @@ fn a_lost_device_still_shows_its_last_known_value() {
     );
 }
 
+/// 退到了上次已知值，这一次取数自己为什么没读到也一并交出来。交给这一轮的那一份里没有它的位置——
+/// 那一份是上次已知值——而托盘要把它写进日志：图标上那只是一个灰的旧数，这却是最常见的那一种失败。
+#[test]
+fn falling_back_to_the_last_known_value_still_hands_over_why_this_fetch_did_not_read() {
+    let device = mouse_with_both_endpoints();
+    // 两条 Endpoint 都在场，回包脚本都空着——相当于两条都超时。
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [
+            (EndpointKind::Wired, vec![]),
+            (EndpointKind::Dongle24G, vec![]),
+        ],
+    );
+    let previous = EndpointReading::from_hid(
+        EndpointKind::Wired,
+        Reading {
+            reported_level: 44,
+            charging: Some(false),
+            voltage_mv: Some(3_950),
+        },
+        NOW.minus_secs(1_800),
+    );
+    let mut last_known = LastKnown::default();
+    last_known.record(&device.id, &previous, NOW.minus_secs(1_800));
+
+    let outcome = readout::read_or_last_known_with_reason(
+        &device,
+        &endpoints,
+        None,
+        &mut last_known,
+        &default_general(),
+        NOW,
+    );
+
+    let row = outcome.row.expect("退得到上次已知值");
+    assert_eq!(row.provenance, Provenance::LastKnown);
+    let reason = outcome
+        .fell_back_because
+        .expect("没读到的原因跟着交出来")
+        .to_string();
+    assert!(
+        reason.starts_with("没有可信的读数 —— Wired: "),
+        "交出来的是这一次取数自己的那句话：{reason}"
+    );
+}
+
 /// 这一次取数读得到的时候，**状态文件里那一份不许插队**。
 ///
 /// 历史值只是失联时的退路。让它参与竞争，一份存了半天的读数就可能盖掉当场问出来的那个数
