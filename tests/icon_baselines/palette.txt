@@ -1,0 +1,22 @@
+# 基准网格里每个字符是哪种颜色：底色 字符 R G B A（A 是不透明度，颜色不预乘）。“.”是全透明。
+# 由 .scratch/tray-design/icon-review.html 的“导出基准”从它的调色板 PAL 算出来，别手改。
+dark F 255 255 255 255
+dark R 255 95 87 255
+dark G 76 217 138 255
+dark N 142 148 155 255
+dark A 242 178 51 255
+dark T 255 255 255 56
+dark f 255 255 255 115
+dark r 255 95 87 115
+dark g 76 217 138 115
+dark n 142 148 155 115
+light F 28 28 28 255
+light R 209 36 47 255
+light G 27 138 63 255
+light N 138 143 150 255
+light A 184 126 0 255
+light T 0 0 0 43
+light f 28 28 28 115
+light r 209 36 47 115
+light g 27 138 63 115
+light n 138 143 150 115

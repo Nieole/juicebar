@@ -297,6 +297,8 @@ const PAL = {
   dark:  { bg:'#1F1F1F', fg:'#FFFFFF', red:'#FF5F57', green:'#4CD98A', gray:'#8E949B', amber:'#F2B233', track:'rgba(255,255,255,.22)', grid:'rgba(255,255,255,.08)' },
   light: { bg:'#F0F0F0', fg:'#1C1C1C', red:'#D1242F', green:'#1B8A3F', gray:'#8A8F96', amber:'#B87E00', track:'rgba(0,0,0,.17)',     grid:'rgba(0,0,0,.08)' },
 };
+/* B 电池在 24 像素以上要把数字压在电量那一格上，那一格于是淡到这个不透明度 */
+const DIM = 0.45;
 /* 名字按 CONTEXT.md。readme 标明它在 README 的“四状态”里落在哪一格 */
 const STATES = [
   { k:'normal',  short:'正常', name:'正常',     term:'新鲜的 Reading',                          todo:'不用管',             readme:'默认色', level:'L', color:'fg' },
@@ -334,6 +336,24 @@ function drawSym(ctx, txt, box, color, glyph) {
     return;
   }
   drawText(ctx, txt, box, color, glyph);
+}
+
+/* C 圆环的像素：不用 ctx.arc。浏览器的抗锯齿弧没法逐像素对照，Rust 那边也照抄不出来，所以
+ * 圆环改成逐像素判定——src/icon/ring.rs 是同一个算法，两边能逐像素对上全靠这一点。
+ * 只用整数：坐标一律乘 2，像素中心 (x+½, y+½) 就落在整数上，没有一处浮点或三角函数。
+ *  - 圆环占 [ax, S) 那一块，圆心在它正中，外半径是它宽度的一半，线宽 sw
+ *  - 一个像素属于圆环：它的中心到圆心的距离落在 [外半径 − 线宽, 外半径) 里
+ *  - 排序：从 12 点起顺时针。先分左右两半（右半含正上方，左半含正下方），同一半里比叉积，
+ *    同一条射线上里圈在前。这是一个全序，所以任何排序算法排出来都一样
+ * 调用方拿前 k 个画电量色，k = round(像素数 × max(2, L) / 100)——最低 2%，和原来的弧一样 */
+function ringPixels(ax, aw, S, sw) {
+  const cx2 = 2 * ax + aw, cy2 = S, ro = aw, ri = aw - 2 * sw;  // 圆心与内外半径，都乘了 2
+  const px = [];
+  for (let y = 0; y < S; y++) for (let x = ax; x < S; x++) {
+    const X = 2 * x + 1 - cx2, Y = 2 * y + 1 - cy2, d = X * X + Y * Y;
+    if (d >= ri * ri && d < ro * ro) px.push({ x, y, X, Y, d, h: X > 0 || (X === 0 && Y < 0) ? 0 : 1 });
+  }
+  return px.sort((a, b) => (a.h - b.h) || (a.Y * b.X - a.X * b.Y) || (a.d - b.d));
 }
 
 /* ---------- 四个方向 ----------
@@ -394,7 +414,7 @@ function drawIcon(cv, S, st, o) {
     const inner = { x: bx + bw + u, y: by + bw + u, w: bwid - 2 * bw - 2 * u, h: bht - 2 * bw - 2 * u };
     const showNum = S >= 24;
     if (L !== null) {
-      ctx.globalAlpha = showNum ? 0.45 : 1;
+      ctx.globalAlpha = showNum ? DIM : 1;
       ctx.fillStyle = col;
       ctx.fillRect(inner.x, inner.y, Math.max(u, Math.round(inner.w * L / 100)), inner.h);
       ctx.globalAlpha = 1;
@@ -405,13 +425,9 @@ function drawIcon(cv, S, st, o) {
 
   if (o.dir === 'ring') {
     const sw = Math.max(2, Math.round(S / 8));
-    const cx = ax + aw / 2, r = aw / 2 - sw / 2;
-    ctx.lineWidth = sw; ctx.lineCap = 'butt';
-    ctx.strokeStyle = P.track; ctx.beginPath(); ctx.arc(cx, S / 2, r, 0, Math.PI * 2); ctx.stroke();
-    if (L !== null) {
-      ctx.strokeStyle = col; ctx.beginPath();
-      ctx.arc(cx, S / 2, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0.02, L / 100)); ctx.stroke();
-    }
+    const ring = ringPixels(ax, aw, S, sw);                // 已按顺时针排好：前 k 个是电量，其余是轨道
+    const k = L === null ? 0 : Math.floor((ring.length * Math.max(2, L) + 50) / 100);
+    ring.forEach((p, i) => { ctx.fillStyle = i < k ? col : P.track; ctx.fillRect(p.x, p.y, 1, 1); });
     const pad = sw + u;
     const box = { x: ax + pad, y: Math.round((S - aw) / 2) + pad, w: aw - 2 * pad, h: aw - 2 * pad };
     const numCol = st.color === 'gray' ? P.gray : P.fg;
@@ -442,13 +458,13 @@ function magnify(src, S, k, theme, grid) {
   return m;
 }
 
-window.__jb = { drawIcon, magnify, STATES, PAL };
+window.__jb = { drawIcon, magnify, STATES, PAL, DIM };
 })();
 </script>
 <script>
 (() => {
 'use strict';
-const { drawIcon, magnify, STATES } = window.__jb;
+const { drawIcon, magnify, STATES, PAL, DIM } = window.__jb;
 const KEY = 'jb-icon-settings-v2';
 const SIZES = [16, 20, 24, 32];
 const MAG = { 16: 6, 20: 5, 24: 4, 32: 3 };
@@ -796,7 +812,102 @@ function watchDpr() {
 }
 function onDpr() { watchDpr(); renderAll(); }
 
+/* ---------- 导出基准 ----------
+ * Rust 的渲染器（src/icon/）拿这里导出的文本网格逐像素对照（ADR-0005）：一个像素一个字符，字符是
+ * 调色板里的一格，哪个字符是哪种颜色写在一起导出的 palette.txt 里。
+ * 入口：地址后面加 #baselines 打开这一页，全部网格以 JSON 写进页底的 <pre id="baselines">；
+ * tests/icon_baselines/export.mjs 用无头浏览器做这件事，再把文件写回那个目录。控制台里也可以直接
+ * 调 __jb.baselines()。
+ * 覆盖面（resident-tray 票 01）：缺省设置下 8 个状态 × 4 个尺寸 × 2 种底色；再对每一项设置，从缺省
+ * 出发只改那一项、每个取值各一组；外加每个画法一组电量扫描。不做全组合。
+ * “系统字体”那个取值不导出：Rust 那边走 Windows 的文字渲染，不会与浏览器逐像素一致（ADR-0005 那条
+ * 的例外）。菜单显示那两项不画在图标上，也不导出。 */
+const INK = [                                            // 字符、调色板里的哪一格、再乘多少不透明度
+  ['F', 'fg', 1], ['R', 'red', 1], ['G', 'green', 1], ['N', 'gray', 1], ['A', 'amber', 1], ['T', 'track', 1],
+  ['f', 'fg', DIM], ['r', 'red', DIM], ['g', 'green', DIM], ['n', 'gray', DIM],
+];
+const BASE_L = 57;                                       // 与页面预览的缺省电量一致
+const SWEEP_L = [0, 1, 50, 99, 100];
+function cssRgba(css, alpha) {
+  const c = document.createElement('canvas').getContext('2d');
+  c.fillStyle = css;
+  const s = c.fillStyle;                                 // 浏览器规整过的写法：#rrggbb 或 rgba(r, g, b, a)
+  const v = s[0] === '#' ? [1, 3, 5].map(i => parseInt(s.slice(i, i + 2), 16)).concat(1) : s.match(/[\d.]+/g).map(Number);
+  return [v[0], v[1], v[2], Math.round(v[3] * alpha * 255)];
+}
+function baselines() {
+  const themes = ['dark', 'light'];
+  const pal = {};
+  for (const t of themes) pal[t] = INK.map(([ch, k, a]) => [ch, cssRgba(PAL[t][k], a)]);
+  let unmatched = 0;
+  const grid = (cv, S, t) => {
+    const d = cv.getContext('2d').getImageData(0, 0, S, S).data;
+    const rows = [];
+    for (let y = 0; y < S; y++) {
+      let row = '';
+      for (let x = 0; x < S; x++) {
+        const i = 4 * (y * S + x), p = [d[i], d[i + 1], d[i + 2], d[i + 3]];
+        if (p[3] === 0) { row += '.'; continue; }
+        /* 半透明的格子读回来会差一两级（画布里存的是预乘过的值），所以按最近的一格认，但只认很近的、
+         * 而且只认得出一格的；认不出就写“?”，导出脚本见到它就拒绝落盘 */
+        const hits = pal[t].filter(([, q]) => Math.abs(p[3] - q[3]) <= 2 && [0, 1, 2].every(j => Math.abs(p[j] - q[j]) <= 3));
+        if (hits.length === 1) row += hits[0][0]; else { row += '?'; unmatched++; }
+      }
+      rows.push(row);
+    }
+    return rows.join('\n');
+  };
+  const cfg = (k, v) => { const s = byKey(k); return s.key + '=' + s.opts.find(o => o[0] === v)[2]; };
+  const section = (st, S, t, o, L, tag) => {
+    const cv = drawIcon(document.createElement('canvas'), S, st, Object.assign({}, o, { L, theme: t }));
+    const lv = st.text ? '-' : (st.level === 'L' ? L : st.level);
+    return '= ' + [st.name, lv, S, t].concat(tag).join(' ') + '\n' + grid(cv, S, t);
+  };
+  const head = '# 由 .scratch/tray-design/icon-review.html 的“导出基准”生成，别手改：改设计稿，再跑 tests/icon_baselines/export.mjs。\n'
+    + '# 每一节第一行：= 状态 电量 尺寸 底色 [这一组改动的设置]；其余设置都是缺省值。下面一个像素一个字符，字符对照 palette.txt。\n';
+  const files = {};
+  const write = (name, sections) => { files[name + '.txt'] = head + '\n' + sections.join('\n\n') + '\n'; };
+  const group = (o, L, tag) => {
+    const out = [];
+    for (const st of STATES) for (const S of SIZES) for (const t of themes) out.push(section(st, S, t, o, L, tag));
+    return out;
+  };
+  const base = {};
+  for (const k of STYLE_KEYS) base[k] = DEFAULTS[k];
+  write('default', group(base, BASE_L, []));
+  for (const k of STYLE_KEYS) for (const [v] of byKey(k).opts) {
+    /* 100 怎么画只有电量是 100 时看得出来，所以这一项连缺省值也单独一组，电量取 100——
+     * 和“图标样式”里那张预览的做法一样 */
+    const full = k === 'full';
+    if (v === 'sys' || (v === DEFAULTS[k] && !full)) continue;
+    const tag = cfg(k, v);
+    write(tag.replace('=', '-'), group(Object.assign({}, base, { [k]: v }), full ? 100 : BASE_L, [tag]));
+  }
+  /* 电量扫描：每个画法 × 下面四种 × 五个电量 × 四个尺寸。四种各守一类“只改一项”碰不到的交叉：
+   * 充电中——C 圆环里的满格用状态色，别的画法用数字色，只有带颜色的状态看得出来；
+   * 充电中加闪电——闪电让出左边一条，A、B、C 的几何都跟着挪（C 在 16、20 像素上宽度变成奇数）；
+   * 细体——方框小的画法（C 圆环、B 电池）放不下 5×7，退到 3×5 */
+  const st = k => STATES.find(s => s.k === k), sweep = [];
+  const variants = [[st('normal'), {}], [st('chg'), {}], [st('chg'), { chg: 'boltall' }], [st('normal'), { glyph: 'fine' }]];
+  for (const [v] of byKey('dir').opts) for (const [state, extra] of variants) for (const L of SWEEP_L) for (const S of SIZES) {
+    const o = Object.assign({}, base, { dir: v }, extra);
+    sweep.push(section(state, S, 'dark', o, L, [cfg('dir', v)].concat(Object.keys(extra).map(k => cfg(k, extra[k])))));
+  }
+  write('sweep', sweep);
+  const lines = ['# 基准网格里每个字符是哪种颜色：底色 字符 R G B A（A 是不透明度，颜色不预乘）。“.”是全透明。',
+    '# 由 .scratch/tray-design/icon-review.html 的“导出基准”从它的调色板 PAL 算出来，别手改。'];
+  for (const t of themes) for (const [ch, q] of pal[t]) lines.push([t, ch].concat(q).join(' '));
+  files['palette.txt'] = lines.join('\n') + '\n';
+  return { files, unmatched };
+}
+window.__jb.baselines = baselines;
+
 load(); renderSettings(); watchDpr(); renderAll();
+if (location.hash === '#baselines') {
+  const pre = el('pre', null, JSON.stringify(baselines()));
+  pre.id = 'baselines';
+  document.querySelector('main').appendChild(pre);
+}
 })();
 </script>
 </body>
