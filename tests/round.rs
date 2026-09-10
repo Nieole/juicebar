@@ -5,7 +5,7 @@
 //! 不碰 Win32 界面、不碰硬件。手上有的东西多半是**罐装的一次取数结果**——`RowReading` 与
 //! `NoReading` 直接造，不走假枚举：这个文件断言的是"拿到这些之后判成什么"，一次取数本身怎么走
 //! 在 `tests/readout.rs`。只有进程枚举失败那一条走真的取数，因为它要证的正是"问不出来时，取数
-//! 照常去打开那几条通道"。
+//! 照常去试那几条 HID Endpoint"。
 //!
 //! 图标状态的优先顺序照 `CONTEXT.md`「图标状态」：暂停 > 取数失败 / Unknown / 无已知值 >
 //! 充电中 > 低电 > Stale > 正常。下面每一处边界至少一条用例。
@@ -17,7 +17,7 @@ use common::{
     FakeEndpoints, FakeProcesses, NOW, default_general, keyboard_with_dongle_endpoint,
     mouse_with_all_three_endpoints, mouse_with_both_endpoints, scanned_ble, vendor_hub_running,
 };
-use juicebar::config::{Config, Device, General};
+use juicebar::config::{Config, Device};
 use juicebar::endpoints::{EndpointKind, EndpointReading};
 use juicebar::primary::Selection;
 use juicebar::readout::{self, RowReading};
@@ -90,21 +90,10 @@ fn fetched(device: &Device, endpoints: &FakeEndpoints, paused_by: Option<&Vendor
     ))
 }
 
-/// 本机一个厂商上位机都没在跑的那一轮。
-fn not_paused(general: &General) -> PauseCheck {
-    PauseCheck::detect(general, &FakeProcesses::new([]))
-}
-
 /// 一台 Device、手上这一份东西，在缺省配置下判成哪一种图标状态。
 fn icon_state_of(device: &Device, in_hand: &InHand) -> IconState {
     let general = default_general();
-    let round = Round::assess(
-        &general,
-        [(device, in_hand)],
-        None,
-        &not_paused(&general),
-        NOW,
-    );
+    let round = Round::assess(&general, [(device, in_hand)], None, Vec::new(), NOW);
     round.devices[0].icon_state
 }
 
@@ -199,7 +188,7 @@ fn a_very_stale_reading_is_judged_like_any_stale_one() {
         &general,
         [(&with_ble, &not_low), (&with_ble, &low)],
         None,
-        &not_paused(&general),
+        Vec::new(),
         NOW,
     );
 
@@ -300,7 +289,9 @@ fn a_device_with_nothing_in_hand_has_no_known_value() {
 /// 该动手的地方是那个上位机，而别的状态都在叫他去看设备（spec 用户故事 14）。
 ///
 /// 手上有读数的那几种（`Ble` 顶上的、或者退到的上次已知值）逐一加上暂停；手上没有读数的两种
-/// 走真的取数：让开之后剩下的也没读到（取数失败那一面），与让开之后什么都没有（无已知值那一面）。
+/// 走真的取数：让开之后剩下的也没读到（取数失败那一面），与让开之后什么都没有（无已知值那一面：
+/// 从没读到过、也没有上次已知值，正是 `CONTEXT.md` 那一条的字面）。`InHand::NoKnownValue` 那一种
+/// 不在这里：还没取过数，就还没有什么为上位机让开过（parking lot Q153）。
 #[test]
 fn a_paused_device_is_paused_whatever_else_it_has_in_hand() {
     let hub = vendor_hub_running();
@@ -377,7 +368,7 @@ fn each_device_is_judged_against_its_own_threshold() {
         &config.general,
         [(mouse, &for_mouse), (keyboard, &for_keyboard)],
         None,
-        &not_paused(&config.general),
+        Vec::new(),
         NOW,
     );
 
@@ -395,13 +386,7 @@ fn a_device_with_a_reading_shows_its_level_its_source_and_how_long_ago() {
     let general = default_general();
     let in_hand = read_long_ago(62, 45);
 
-    let round = Round::assess(
-        &general,
-        [(&mouse, &in_hand)],
-        None,
-        &not_paused(&general),
-        NOW,
-    );
+    let round = Round::assess(&general, [(&mouse, &in_hand)], None, Vec::new(), NOW);
     let state = &round.devices[0];
 
     assert_eq!(state.level(), Some(Level::Reported(62)));
@@ -425,7 +410,7 @@ fn a_device_without_a_reading_shows_why_and_nothing_else() {
         &general,
         [(&mouse, &failed), (&mouse, &nothing)],
         None,
-        &not_paused(&general),
+        Vec::new(),
         NOW,
     );
 
@@ -464,7 +449,7 @@ fn the_primary_device_is_the_lowest_when_the_rule_is_lowest() {
         &general,
         [(&mouse, &for_mouse), (&keyboard, &for_keyboard)],
         None,
-        &not_paused(&general),
+        Vec::new(),
         NOW,
     );
 
@@ -484,7 +469,7 @@ fn the_primary_device_is_the_pinned_one_when_the_config_pins_it() {
         &general,
         [(&mouse, &for_mouse), (&keyboard, &for_keyboard)],
         None,
-        &not_paused(&general),
+        Vec::new(),
         NOW,
     );
 
@@ -504,7 +489,7 @@ fn the_primary_device_is_held_over_when_nothing_is_trustworthy_this_round() {
         &general,
         [(&mouse, &for_mouse), (&keyboard, &for_keyboard)],
         Some("dragonfly3"),
-        &not_paused(&general),
+        Vec::new(),
         NOW,
     );
 
@@ -519,8 +504,8 @@ fn the_primary_device_is_held_over_when_nothing_is_trustworthy_this_round() {
 ///
 /// 反过来——问不出来就一律暂停——会让一台 Win32 调用失败的机器永久显示暂停、指名一个根本没在跑
 /// 的进程：一句用户查不下去的假话，比一次可能读错的数更难修（parking lot Q34）。所以取数照常去
-/// 打开那几条通道；而那件没问出来的事要说出来，不能咽掉。第 1 趟 `/settle` 时这条规则还只活在
-/// `status` 的 `run` 里、测不到，这一条就是为它写的。
+/// 试那几条 HID Endpoint；而那件没问出来的事要说出来，不能咽掉。第 1 趟 `/settle` 时这条规则还
+/// 只活在 `status` 的 `run` 里、测不到，这一条就是为它写的。
 #[test]
 fn a_failed_process_enumeration_pauses_nothing_and_is_a_warning_of_this_round() {
     let general = default_general();
@@ -532,7 +517,13 @@ fn a_failed_process_enumeration_pauses_nothing_and_is_a_warning_of_this_round() 
 
     let pause = PauseCheck::detect(&general, &FakeProcesses::failing());
     let in_hand = fetched(&mouse, &endpoints, pause.paused_by());
-    let round = Round::assess(&general, [(&mouse, &in_hand)], None, &pause, NOW);
+    let round = Round::assess(
+        &general,
+        [(&mouse, &in_hand)],
+        None,
+        pause.warning().into_iter().collect(),
+        NOW,
+    );
 
     assert_eq!(
         endpoints.opens(),
@@ -549,18 +540,14 @@ fn a_failed_process_enumeration_pauses_nothing_and_is_a_warning_of_this_round() 
     );
 }
 
-/// 问得出来的一轮没有告警——撞见了上位机也一样：那是暂停，由那几台自己的图标状态说，不是这一轮
-/// 出了什么事。
+/// 问得出来就没有告警——撞见了上位机也一样：那是暂停，由那几台自己的图标状态说，不是出了什么事。
 #[test]
-fn a_round_that_could_ask_about_processes_has_no_warning() {
+fn asking_about_processes_successfully_leaves_no_warning() {
     let general = default_general();
-    let mouse = mouse_with_both_endpoints();
-    let in_hand = just_read(62, false);
 
     for processes in [FakeProcesses::new([]), FakeProcesses::new(["VGN VHUB.exe"])] {
         let pause = PauseCheck::detect(&general, &processes);
-        let round = Round::assess(&general, [(&mouse, &in_hand)], None, &pause, NOW);
-        assert!(round.warnings.is_empty(), "{:?}", round.warnings);
+        assert_eq!(pause.warning(), None);
     }
 }
 

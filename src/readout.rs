@@ -45,7 +45,7 @@ use crate::vendor_hub::VendorHub;
 /// 接缝本身（`crate::clock::Clock`）因此只出现在 [`run`] 的顶上，这一层往下全是纯函数。
 ///
 /// `paused_by` 同理是个**值**而不是 `&dyn Processes`：本机在跑哪些进程只在 [`run`] 的顶上
-/// 问一次，一轮问两次就是白花一次进程枚举（见 `crate::vendor_hub`）。`None` 即
+/// 问一次，一次 `status` 问两次就是白花一次进程枚举（见 `crate::vendor_hub`）。`None` 即
 /// 这一次取数不让开任何东西——开关关着、或者名单里一个都没在跑，两种都是它。
 ///
 /// [`run`]: crate::cli::status::run

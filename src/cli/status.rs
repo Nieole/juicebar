@@ -43,7 +43,7 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     let state_path = state_path_beside_config(&path);
     let mut last_known = LastKnown::load(&state_path);
     // 厂商上位机在跑吗。**问一次，全部 Device 共用**——与枚举、与"当下"同一条规矩
-    // （parking lot Q27）：一次进程枚举不便宜，而这一轮里它的答案不会变。开关关着时
+    // （parking lot Q27）：一次进程枚举不便宜，而这一次 `status` 里它的答案不会变。开关关着时
     // 这一句连进程都不去枚举（`VendorHub::detect` 的第一行）。问不出来时按"没在跑"走、
     // 交一条这一轮的告警——那条规则住在 `PauseCheck` 里，这里只把它的答案递下去。
     let pause = PauseCheck::detect(&config.general, &SystemProcesses);
@@ -57,7 +57,7 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
             // 时间，所以这个值在循环里取而不在循环外——但**一台设备只取一次**。
             let now = clock.now();
             // 读到的那一份已经由 `read_or_last_known` 记进 `last_known` 了（票面第 1 条），
-            // 写盘在这一轮的末尾一次写完：几台设备的记录住在同一份文件里。
+            // 写盘在最后一次写完：几台设备的记录住在同一份文件里。
             let in_hand = InHand::from(readout::read_or_last_known(
                 device,
                 &endpoints,
@@ -83,7 +83,12 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
         .zip(&fetched)
         .map(|(device, (in_hand, now))| DeviceState::assess(device, in_hand, &config.general, *now))
         .collect();
-    let round = Round::compose(&config.general, states, previous_primary.as_deref(), &pause);
+    let round = Round::compose(
+        &config.general,
+        states,
+        previous_primary.as_deref(),
+        pause.warning().into_iter().collect(),
+    );
 
     // 这一轮的告警印在 stderr 上、先于那几行：它们还是两句 `eprintln!` 时就是这个次序。
     for warning in &round.warnings {
@@ -100,7 +105,7 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     if let Some(id) = round.primary.primary_id() {
         last_known.remember_primary(id);
     }
-    for line in compose(&round.primary, &rows) {
+    for line in lines_with_primary(&round.primary, &rows) {
         println!("{line}");
     }
 
@@ -115,9 +120,10 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
         }
     }
 
-    // 写盘放在最后，一轮一次。**写不进去只说一句（这一轮的又一条告警），不让整条命令失败**：
-    // 上面那几行已经印出去了，而用户要的东西就是那几行。丢的是下次启动时的记忆，不是这一轮的
-    // 输出。这一条由这里造，不由 `Round` 交出来：写盘在这一轮合成之后，那个纯函数碰不到磁盘。
+    // 写盘放在最后，一次 `status` 只写一次。**写不进去只说一句（这一轮的又一条告警），不让
+    // 整条命令失败**：上面那几行已经印出去了，而用户要的东西就是那几行。丢的是下次启动时的
+    // 记忆，不是这一轮的输出。这一条由这里造，不经过 `Round`：写盘在这一轮合成之后，那个纯函数
+    // 碰不到磁盘。
     if let Err(e) = last_known.save(&state_path) {
         eprintln!("{}", Warning::StateNotSaved(format!("{e:#}")));
     }
@@ -177,8 +183,8 @@ pub struct DeviceRow<'a> {
 /// 那句话，都是 `status` 的外部行为，而"本机有哪些设备"那一步才躲不开真系统。
 ///
 /// **`run` 不走这里的那一步选择**：它手上已经有这一轮选出的那个 [`Selection`]
-/// （`crate::round`，与托盘同一个结构），直接交给 [`compose`] 排版。这个函数是同一段合成连同
-/// 那一步选择（[`primary::select`]，`Round` 用的也是它），那几条排版用例从这里进来。
+/// （`crate::round`，与托盘同一个结构），直接交给 [`lines_with_primary`] 排版。这个函数是
+/// 同一段合成连同那一步选择（[`primary::select`]，`Round` 用的也是它），那几条排版用例从这里进来。
 ///
 /// **"上次的选择"从状态文件里来，这一轮选出的又记回去。**`status` 是一次性命令——枚举、
 /// 取数、印几行、退出，它自己手上没有"上次"，所以那份记忆住在票 08 的 `state.toml`
@@ -208,11 +214,11 @@ pub fn primary_lines<'a>(
         })
         .collect();
     let selection = primary::select(rule, &candidates, previous);
-    (compose(&selection, rows), selection.primary_id())
+    (lines_with_primary(&selection, rows), selection.primary_id())
 }
 
 /// 那几行的合成：每个 Device 一行，Primary Device 那一行的名字后面带标注，末尾可能多一句交代。
-fn compose(selection: &Selection<'_>, rows: &[DeviceRow<'_>]) -> Vec<String> {
+fn lines_with_primary(selection: &Selection<'_>, rows: &[DeviceRow<'_>]) -> Vec<String> {
     let mut lines: Vec<String> = rows
         .iter()
         .map(|row| {
@@ -340,15 +346,12 @@ pub fn render(
     // 不印"这条规矩到此在所有情形下一致：一格有值，那个值就是真的。**不改成过去时措辞**
     // （"当时在充电"）：一个只为措辞存在的分支不值得，而这里能省下的正是那个分支。
     //
-    // 对 `Provenance` **穷举**，理由与 [`stale_marker`] 那一条相同：加第三种来路时编译器会
-    // 把人指到这一行来。（`Option<bool>` 那一维加不出变体，所以第二条那一支取通配。）
-    let charging = match (provenance, reading.charging) {
-        (Provenance::JustRead, Some(true)) => "  充电中",
-        (Provenance::JustRead, Some(false)) => "  未充电",
-        // 理由一：这条协议说不上来。
-        (Provenance::JustRead, None) => "",
-        // 理由二：这个数是上次已知值。
-        (Provenance::LastKnown, _) => "",
+    // 第二条理由住在 [`Provenance::charging_now`] 里（对来路穷举的也是它）：图标状态里的
+    // "充电中"问的是同一条，规则只守一处。它交 `None` 的两种来由正是上面这两条。
+    let charging = match provenance.charging_now(reading.charging) {
+        Some(true) => "  充电中",
+        Some(false) => "  未充电",
+        None => "",
     };
     // 键盘的回包里根本没有电压这一项，那一格同样整个不印。印一个 0 mV 会被当成读数。
     let voltage = match reading.voltage_mv {
