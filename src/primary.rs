@@ -50,7 +50,7 @@ impl<'de> Deserialize<'de> for PrimaryRule {
 /// 一个 Device 这一轮在 Primary 选择里的样子。
 ///
 /// 候选就是**登记在册的那些 Device**。未登记的 BLE 设备天然不在这里——它们不是 Device，
-/// 没有 id、不进 `config.devices`（parking lot Q24，名单是怎么来的见 `cli::status::run`）。
+/// 没有 id、不进 `config.devices`（parking lot Q24，名单是怎么来的见 `crate::round::Round::compose`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Candidate<'a> {
     /// 配置里那个 Device 的 id。选出来的结果就是它。

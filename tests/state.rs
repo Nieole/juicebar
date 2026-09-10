@@ -206,7 +206,7 @@ fn a_missing_state_file_reads_as_no_last_known_value() {
 /// 语法坏了连 TOML 都不成立，字段类型不对是 TOML 成立而 schema 不成立，认不出的
 /// Endpoint 块名是 schema 也成立而值没有意义。
 ///
-/// **这个文件坏了没有需要用户处置的错误状态**：这一趟末尾它会被整份重写，损坏自愈。
+/// **这个文件坏了没有需要用户处置的错误状态**：这一轮末尾它会被整份重写，损坏自愈。
 /// 所以走的不是"报一个错让人看见"，而是"当它不存在"——它是缓存，不是用户的数据。
 #[test]
 fn a_corrupt_state_file_reads_as_no_last_known_value() {
@@ -296,7 +296,7 @@ reported_level = 62
     );
 }
 
-/// 写到磁盘上的读数，下一趟从磁盘上读回来。
+/// 写到磁盘上的读数，下次启动时从磁盘上读回来。
 ///
 /// 上面那几条用例走的都是纯文本那一段。这一条把文件系统也走一遍：这张票的承诺是"重启
 /// juicebar 不等于失忆"，而重启这件事跨的正是文件系统，不是一个字符串。
@@ -317,9 +317,9 @@ fn a_reading_written_to_disk_comes_back_on_the_next_run() {
     );
 }
 
-/// 只有一台设备读得到的那一趟，**别的 Device 的记录还在**。
+/// 只有一台设备读得到的那一轮，**别的 Device 的记录还在**。
 ///
-/// 键鼠不会一起失联：鼠标插着线、键盘拨到了有线档没插线，是常态。这一趟把鼠标的记录更新掉、
+/// 键鼠不会一起失联：鼠标插着线、键盘拨到了有线档没插线，是常态。这一轮把鼠标的记录更新掉、
 /// 顺手把键盘那条抹掉，症状是键盘那一行在它最需要历史值的时候变成"读不到"——而它的历史值
 /// 一分钟前还在文件里。整份重写因此必须建立在**读进来的那一份**上，不是一张空表。
 #[test]
@@ -327,14 +327,14 @@ fn records_for_the_other_devices_survive_a_run_where_only_one_was_readable() {
     let path = scratch_dir("one-of-two").join("state.toml");
     let general = default_general();
 
-    // 上一趟：两台都读到了。
+    // 上一轮：两台都读到了。
     let mut previous = LastKnown::default();
     let earlier = NOW.minus_secs(1_800);
     previous.record("neon75", &dongle_reading(62, earlier), earlier);
     previous.record("dragonfly3", &wired_reading(40, earlier), earlier);
     previous.save(&path).expect("写得进临时目录");
 
-    // 这一趟：只有鼠标读到了。
+    // 这一轮：只有鼠标读到了。
     let mut this_run = LastKnown::load(&path);
     this_run.record("dragonfly3", &wired_reading(44, NOW), NOW);
     this_run.save(&path).expect("写得进临时目录");
@@ -422,7 +422,7 @@ fn the_last_selected_primary_device_survives_a_restart() {
     assert_eq!(
         store.last_primary(),
         None,
-        "第一趟没有「上次」，选择规则自己去处理这一种"
+        "第一轮没有「上次」，选择规则自己去处理这一种"
     );
 
     store.remember_primary("dragonfly3");
@@ -430,7 +430,7 @@ fn the_last_selected_primary_device_survives_a_restart() {
     assert_eq!(
         after_a_restart(&store).last_primary(),
         Some("dragonfly3"),
-        "下一趟该记得上次选的是谁"
+        "下一轮该记得上次选的是谁"
     );
 }
 

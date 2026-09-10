@@ -426,7 +426,7 @@ fn lists_the_ble_endpoint_among_the_ones_this_device_configured() {
 /// 失联的 Device **仍然拿得出上次已知值**，重启不等于失忆。
 ///
 /// 票面第 2 条的前一半（后一半"标注成陈旧"在下面那条）。这是这张票的由来：鼠标收进抽屉、
-/// 键盘关了机，这一趟一条 Endpoint 都读不到，而 `status` 刚启动内存里什么都没有——那个
+/// 键盘关了机，这一次取数一条 Endpoint 都读不到，而 `status` 刚启动内存里什么都没有——那个
 /// "上次是多少电"只可能来自状态文件。
 #[test]
 fn a_lost_device_still_shows_its_last_known_value() {
@@ -441,7 +441,7 @@ fn a_lost_device_still_shows_its_last_known_value() {
     );
     let general = default_general();
 
-    // 手上一份历史值都没有时，仍然是取数那一趟的原因（这里两条都超时，那句话是"没有可信
+    // 手上一份历史值都没有时，仍然是那一次取数的原因（这里两条都超时，那句话是"没有可信
     // 的读数"）——那句诊断没有被历史值挤掉。
     assert!(
         readout::read_or_last_known(
@@ -477,11 +477,11 @@ fn a_lost_device_still_shows_its_last_known_value() {
     assert_eq!(
         readout.provenance,
         Provenance::LastKnown,
-        "并且说得清它是历史值，不是这一趟读到的"
+        "并且说得清它是历史值，不是这一次取数读到的"
     );
 }
 
-/// 这一趟读得到的时候，**状态文件里那一份不许插队**。
+/// 这一次取数读得到的时候，**状态文件里那一份不许插队**。
 ///
 /// 历史值只是失联时的退路。让它参与竞争，一份存了半天的读数就可能盖掉当场问出来的那个数
 /// ——而当场问出来的那个才是现状，这条链路上其余每一处（Endpoint 优先级、`Ble` 排最后）
@@ -517,11 +517,11 @@ fn a_reading_taken_this_run_wins_over_the_one_in_the_state_file() {
         &default_general(),
         NOW,
     )
-    .expect("Wired 这一趟读得到");
+    .expect("Wired 这一次读得到");
 
     assert_eq!(
         readout.reading.reading.reported_level, 100,
-        "印的是这一趟读到的那个数，不是文件里那个 44"
+        "印的是这一次取数读到的那个数，不是文件里那个 44"
     );
     assert_eq!(readout.provenance, Provenance::JustRead);
 }
@@ -543,18 +543,18 @@ fn a_successful_reading_is_written_to_the_state_file() {
 
     let readout =
         readout::read_or_last_known(&device, &endpoints, None, &mut last_known, &general, NOW)
-            .expect("Wired 这一趟读得到");
+            .expect("Wired 这一次读得到");
 
     assert_eq!(
         last_known.reading_for(&device.id, &general, NOW),
         Some(readout.reading),
-        "这一趟读到的那一份该记下来了"
+        "这一次取数读到的那一份该记下来了"
     );
 }
 
-/// 退到上次已知值的那一趟**一个字都不写**——历史值不会因为被读了一次就续命。
+/// 退到上次已知值的那一次取数**一个字都不写**——历史值不会因为被读了一次就续命。
 ///
-/// 把拿出来的历史值再写一遍是最自然的写法（"每一趟都把当前状态存下来"），而它会把写盘时刻
+/// 把拿出来的历史值再写一遍是最自然的写法（"每一次取数都把当前状态存下来"），而它会把写盘时刻
 /// 刷成现在，于是那条记录永远到不了 `very_stale_after`：一只收进抽屉半年的鼠标每天被看一眼
 /// 就每天年轻一天。"这个历史值必须会过期"这句话在那种实现下永久落空,而且没有任何症状。
 #[test]
@@ -594,7 +594,7 @@ fn falling_back_to_the_last_known_value_does_not_extend_its_life() {
     assert_eq!(
         last_known.to_toml().expect("序列化得动"),
         before,
-        "失联那一趟不该动状态文件里的任何一个字"
+        "失联那一次取数不该动状态文件里的任何一个字"
     );
 }
 

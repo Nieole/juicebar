@@ -107,9 +107,9 @@ fn pauses_the_two_hid_endpoints_and_leaves_ble_alone() {
 
 /// 问不出来时交 `Err`，**不悄悄当成"没在跑"**。
 ///
-/// 两件事的处置不同：一个都没在跑什么都不必说，而问不出来该在 stderr 上说一句、然后照常
-/// 取数（parking lot Q34 定的 fail open）。压成同一个 `None`，一台 Win32 调用失败的机器
-/// 就会永远不暂停、而且一个字都不说。
+/// 两件事的处置不同：一个都没在跑什么都不必说，而问不出来要作为这一轮的一条告警说出来、然后
+/// 照常取数（parking lot Q34 定的 fail open，见 `tests/round.rs`）。压成同一个 `None`，一台
+/// Win32 调用失败的机器就会永远不暂停、而且一个字都不说。
 #[test]
 fn tells_a_failed_enumeration_apart_from_nothing_running() {
     let processes = FakeProcesses::failing();
@@ -118,7 +118,7 @@ fn tells_a_failed_enumeration_apart_from_nothing_running() {
 
     assert!(
         format!("{failed:#}").contains("认不出厂商上位机"),
-        "那句话要说清这一趟为什么没有答案：{failed:#}"
+        "那句话要说清这一次为什么没有答案：{failed:#}"
     );
     assert_eq!(processes.enumerations(), 1, "它确实去问过");
 }

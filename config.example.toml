@@ -28,7 +28,7 @@ poll_interval_wired = 30
 poll_interval_24g = 60
 poll_interval_bluetooth = 10
 
-# 低电量阈值（百分比），图标数字变红。可被单个 [[device]] 覆盖。
+# 低电量阈值（百分比）：电量低于它就算低电，托盘图标换成低电的样子。可被单个 [[device]] 覆盖。
 low_battery = 20
 
 # 数据陈旧阈值（秒）。**只对 Ble 生效**——它读的是 Windows 缓存，可能过期几个月。
