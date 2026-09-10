@@ -12,6 +12,7 @@ pub mod clock;
 pub mod config;
 pub mod endpoints;
 pub mod hid;
+pub mod icon;
 pub mod primary;
 pub mod readout;
 pub mod sources;
