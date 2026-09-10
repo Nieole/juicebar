@@ -1,13 +1,29 @@
-//! `juicebar scan` —— 把本机所有可能藏着电量的通道摊出来。
+//! `cargo run --example scan` —— 把本机所有可能藏着电量的通道摊出来。
 //!
-//! 这个子命令有两个用处：接新设备时用它找 vendor collection，以及首次运行时
-//! 用它的结果生成配置草稿。纯只读，不向任何设备发一个字节。
+//! 这个示例程序有两个用处：接新设备时用它找 vendor collection，以及把蓝牙设备的 MAC
+//! 抄进配置（草稿里 Ble 那一块程序猜不出来）。纯只读，不向任何设备发一个字节。
+//!
+//! 它与 `caps`、`probe` 是做协议逆向的诊断工具，住在 `examples/` 里，不进发布构建。
+//! 只调用库的公开面：库里不为它们开"仅供示例"的口子。
 
 use anyhow::Result;
+use clap::Parser;
 use std::collections::BTreeMap;
 
-use crate::bluetooth;
-use crate::hid;
+use juicebar::bluetooth;
+use juicebar::hid;
+
+/// 列出所有 HID collection 和带电量属性的 BLE 设备。纯只读。
+#[derive(Parser)]
+struct Args {
+    /// 连不含厂商自定义通道的设备也一起列出
+    #[arg(long)]
+    all: bool,
+}
+
+fn main() -> Result<()> {
+    run(Args::parse().all)
+}
 
 /// 从接口路径里抠出 `mi_01&col05` 这一段，配置文件里认 collection 时用得上。
 fn interface_suffix(path: &str) -> String {
@@ -35,7 +51,7 @@ fn usage_page_name(page: u16, usage: u16) -> &'static str {
     }
 }
 
-pub fn run(all: bool) -> Result<()> {
+fn run(all: bool) -> Result<()> {
     println!("== HID collections ==\n");
 
     let mut devices = hid::enumerate()?;
@@ -113,7 +129,7 @@ pub fn run(all: bool) -> Result<()> {
     println!("提示：");
     println!("  · 私有协议通道一定落在 ★ 厂商自定义那几行，out 列必须非 0 才能发命令。");
     println!("  · 蓝牙读数是 Windows 的缓存，「多久前」那一列才是它的真实可信度。");
-    println!("  · 用 `juicebar probe` 向某条 collection 发帧看回包。");
+    println!("  · 用 `cargo run --example probe` 向某条 collection 发帧看回包。");
 
     Ok(())
 }

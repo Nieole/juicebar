@@ -1,16 +1,97 @@
-//! `juicebar probe` —— 向指定 collection 发一帧原始数据，打印回包。
+//! `cargo run --example probe` —— 向指定 collection 发一帧原始数据，打印回包。
 //!
 //! 接新设备时的主力工具。**只发已知含义的读命令**：协议是从上位机里逆出来的，
 //! 命令表里混着 `EnterUsbUpdateMode`、`ClearSetting` 这类会改设备状态的命令，
 //! 盲试撞上去的后果不可逆。见 `docs/protocol.md` 第 1 节。
+//!
+//! 与 `scan`、`caps` 一样是住在 `examples/` 里的诊断工具，不进发布构建，只调用库的公开面。
+
+mod common;
 
 use anyhow::{Result, anyhow, bail};
+use clap::Parser;
 
-use crate::hid;
-use crate::sources::vgn_mouse;
+use common::parse_hex_u16;
+use juicebar::hid;
+use juicebar::sources::vgn_mouse;
+
+/// 向指定 collection 发一帧原始数据并打印回包。
+///
+/// 只发已知含义的读命令——命令表里混着会改设备状态的命令，盲试不可逆。
+#[derive(Parser)]
+struct Args {
+    #[arg(long, value_parser = parse_hex_u16)]
+    vid: u16,
+    #[arg(long, value_parser = parse_hex_u16)]
+    pid: u16,
+    /// 缩小到某个 usage page，如 ff02
+    #[arg(long, value_parser = parse_hex_u16)]
+    usage_page: Option<u16>,
+    /// 缩小到某个 usage，如 0002
+    #[arg(long, value_parser = parse_hex_u16)]
+    usage: Option<u16>,
+    /// Report ID，不带编号报文填 0
+    #[arg(long, default_value_t = 0)]
+    report_id: u8,
+    /// 要发的字节，如 "04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ef"。`--listen` 时不需要
+    bytes: Option<String>,
+    /// 按 VGN 鼠标那套算法覆写帧末字节的校验和
+    #[arg(long)]
+    vgn_crc: bool,
+    /// 等回包的毫秒数；`--listen` 时是整段监听时长
+    #[arg(long, default_value_t = 1000)]
+    timeout: u32,
+    /// 连读几份回包（设备可能先回无关报文）
+    #[arg(long, default_value_t = 1)]
+    reads: u32,
+    /// 走 feature 报文而不是 output 报文。VGN 键盘的 vendor 通道只有 feature。
+    #[arg(long)]
+    feature: bool,
+    /// 只 GetFeature、不 SetFeature。用来判断回读内容到底受不受所发命令影响。
+    #[arg(long)]
+    no_write: bool,
+
+    /// 只听不发：打开一条**纯输入**通道（`out:0`）收输入报文，一个字节都不发出去。
+    ///
+    /// 用来查"请求走一条通道、应答从另一条回来"这种异步协议——那种通道用别的模式够不着，
+    /// 因为它们发不出命令。
+    #[arg(long)]
+    listen: bool,
+}
+
+fn main() -> Result<()> {
+    let Args {
+        vid,
+        pid,
+        usage_page,
+        usage,
+        report_id,
+        bytes,
+        vgn_crc,
+        timeout,
+        reads,
+        feature,
+        no_write,
+        listen,
+    } = Args::parse();
+    run(
+        vid,
+        pid,
+        usage_page,
+        usage,
+        report_id,
+        bytes.as_deref(),
+        vgn_crc,
+        timeout,
+        reads,
+        feature,
+        no_write,
+        listen,
+    )
+}
 
 /// 十六进制字符串转字节。允许空格和 `0x` 前缀：`04 00 ef` / `0x04,0x00`。
-pub fn parse_hex(s: &str) -> Result<Vec<u8>> {
+fn parse_hex(s: &str) -> Result<Vec<u8>> {
     let cleaned: String = s
         .replace("0x", " ")
         .replace(',', " ")
@@ -44,7 +125,7 @@ fn hex_dump(buf: &[u8]) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run(
+fn run(
     vid: u16,
     pid: u16,
     usage_page: Option<u16>,
@@ -87,10 +168,10 @@ pub fn run(
 
     let target = match candidates.len() {
         0 if listen => bail!(
-            "没有匹配且收得到输入报文的 collection。先跑 `juicebar scan` 看看有哪些，注意 in 列为 0 的通道没有输入报文可听。"
+            "没有匹配且收得到输入报文的 collection。先跑 `cargo run --example scan` 看看有哪些，注意 in 列为 0 的通道没有输入报文可听。"
         ),
         0 => bail!(
-            "没有匹配且能发{}报文的 collection。先跑 `juicebar scan` 看看有哪些，注意 out（或 feat）列为 0 的通道发不了命令。",
+            "没有匹配且能发{}报文的 collection。先跑 `cargo run --example scan` 看看有哪些，注意 out（或 feat）列为 0 的通道发不了命令。",
             if feature { "feature" } else { "输出" }
         ),
         1 => candidates.into_iter().next().unwrap(),

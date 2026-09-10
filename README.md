@@ -8,7 +8,7 @@
 
 ## 现在能做什么
 
-`scan` 和 `probe` 已经能用，托盘部分还在做。进度见下方"状态"。
+诊断工具 `scan` 和 `probe` 已经能用（它们是示例程序，跑法见下方"用法"），托盘部分还在做。进度见下方"状态"。
 
 ## 设计要点
 
@@ -32,9 +32,15 @@ cargo build --release
 ```
 juicebar status          # 读一次配置里每个 Device 的当前电量，一行一个
 juicebar config-refresh  # 没有配置就生成草稿；有配置就补上此刻在场而空着的 Endpoint 块
-juicebar scan            # 列出所有 HID collection 和带电量属性的 BLE 设备
-juicebar probe ...       # 向指定 collection 发原始帧并打印回包
 juicebar run             # 常驻托盘
+```
+
+做协议逆向用的诊断工具是示例程序，不进发布构建，从源码树里跑。参数写在 `--` 后面，与原来的子命令一个字不差：
+
+```
+cargo run --example scan              # 列出所有 HID collection 和带电量属性的 BLE 设备（-- --all 连不含厂商通道的也列）
+cargo run --example caps -- ...       # 打印一条 collection 声明的 Report ID，不向设备发任何字节
+cargo run --example probe -- ...      # 向指定 collection 发原始帧并打印回包（-- --listen 只听不发）
 ```
 
 ### ⚠ 走 2.4G 取数要以**管理员身份**运行
@@ -43,7 +49,7 @@ juicebar run             # 常驻托盘
 但设备根本收不到。结果是那一行报「读超时」或者「dongle 报未就绪」，**看起来像设备没插、没配对
 或者睡着了**，而真正的原因在这儿。同一台机器上实测：非提权读超时，提权首读就拿到 `94% / 4076 mV`。
 
-`scan` 与蓝牙那条路不需要管理员，只有 2.4G 的取数需要。细节见
+`cargo run --example scan` 与蓝牙那条路不需要管理员，只有 2.4G 的取数需要。细节见
 [`docs/protocol.md`](docs/protocol.md) 第 3 节。
 
 首次运行没有配置文件时会自动扫描并生成一份草稿，能猜的先猜、猜不动的留空并加注释。配置在 `%APPDATA%\juicebar\config.toml`。
@@ -67,7 +73,7 @@ juicebar run             # 常驻托盘
 **Neon75 走 2.4G 读不到，而且这条路可能从来没真正工作过**：dongle 的就绪位恒为 0，而同一时刻
 HUB 显示 100% 正常——设备与 dongle 都是好的。权限、睡眠、初始化、重启、时机全排掉了（细节见
 `docs/gaps.md`）。最可能的解释是当初那次"实测通过"读到的是 HUB 放进缓冲区的应答，不是我们请求
-换来的。下一步是 USB 抓包。在那之前键盘那一行靠蓝牙兜底（要手工把 `scan` 里的 MAC 抄进配置）。
+换来的。下一步是 USB 抓包。在那之前键盘那一行靠蓝牙兜底（要手工把 `cargo run --example scan` 印出来的 MAC 抄进配置）。
 
 ATK、雷柏等后续接入。协议细节见 [`docs/protocol.md`](docs/protocol.md)。
 
@@ -77,8 +83,8 @@ ATK、雷柏等后续接入。协议细节见 [`docs/protocol.md`](docs/protocol
 - [x] 协议文档
 - [x] HID 层（枚举、output/input 报文、feature 报文）
 - [x] 蓝牙数据源（CfgMgr 读 DEVPKEY_Bluetooth_Battery，含新鲜度）
-- [x] `scan` 子命令
-- [x] `probe` 子命令（含 VGN 鼠标校验和、feature 模式、`--listen` 纯监听）
+- [x] `scan` 诊断工具（示例程序）
+- [x] `probe` 诊断工具（示例程序；含 VGN 鼠标校验和、feature 模式、`--listen` 纯监听）
 - [x] 鼠标经 Dongle24G 取数（Transport 接缝 + `status` 子命令收口）—— **真机实测可读**
 - [ ] 鼠标 Wired Endpoint、读数合理性校验与电量来源选择
 - [ ] 键盘经 Dongle24G 取数 —— **代码写完了，但这条路到底通不通存疑**（见"支持的设备"；
