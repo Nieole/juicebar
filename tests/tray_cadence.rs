@@ -350,18 +350,18 @@ fn a_device_whose_fetch_has_not_come_back_is_not_asked_again() {
     assert_eq!(screen.fetches, ["dragonfly3", "neon75"]);
 }
 
-/// 时钟从 `start` 起一秒一格走 `secs` 秒，每一次要求的取数都当场有结果（`answer` 按 Device 的 id 与那一刻
+/// 时钟从 `from` 起一秒一格走 `secs` 秒，每一次要求的取数都当场有结果（`answer` 按 Device 的 id 与那一刻
 /// 交出这一次手上的那一份）。交回这一路上的每一次取数：第几秒、问的哪一台。
 fn run_clock(
     tray: &mut Tray,
     screen: &mut Screen,
-    start: Timestamp,
+    from: Timestamp,
     secs: u64,
     answer: impl Fn(&str, Timestamp) -> InHand,
 ) -> Vec<(u64, String)> {
     let mut asked = Vec::new();
     for sec in 1..=secs {
-        let now = later(start, sec);
+        let now = later(from, sec);
         let before = screen.fetches.len();
         feed(tray, screen, Event::Tick(now));
         let asked_now: Vec<String> = screen.fetches.iter().skip(before).cloned().collect();
