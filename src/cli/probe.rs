@@ -145,7 +145,8 @@ pub fn run(
         // 还打印出"这段时间什么都没来"——一个会骗人的读数。
         const SLICE_MS: u32 = 500;
         let handle = hid::HidHandle::open(&target)?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.into());
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.into());
         let want = reads.max(1);
         println!(
             "监听  {} 秒内最多收 {want} 份（一次读超时不算结束）",
