@@ -738,9 +738,10 @@ fn keeps_reading_the_ble_cache_while_the_two_hid_endpoints_are_paused() {
 
 /// 暂停期间，**没让开的那几条自己的失败原因不能被吞掉**。
 ///
-/// 让开两条 HID，而 `Ble` 在场却答不出电量：这一行若只说"关掉它就会恢复"，那是一句假话
-/// ——关掉 HUB，那台设备的蓝牙那一头还是老样子。parking lot Q40 允许沉默的理由是"手上有
-/// 历史值就意味着这套配置曾经读通过"，而这一支连历史值都没有，那句理由不成立。
+/// 让开两条 HID，而 `Ble` 在场却答不出电量：关掉 HUB，那台设备的蓝牙那一头还是老样子。所以
+/// 这一行以 `Ble` 自己的原因收尾，不接空列表那一支的"关掉它之后这几条才试得到"——那半句只在
+/// 什么都没试过时才是全部实情。parking lot Q40 允许沉默的理由是"手上有历史值就意味着这套配置
+/// 曾经读通过"，而这一支连历史值都没有，那句理由不成立。
 #[test]
 fn keeps_the_reason_of_the_endpoints_it_did_try_while_paused() {
     let endpoints = FakeEndpoints::new(
@@ -774,7 +775,33 @@ fn keeps_the_reason_of_the_endpoints_it_did_try_while_paused() {
         "Ble 自己那条原因不该被吞掉：{line}"
     );
     assert!(
-        !line.contains("关掉它就会恢复"),
-        "关掉 HUB 并不会让这一行变好，别许一个做不到的承诺：{line}"
+        !line.contains("关掉它之后这几条才试得到"),
+        "试过的那几条有原因要交代，不接空列表那一支的那半句：{line}"
+    );
+}
+
+/// 接收器插着、设备本体关了机：暂停那一行**不许诺关掉上位机就能读到**。
+///
+/// 接收器有自己一组 VID/PID（`docs/adr/0001`），所以设备关着机 Dongle24G 照样枚举成在场、
+/// 照样被让开；没有别的 Endpoint 顶上，原因列表是空的。而列表为空只说明这一次取数什么都
+/// 没试过，不说明试了就会答话——关掉上位机之后，这条通路照旧超时。所以那一行说的是**我们**
+/// 关掉它之后会做什么（去试让开的那几条），不说**设备**会怎样。
+///
+/// 整句断言：点名那个上位机、点名让开的那一条、再接那半句条件句。前两样是用户唯一能据以
+/// 行动的东西，措辞变准不许拿它们去换。
+#[test]
+fn does_not_promise_a_reading_once_the_vendor_hub_is_closed() {
+    // 只有接收器在场：设备关着机，`Wired` 枚举不出来。接收器那一头的脚本是空的——真去问
+    // 也只会超时，而暂停期间它压根不会被问到。
+    let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, [(EndpointKind::Dongle24G, vec![])]);
+    let hub = vendor_hub_running();
+
+    let line = readout::read(&mouse_with_both_endpoints(), &endpoints, Some(&hub), NOW)
+        .unwrap_err()
+        .to_string();
+
+    assert_eq!(
+        line,
+        "暂停中 —— VGN VHUB.exe 正在运行，Dongle24G 让开（同时发命令会互相覆盖对方的应答），关掉它之后这几条才试得到"
     );
 }
