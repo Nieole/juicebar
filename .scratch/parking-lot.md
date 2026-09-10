@@ -123,8 +123,9 @@
 
 **取的路**：`CONTEXT.md` 不动（票面明令：词条对不上是词条的问题，记下来别顺手改），代码里跟着
 这个词条说话的几处也不动：`src/readout.rs` 里 `read_or_last_known` 文档那两句（"'失联'与'没有
-已知值'是两回事"、"失联时拿出上次已知值"）、`src/state.rs` 的 `Provenance::LastKnown`（"设备
-这一趟失联"）、`src/cli/status.rs` 里 `stale_marker` 文档那句"一份失联后从磁盘上捞出来的读数"。
+已知值'是两回事"、"失联时拿出上次已知值"）、`src/state.rs` 的 `Provenance` 文档（"同一份读数
+在设备失联之后拿出来就不是现状了"）与它的 `LastKnown` 变体（"设备这一趟失联"）、
+`src/cli/status.rs` 里 `stale_marker` 文档那句"一份失联后从磁盘上捞出来的读数"。
 
 **对不上的地方**：`read_or_last_known` 在 `read` 交出任何一种 `NoReading` 时都去拿历史值，读取
 异常也在内——而那不是疏忽，`docs/adr/0004` 定的正是这一条（设备答坏帧而手上有历史值时，只显示
