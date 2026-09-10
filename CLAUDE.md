@@ -17,3 +17,7 @@ Rules for a parallel implementation queue that belong to no single ticket. See `
 ### Domain docs
 
 Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Coding standards
+
+How code in this repo is written; `/code-review`'s Standards axis reads it. See `docs/agents/coding-standards.md`.
