@@ -8,6 +8,9 @@
 //! 为什么值得单独一个模块：`status` 是一次性命令，HID 读数永远是刚取的，所以 3 × 轮询
 //! 间隔那一档在今天的程序里没有任何端到端可观察的效果。把它写成纯函数，它今天就是对的、
 //! 今天就验得到，将来接上常驻轮询也不用改一个字。
+//!
+//! **轮询间隔也从这里取**（[`poll_interval`]）：托盘隔多久再问一台（`crate::tray::cadence`）与两条
+//! HID 陈旧阈值的那"1 倍"是同一个数，出自同一个函数。
 
 use crate::clock::Timestamp;
 use crate::config::General;
@@ -45,6 +48,21 @@ pub struct StalenessPolicy {
     pub very_stale_after_secs: Option<u64>,
 }
 
+/// 这条 Endpoint 的轮询间隔，秒：托盘隔多久再问一台上一次从这条读到的 Device（`crate::tray::cadence`），
+/// 也是两条 HID 陈旧阈值的那"1 倍"（[`StalenessPolicy::for_endpoint`]）。
+///
+/// 两处都从这里取，不各自去读 `[general]` 里那三格：节奏按一个数问、陈旧按另一个数判，一份按时读到的
+/// 读数就可能在两次取数之间被判成陈旧（间隔 10 秒的有线读数，陈旧阈值是 30 秒，却按 60 秒一次去问）。
+///
+/// 对枚举穷举、不写通配分支，理由同 [`StalenessPolicy::for_endpoint`]。
+pub fn poll_interval(endpoint: EndpointKind, general: &General) -> u64 {
+    match endpoint {
+        EndpointKind::Wired => general.poll_interval_wired,
+        EndpointKind::Dongle24G => general.poll_interval_24g,
+        EndpointKind::Ble => general.poll_interval_bluetooth,
+    }
+}
+
 /// HID 的陈旧阈值是轮询间隔的几倍。
 ///
 /// 3 倍而不是 1 倍：错过一次轮询是常事（设备忙、一次超时），就地判成陈旧会让那一格
@@ -60,9 +78,11 @@ impl StalenessPolicy {
         match endpoint {
             // 两条 HID 是当场往返，新鲜度**由各自的轮询间隔推导**，不设配置项：改了
             // 间隔阈值自动跟着走，不会出现"改了间隔忘了改阈值"的不一致
-            // （`config.example.toml` 的注释写的就是这条理由）。
-            EndpointKind::Wired => Self::from_poll_interval(general.poll_interval_wired),
-            EndpointKind::Dongle24G => Self::from_poll_interval(general.poll_interval_24g),
+            // （`config.example.toml` 的注释写的就是这条理由）。间隔取自 [`poll_interval`]，
+            // 与托盘再问它的那一个是同一个数。
+            EndpointKind::Wired | EndpointKind::Dongle24G => {
+                Self::from_poll_interval(poll_interval(endpoint, general))
+            }
             // `Ble` 读的是 Windows 攒的缓存，可能过期几个月——轮询得多勤也不会让缓存里
             // 的数字变新，所以这一级的阈值只能由用户给（`poll_interval_bluetooth`
             // 因此不参与这里）。
