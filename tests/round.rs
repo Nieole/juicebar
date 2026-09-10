@@ -504,8 +504,8 @@ fn the_primary_device_is_held_over_when_nothing_is_trustworthy_this_round() {
 ///
 /// 反过来——问不出来就一律暂停——会让一台 Win32 调用失败的机器永久显示暂停、指名一个根本没在跑
 /// 的进程：一句用户查不下去的假话，比一次可能读错的数更难修（parking lot Q34）。所以取数照常去
-/// 试那几条 HID Endpoint；而那件没问出来的事要说出来，不能咽掉。第 1 趟 `/settle` 时这条规则还
-/// 只活在 `status` 的 `run` 里、测不到，这一条就是为它写的。
+/// 试那几条 HID Endpoint；而那件没问出来的事要说出来，不能咽掉。Q34 记下它时，这条规则还只活在
+/// `status` 的 `run` 里、测不到，这一条就是为它写的。
 #[test]
 fn a_failed_process_enumeration_pauses_nothing_and_is_a_warning_of_this_round() {
     let general = default_general();
