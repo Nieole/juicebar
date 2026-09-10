@@ -19,9 +19,10 @@ use common::{
 };
 use juicebar::config::{Config, Device};
 use juicebar::endpoints::{EndpointKind, EndpointReading};
+use juicebar::icon::IconState;
 use juicebar::primary::Selection;
 use juicebar::readout::{self, RowReading};
-use juicebar::round::{IconState, InHand, PauseCheck, Round, Warning};
+use juicebar::round::{InHand, PauseCheck, Round, Warning};
 use juicebar::sources::Reading;
 use juicebar::sources::level::Level;
 use juicebar::state::{LastKnown, Provenance};

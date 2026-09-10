@@ -23,42 +23,13 @@ use std::fmt;
 use crate::clock::Timestamp;
 use crate::config::{Device, General};
 use crate::endpoints::EndpointKind;
+use crate::icon::IconState;
 use crate::primary::{self, Candidate, CandidateReading, Selection};
 use crate::readout::{NoReading, RowReading};
 use crate::sources::level::{Level, LevelSource, level_for};
 use crate::staleness::{Freshness, Staleness};
 use crate::state::Provenance;
 use crate::vendor_hub::{Processes, VendorHub};
-
-/// 托盘图标为一台 Device 画出的那一种状态，八选一（`CONTEXT.md`「图标状态」）。
-///
-/// 同时符合好几种时按这个顺序取第一个：**暂停 > 取数失败 / Unknown / 无已知值 > 充电中 >
-/// 低电 > Stale > 正常**（判法见 [`DeviceState::assess`]）。每种画成什么颜色、什么符号由用户的
-/// 图标设置决定（`docs/adr/0005`），所以这里的名字一个都不叫颜色。
-///
-/// **它与图标渲染器的输入 `icon::IconState` 是同一个东西**：渲染器那张票与这一张并行在做，
-/// 各自先定义一份，名字与八个变体逐字相同；两边都落地后合成一份。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IconState {
-    /// 新鲜的读数，电量不低。
-    Normal,
-    /// 电量低于这台 Device 的低电阈值（[`General::low_battery_for`]）。**压过 Stale**：一台读不到
-    /// 了的设备，最常见的原因就是没电关机，那正是最该提醒的时候。
-    Low,
-    /// 这一次取数读到它正在充电。**压过低电**：插着线的那台，用户已经在处理了。
-    Charging,
-    /// 手上那份读数不能当现状：上次已知值（一律如此），或者当场读到而已经过了陈旧阈值的。
-    Stale,
-    /// 厂商上位机在跑，这台 Device 有 Endpoint 为它让开了——我们主动没去问。**压过其余每一种**：
-    /// 用户该动手的地方是那个上位机。
-    Paused,
-    /// 这一次取数交不出可以印的数，又退不到上次已知值（`CONTEXT.md`「取数失败」）。
-    FetchFailed,
-    /// 手上有一份读数，而它的电量字段采信不了。**不等于 0%**，所以也不是低电。
-    Unknown,
-    /// 还没有一次取数有过结果，也没有上次已知值。它不是取数失败：没有什么失败了，只是还没读到。
-    NoKnownValue,
-}
 
 /// 一台 Device 这一轮手上有的东西——这一轮的输入。
 ///
