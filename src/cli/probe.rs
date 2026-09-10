@@ -90,7 +90,7 @@ pub fn run(
             "没有匹配且收得到输入报文的 collection。先跑 `juicebar scan` 看看有哪些，注意 in 列为 0 的通道没有输入报文可听。"
         ),
         0 => bail!(
-            "没有匹配且能发{}报文的 collection。先跑 `juicebar scan` 看看有哪些，             注意 out（或 feat）列为 0 的通道发不了命令。",
+            "没有匹配且能发{}报文的 collection。先跑 `juicebar scan` 看看有哪些，注意 out（或 feat）列为 0 的通道发不了命令。",
             if feature { "feature" } else { "输出" }
         ),
         1 => candidates.into_iter().next().unwrap(),
