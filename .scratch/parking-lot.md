@@ -155,7 +155,7 @@
 **推荐**：维持改掉。"行为一个字不变"护的是诊断能力本身——参数、枚举出什么、回包怎么印——那些一个字没动；
 四句里换掉的只有"程序叫什么"。翻案的代价是 `examples/` 里四个字符串，关在本票里。归 `/settle` 拍板。
 
-### Q131 —— 库里还有七处叫人跑 `juicebar scan` / `caps` / `probe`，本票一句没动，而且没有哪张票接
+### Q131 —— 库里还有八处叫人去跑 `scan` / `caps` / `probe`，本票一句没动，而且没有哪张票接
 
 **From:** resident-tray 票 02（诊断工具挪成示例程序）
 
@@ -165,6 +165,8 @@
 - `src/endpoints.rs:406`（本机 BLE 里找不到配置的地址时的错误；它也是 Q111 那六句续行符之一）
 - `src/config/known_devices.rs:72`（Ble 块缺席时"再跑 juicebar scan 抄地址"）
 - `src/config/draft.rs:212`、`:301`、`:416`（草稿里"一台都没认出来"那段、"加新设备"那段、Ble 块的 remedy）
+- `src/config/draft.rs:421`（草稿 Ble 块的占位值 `address = "把 scan 里那串 12 位十六进制抄过来"`——不带
+  `juicebar` 前缀，下面那条 grep 抓不到它，是 review 补上的）
 - `config.example.toml:58`（Device 那一节的"跑 `juicebar scan` 看候选"）
 
 理由：①`tests/config.rs:398` 与 `:799` 逐字断言草稿里有 `juicebar scan`，改就要改用例，而本票的证据正是
@@ -182,7 +184,7 @@
 **推荐**：不在本票扫，但**要有人接，而今天没有**：票 11 的正文就写着"今天用户得从 `scan` 的输出里手抄
 MAC"，票 11/12 正是来消灭这件事的，可它们的验收框没有一格是改这几句话；票 10 只改 `config-refresh` 那一类；
 票 14 删命令行，也没提它们。建议两格：①给票 11 加「凡是叫用户去 `scan` 抄 MAC 的话（`known_devices.rs:72`、
-`draft.rs:416`、`endpoints.rs:406`，连同 `tests/config.rs:398`、`:799`）改成指向"登记设备 ›"」；②给票 14
+`draft.rs:416`、`:421`、`endpoints.rs:406`，连同 `tests/config.rs:398`、`:799`）改成指向"登记设备 ›"」；②给票 14
 加「`git grep -nE 'juicebar (scan|caps|probe|status|config-refresh)' -- '*.rs' config.example.toml` 归零」
 ——命令行退场之后，不该还有一句话或一行注释叫人跑 `juicebar` 的子命令（今天 19 行，`src/cli/` 与票 10
 会带走其中一部分；`docs/protocol.md` 里是当时的实测记录，不算）。票 14 今天不被票 11 阻塞：若它先落地，

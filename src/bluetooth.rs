@@ -59,7 +59,7 @@ pub struct BleBattery {
 }
 
 impl BleBattery {
-    /// 这台设备的 [`age_text`]。留着这个方法是因为 `scan` 在用它，本票不动那个子命令。
+    /// 这台设备的 [`age_text`]。留着这个方法是因为示例程序 `scan` 在用它。
     pub fn age_text(&self) -> String {
         age_text(self.age_secs)
     }
