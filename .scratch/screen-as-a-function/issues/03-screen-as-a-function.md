@@ -16,7 +16,7 @@
 **Blocked by:** 01（呈现搬进自己的模块）—— 本票的落点在那个新模块里。这条边是有意的：本票要
 往里加内容，那落在搬家之后，票 01 的 diff 才仍然是纯移动。
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 - [ ] 新模块交出一个整屏函数：收**配置路径、配置、Endpoint 枚举、Clock、Processes、可变的上次
       已知值**，返回**两个输出流**的内容（要印到 stdout 的那几行 + 要印到 stderr 的告警）。
@@ -47,3 +47,7 @@
       本票**不动它**——它会弄脏这次改动的判据，而正确形状取决于托盘那一步。这一条从第 1 趟的
       交接文件带到现在，仍然活着
 - [ ] gate 三条（`fmt --check`、`clippy --all-targets -D warnings`、`test`）全绿
+
+## Comments
+
+**2026-09-10：被 `resident-tray` 取代，不做。** 整屏那道缝原本只服务命令行，而那次 grill 定下成品不带命令行，`cli::status` 会整个消失。这张票想要的东西由 `.scratch/resident-tray/` 接手："这一轮的结果"那道缝见 resident-tray 票 03，托盘内核见票 04，命令行退场与排版用例的迁移见票 14。同一批的票 02、04、05 不受影响，照旧有效。

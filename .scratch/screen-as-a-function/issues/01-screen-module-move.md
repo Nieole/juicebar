@@ -13,7 +13,7 @@
 
 **Blocked by:** None (can start immediately) —— 与票 02 一个文件都不相交，两张可并行。
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 - [ ] 一行的排版、那几行的合成、未登记 BLE 那一段、一行 Device 的成品，四样全部搬进新模块
       `src/screen.rs`；`cli::status` 只剩 `run`
@@ -28,3 +28,7 @@
 - [ ] 公开路径变了（`juicebar::cli::status::*` → `juicebar::screen::*`），`main.rs` 与各处调用点
       跟着改，但**没有一处调用的语义变化**
 - [ ] gate 三条（`fmt --check`、`clippy --all-targets -D warnings`、`test`）全绿
+
+## Comments
+
+**2026-09-10：被 `resident-tray` 取代，不做。** 搬家的目的地原本是给命令行那几行排版腾地方，而那次 grill 定下成品不带命令行，`cli::status` 会整个消失。这张票想要的东西由 `.scratch/resident-tray/` 接手："这一轮的结果"那道缝见 resident-tray 票 03，托盘内核见票 04，命令行退场与排版用例的迁移见票 14。同一批的票 02、04、05 不受影响，照旧有效。
