@@ -65,7 +65,9 @@ impl Tray {
     /// 上一轮的 Primary Device。之后记读数、写盘都在取数线程那一侧（`crate::shell`），内核只说什么
     /// 时候存、记下哪一台（[`round::SaveState`]）。
     ///
-    /// `look` 是启动时任务栏的深浅色与显示缩放，本票之内不变（变了之后重画归票 07）。
+    /// `look` 是启动时任务栏的深浅色与显示缩放，本票之内不变（变了之后重画归票 07）。它还带着菜单跟不跟得上
+    /// 任务栏：认得这个版本的 Windows、却取不到那两个函数时，启动这一刻记一条日志——菜单为什么是浅的，托盘上
+    /// 没有别处说。
     pub fn new(
         config: Config,
         last_known: &LastKnown,
@@ -73,6 +75,9 @@ impl Tray {
         now: Timestamp,
     ) -> (Self, Vec<Action>) {
         let mut out = Vec::new();
+        if let MenuTheming::FunctionsMissing { build } = look.menus {
+            out.push(Action::Log(format!("菜单跟不上任务栏的深浅，退回浅色 —— 认得这个版本的 Windows（build {build}），却从 uxtheme.dll 取不到那两个函数（序号 135、136）")));
+        }
         let round = round::Rounds::new(&config, last_known, look, now, &mut out);
         let mut cadence = cadence::Cadence::default();
         cadence.on_tick(&config, now, &mut out);
@@ -115,13 +120,43 @@ impl Tray {
     }
 }
 
-/// 启动时任务栏的样子：深浅色与显示缩放。外壳去问 Windows，内核只收答案。
+/// 启动时任务栏的样子：深浅色与显示缩放，以及菜单的深浅跟不跟得上它。外壳去问 Windows，内核只收答案。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Look {
     /// 任务栏是深色还是浅色，图标的调色跟着它。
     pub theme: Theme,
     /// 按显示缩放选出的那一档尺寸（[`IconSize::for_dpi`]）。
     pub size: IconSize,
+    /// 菜单的深浅跟不跟得上任务栏。启动时问一次，运行中不变。
+    pub menus: MenuTheming,
+}
+
+impl Look {
+    /// 菜单此刻实际是深是浅：跟得上任务栏时就是任务栏的深浅（`theme`），跟不上时是系统缺省的浅色。图标样式
+    /// 子菜单里的预览按它选调色（`resident-tray` 票 07），好让预览放在菜单上就是它在托盘上的样子。
+    ///
+    /// **"此刻"是 `theme` 的此刻**：外壳每次弹出菜单之前另读一次任务栏，按那一刻强制菜单深浅；而内核手上的
+    /// `theme` 今天还是启动时那一份。运行中切了深浅，要等票 07 把"深浅变了"喂进来换掉 `theme`，这里才跟上
+    /// （parking lot Q261）。
+    pub fn menu_theme(self) -> Theme {
+        match self.menus {
+            MenuTheming::FollowsTaskbar => self.theme,
+            MenuTheming::UnknownWindows | MenuTheming::FunctionsMissing { .. } => Theme::Light,
+        }
+    }
+}
+
+/// 菜单的深浅跟不跟得上任务栏（ADR-0006）。Windows 没有让弹出菜单变深的公开接口，外壳走的是 uxtheme 里
+/// 未公开的那两个函数，只在认得的版本上取（`shell/menu_theme.rs`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuTheming {
+    /// 跟得上：认得这个版本，那两个函数也取到了，菜单是任务栏的深浅。1809 上是个例外——那一版只能"允许
+    /// 深色"，菜单跟的是应用模式（parking lot Q260）。
+    FollowsTaskbar,
+    /// 认不得这个版本的 Windows：一个未公开函数都不调，菜单是系统缺省的浅色。
+    UnknownWindows,
+    /// 认得这个版本（`build` 是它的 build 号），却取不到那两个函数：同样是浅色。
+    FunctionsMissing { build: u32 },
 }
 
 /// 喂进内核的事件。

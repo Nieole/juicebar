@@ -17,7 +17,9 @@ use juicebar::sources::Reading;
 use juicebar::state::{LastKnown, Provenance};
 use juicebar::tray::notify::Notice;
 use juicebar::tray::round::{IconRequest, SaveState};
-use juicebar::tray::{Action, Event, Fetched, Look, Tray, cadence, config, menu, round, warnings};
+use juicebar::tray::{
+    Action, Event, Fetched, Look, MenuTheming, Tray, cadence, config, menu, round, warnings,
+};
 
 /// 用例里那两台：一只只配了 Dongle24G 的鼠标，一台只配了 Ble 的键盘。
 ///
@@ -44,10 +46,11 @@ driver = "vgn_keyboard"
   address = "e452430072a9"
 "#;
 
-/// 启动时任务栏的样子：用例里一律深色、100% 缩放，除非用例自己关心它。
+/// 启动时任务栏的样子：用例里一律深色、100% 缩放、菜单跟得上任务栏，除非用例自己关心它。
 pub const LOOK: Look = Look {
     theme: Theme::Dark,
     size: IconSize::Px16,
+    menus: MenuTheming::FollowsTaskbar,
 };
 
 /// 外壳顶替品：把内核交出来的动作落成"此刻屏幕上是什么"。

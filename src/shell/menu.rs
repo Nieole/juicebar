@@ -10,7 +10,7 @@ use windows::core::{HSTRING, Owned};
 
 use crate::tray::menu::{Action, Command};
 
-use super::{App, with_app};
+use super::{App, look, with_app};
 
 /// 在鼠标那里弹出此刻的右键菜单，交回点了哪一项；没点（点到菜单外面、按了 Esc）就是 `None`。
 ///
@@ -18,6 +18,8 @@ use super::{App, with_app};
 /// 不借着它弹。
 pub(super) fn popup(hwnd: HWND) -> Option<Command> {
     let model = with_app(|app| app.tray.menu())?;
+    // 按任务栏此刻的深浅强制菜单深或浅（ADR-0006）。每次都重读：运行中切了深浅，这一次弹出就跟上。
+    with_app(|app| app.menu_theme.follow(look::taskbar_theme()));
     // SAFETY: 标准的托盘菜单弹法；菜单句柄由 Owned 收回。
     unsafe {
         let menu = Owned::new(CreatePopupMenu().ok()?);
