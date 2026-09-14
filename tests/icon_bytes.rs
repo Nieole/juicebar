@@ -48,12 +48,13 @@ fn tray_icon_bytes_start_with_the_top_row() {
     );
 }
 
-/// 菜单预览：不透明的像素乘上 255/255 还是自己，只换通道顺序。
+/// 菜单预览：不透明的像素乘上 255/255 还是自己，只换通道顺序——两头的 0 与 255 也一样
+/// （拿 256 近似 255 的算法会把 255 算成 254）。
 #[test]
 fn menu_preview_bytes_put_an_opaque_pixel_in_bgra_order() {
     assert_eq!(
-        menu_preview_bytes(&[rgba(10, 20, 30, 255)]),
-        [30, 20, 10, 255]
+        menu_preview_bytes(&[rgba(255, 128, 0, 255)]),
+        [0, 128, 255, 255]
     );
 }
 
@@ -68,6 +69,16 @@ fn menu_preview_bytes_premultiply_a_translucent_pixel_rounding_to_nearest() {
         menu_preview_bytes(&[rgba(200, 100, 1, 128)]),
         [1, 50, 100, 128]
     );
+}
+
+/// 菜单预览：进一的门槛正好在余数 128。不透明度 1 时，c × 1 / 255 的余数就是 c 本身：
+///
+/// - 红 127 / 255 = 0.498 → 0（门槛差一、余数 127 就进一的算法会是 1）
+/// - 绿 128 / 255 = 0.502 → 1
+/// - 蓝 255 / 255 = 1 → 1
+#[test]
+fn menu_preview_bytes_round_up_from_a_remainder_of_128_not_127() {
+    assert_eq!(menu_preview_bytes(&[rgba(127, 128, 255, 1)]), [1, 1, 0, 1]);
 }
 
 /// 菜单预览：全透明的像素乘上 0，四个字节都是 0——不管颜色原来是什么。
