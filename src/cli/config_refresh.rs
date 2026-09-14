@@ -42,12 +42,27 @@ pub fn run(config_path: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// 首次运行：扫一遍本机，写一份带注释的草稿。
+/// 首次运行：扫一遍本机，写一份带注释的草稿（[`write_draft`]），再印几句叫人去看一眼。
+pub fn bootstrap(path: &Path) -> Result<()> {
+    write_draft(path)?;
+
+    println!("已经在 {} 生成一份配置草稿。", path.display());
+    println!("里面**注释掉的块**是程序猜不动、或者此刻扫不到的东西——打开看一眼，");
+    println!("别在不知情的情况下缺一整条 Endpoint。");
+    println!(
+        "该插的插好之后（键盘还要把机身模式开关拨到有线档）再跑一次 `juicebar config-refresh`，"
+    );
+    println!("当时在场而配置里空着的块会被自动补上，你写过的东西一概不动。");
+    Ok(())
+}
+
+/// 扫一遍本机，把一份带注释的草稿写到 `path`，一个字都不印。托盘首次运行也走这里（`crate::shell`）：它没有
+/// 终端可印，叫人去看一眼的是一条通知。
 ///
 /// **只从无到有，绝不覆盖。**用 `create_new` 而不是先 `exists()` 再写：调用方已经查过
 /// 文件不在了，但那之后到这里之间它可能被建出来（另一个 juicebar 实例、用户自己），
 /// 而配置是用户的东西，宁可报一句错也不能把它盖掉。
-pub fn bootstrap(path: &Path) -> Result<()> {
+pub fn write_draft(path: &Path) -> Result<()> {
     let draft = config::draft(&hid::enumerate()?);
 
     if let Some(dir) = path.parent() {
@@ -60,13 +75,5 @@ pub fn bootstrap(path: &Path) -> Result<()> {
         .with_context(|| format!("写不进配置 {}", path.display()))?;
     std::io::Write::write_all(&mut file, draft.as_bytes())
         .with_context(|| format!("写不进配置 {}", path.display()))?;
-
-    println!("已经在 {} 生成一份配置草稿。", path.display());
-    println!("里面**注释掉的块**是程序猜不动、或者此刻扫不到的东西——打开看一眼，");
-    println!("别在不知情的情况下缺一整条 Endpoint。");
-    println!(
-        "该插的插好之后（键盘还要把机身模式开关拨到有线档）再跑一次 `juicebar config-refresh`，"
-    );
-    println!("当时在场而配置里空着的块会被自动补上，你写过的东西一概不动。");
     Ok(())
 }

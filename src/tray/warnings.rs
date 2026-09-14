@@ -8,16 +8,18 @@
 //! |---|---|---|
 //! | 问本机在跑哪些进程 | 取数线程，每次取数之前 | [`Fetched::warning`]，经 [`Warnings::on_fetched`] |
 //! | 把读数写进状态文件 | 取数线程，照 [`SaveState`] 写 | [`Event::StateSaved`]，经 [`Warnings::on_event`] |
+//! | 读配置文件 | 外壳，每一格时钟之前看一眼变没变、变了重读 | [`Reloaded`]，经 `Tray::on_config` |
 //!
 //! **挂着哪几条、按什么次序，只在这里定**：这一轮的结果（[`Round::warnings`]）收的、菜单顶上画的（票 06），
 //! 都是 [`Warnings::hanging`]。
 //!
-//! **加一种告警，挂告警的这一处只多一种**（票 09 的"配置读不了"）：`Matter` 多一个变体、`matter_of` 多一支
-//! （编译器会指过来）。措辞不在这里，照旧加在 [`Warning`] 上（多一个变体连同它那一句）；然后在办那件事的
-//! 地方，没办成调 `Warnings::raise`、办成了调 `Warnings::clear`——票 09 就是 `on_config` 里读坏、读好那两支。
+//! **加一种告警，挂告警的这一处只多一种**：`Matter` 多一个变体、`matter_of` 多一支（编译器会指过来）。措辞不在
+//! 这里，照旧加在 [`Warning`] 上（多一个变体连同它那一句）；然后在办那件事的地方，没办成调 `Warnings::raise`、
+//! 办成了调 `Warnings::clear`——"配置读不了"（票 09）就是 `on_config` 里读坏、读好那两支。
 //! 两个入口不对称是有意的：没办成带着原因（一条 [`Warning`]），办成了除了"是哪件事"什么都不必说。
 //!
 //! [`SaveState`]: crate::tray::round::Action::SaveState
+//! [`Reloaded`]: crate::tray::config::Event::Reloaded
 //! [`Round::warnings`]: crate::round::Round::warnings
 
 use std::collections::BTreeMap;
@@ -36,6 +38,8 @@ pub(super) enum Matter {
     Processes,
     /// 把读数写进状态文件（[`Warning::StateNotSaved`]）。
     StateFile,
+    /// 读配置文件（[`Warning::ConfigUnreadable`]）。
+    ConfigFile,
 }
 
 /// 告警这一块收的事件：会挂告警、而结果不跟着一次取数来的那几件事。
@@ -104,6 +108,7 @@ fn matter_of(warning: &Warning) -> Matter {
     match warning {
         Warning::ProcessesUnknown(_) => Matter::Processes,
         Warning::StateNotSaved(_) => Matter::StateFile,
+        Warning::ConfigUnreadable(_) => Matter::ConfigFile,
     }
 }
 

@@ -15,6 +15,7 @@ use juicebar::readout::{NoReading, RowReading};
 use juicebar::round::{InHand, Warning};
 use juicebar::sources::Reading;
 use juicebar::state::{LastKnown, Provenance};
+use juicebar::tray::cadence::FetchRequest;
 use juicebar::tray::notify::Notice;
 use juicebar::tray::round::{IconRequest, SaveState};
 use juicebar::tray::{Action, Event, Fetched, Look, Tray, cadence, config, menu, round, warnings};
@@ -63,6 +64,8 @@ pub struct Screen {
     pub logs: Vec<String>,
     /// 至今要求取数的每一台 Device 的 id，按顺序。
     pub fetches: Vec<String>,
+    /// 至今每一次要求取数时带着的东西（那台 Device 与此刻的 `[general]`），按顺序。
+    pub requests: Vec<FetchRequest>,
     /// 菜单那一格至今交出的动作，按顺序。
     pub menu: Vec<menu::Action>,
     /// 至今弹过的通知，按顺序。
@@ -77,7 +80,8 @@ impl Screen {
         for action in actions {
             match action {
                 Action::Cadence(cadence::Action::Fetch(request)) => {
-                    self.fetches.push(request.device.id);
+                    self.fetches.push(request.device.id.clone());
+                    self.requests.push(request);
                 }
                 Action::Round(round::Action::DrawIcon(icon)) => self.icon = Some(icon),
                 Action::Round(round::Action::Tooltip(text)) => self.tooltip = Some(text),

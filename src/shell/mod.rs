@@ -35,7 +35,6 @@ use windows::core::{HSTRING, w};
 
 use crate::cli::{default_config_path, state_path_beside_config};
 use crate::clock::{Clock, SystemClock};
-use crate::config::Config;
 use crate::state::LastKnown;
 use crate::tray::{Action, Event, Tray};
 
@@ -53,6 +52,7 @@ struct App {
     icon: icon::TrayIcon,
     worker: worker::Worker,
     log: log::LogFile,
+    config: config::ConfigFile,
 }
 
 thread_local! {
@@ -67,8 +67,8 @@ pub fn run() -> Result<()> {
     // 配置与状态文件的位置照命令行那一套（`crate::cli`），票 14 收掉命令行时一起搬过来。
     let config_path = default_config_path()?;
     let mut log = log::LogFile::beside(&config_path);
-    let config = Config::load(&config_path)?;
     let state_path = state_path_beside_config(&config_path);
+    let (config_file, config, first_run) = config::ConfigFile::open(config_path)?;
     let last_known = LastKnown::load(&state_path);
     let look = look::detect();
 
@@ -81,9 +81,16 @@ pub fn run() -> Result<()> {
         icon: icon::TrayIcon::new(hwnd, WM_TRAY),
         worker: worker::Worker::start(hwnd, WM_REPORT, state_path, last_known),
         log,
+        config: config_file,
     };
     for action in actions {
         route(&mut app, action);
+    }
+    // 首次运行那一条排在起手那一批之后：图标先进了通知区，通知才弹得出来。
+    if let Some(event) = first_run {
+        for action in app.tray.handle(Event::Config(event)) {
+            route(&mut app, action);
+        }
     }
     APP.with(|cell| *cell.borrow_mut() = Some(app));
 
@@ -164,6 +171,7 @@ unsafe extern "system" fn window_proc(
         // 每一格也顺手取一遍取数线程交回来的东西：哪次敲门时外壳正借给别人，那一样就等到这里。
         WM_TIMER => {
             take_reports();
+            look_at_config();
             feed(Event::Tick(SystemClock.now()));
         }
         WM_REPORT => take_reports(),
@@ -184,6 +192,14 @@ unsafe extern "system" fn window_proc(
         _ => return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
     LRESULT(0)
+}
+
+/// 看一眼配置文件变没变，变了就把重读的结果递进内核。排在这一格的时钟之前：这一格要是排出取数，带的就是
+/// 新读好的那一份。
+fn look_at_config() {
+    if let Some(event) = with_app(|app| app.config.look()).flatten() {
+        feed(Event::Config(event));
+    }
 }
 
 /// 取数线程交回来的东西，一样一样取出来，递进内核。
