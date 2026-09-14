@@ -55,6 +55,8 @@ pub struct Tray {
     cadence: cadence::Cadence,
     round: round::Rounds,
     notify: notify::Notify,
+    /// 扫一遍本机、看配置里有没有空块可补，这件事走到哪了（[`config`]）。
+    scans: config::Scans,
     /// 此刻还挂着的告警。几块共用：「一轮」合成时带上它，配置那一块往里挂"配置读不了"。
     warnings: warnings::Warnings,
     /// 点过"退出"了：之后什么事件都不再有动作——不再轮询，也不再画。
@@ -62,7 +64,8 @@ pub struct Tray {
 }
 
 impl Tray {
-    /// 启动：画出手上已有的（状态文件里的上次已知值，没有就是无已知值），并对每台发出第一次取数。
+    /// 启动：画出手上已有的（状态文件里的上次已知值，没有就是无已知值），对每台发出第一次取数，并扫一遍本机、
+    /// 看配置里有没有空块可补（[`config`]）。
     ///
     /// `last_known` 是外壳从状态文件里读回来的那一份，内核只拿它当起手：每台 Device 的上次已知值、
     /// 上一轮的 Primary Device。之后记读数、写盘都在取数线程那一侧（`crate::shell`），内核只说什么
@@ -81,11 +84,14 @@ impl Tray {
         let round = round::Rounds::new(&config, last_known, look, now, &mut out);
         let mut cadence = cadence::Cadence::default();
         cadence.on_tick(&config, now, &mut out);
+        let mut scans = config::Scans::default();
+        scans.request(&mut out);
         let tray = Self {
             config,
             cadence,
             round,
             notify: notify::Notify::default(),
+            scans,
             warnings: warnings::Warnings::default(),
             quit: false,
         };
@@ -172,7 +178,7 @@ pub enum Action {
     Menu(menu::Action),
     /// 弹一条通知。
     Notify(notify::Notice),
-    /// 配置：打开配置文件。
+    /// 配置：打开配置文件、扫一遍本机、写回配置文件。
     Config(config::Action),
     /// 写一条日志。日志写在配置文件旁边，大小与滚动由外壳管。
     Log(String),

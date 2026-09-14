@@ -1121,6 +1121,124 @@ rt-07 的"深浅切换时重画"。
 **推荐**：维持，归 `/settle`。清单本来就是这个程序跑得起来的前提（没有它，走 2.4G 读超时、DPI 选错），错也错在不调的那
 一边。翻案面：`src/shell/menu_theme.rs` 的 `windows_build` 一个函数，外加 `Cargo.toml` 一个 feature。
 
+### Q270 —— 插拔怎么接：登记 HID 设备接口的通知，内核把一串变化合并成一遍扫描，枚举排在取数线程上
+
+**From:** resident-tray 票 10（自动补空块：插线充电也读得到）
+
+**取的路**：托盘那扇窗口是看不见的顶层窗口（`WS_OVERLAPPED`，不是 `HWND_MESSAGE`），收得到广播，但不靠广播：启动时用
+`RegisterDeviceNotificationW` 登记 HID 这一类设备接口（`src/shell/devices.rs`），窗口过程收到 `WM_DEVICECHANGE`、事件是
+`DBT_DEVICEARRIVAL` / `DBT_DEVICEREMOVECOMPLETE`、头上写的是设备接口，就往内核递 `config::Event::DevicesChanged`。插一根线来几条
+collection 就来几次：内核里的 `Scans` 把它们合并——一遍扫描（`config::Action::Scan`）还没交回来时再来的只记一笔，交回来再扫一遍
+（`tests/tray_config.rs` 守着）。启动时内核也排一遍。扫描排在取数线程上（`Job::Scan` → `hid::enumerate()`），与取数同一条队：一次
+枚举要挨个问每条 collection 的产品名，碰上不应声的设备能等几秒。扫到的先存着，等配置文件静下来（此刻的样子就是上一次重读时的
+样子，读完再核一遍；被占着就下一格再试）才在消息循环线程上读全文、递进内核，内核交出的写回当场就落（`src/shell/config.rs` 的
+`scanned` 与 `hand_over_scan`）：用户正在存盘、程序刚写回还没重读的那一两秒都不读，读与写之间只隔内核里的几次解析。拔掉也扫：今天用不上，票 12 的"只在本机在场时列出"
+要它。已知的缝：①提权进程的窗口收不收得到登记来的 `WM_DEVICECHANGE`（UIPI），这台没有管理员权限、没有真设备的会话里验不了，
+手工验收第 3 步验它；②窗口过程被重入、外壳正借着的那一刻来的那一条会丢（`with_app` 借不到）——一串里丢一条无妨，整串都丢要等
+下次插拔或重启。
+
+**另一条路**：不登记，只等系统广播给顶层窗口的 `DBT_DEVNODES_CHANGED`，外壳按秒去抖（插拔停下来一格再扫）。站得住：少一个句柄与
+注销，窗口本来就是顶层的。代价是 U 盘、声卡一动都扫，去抖的状态在外壳里、没有用例。第三条：`CM_Register_Notification`（回调在线程池
+上，不经窗口），不受 UIPI 与重入的影响，代价是回调里要往消息循环投一条自定义消息。
+
+**推荐**：维持。手工验收第 3 步若发现提权之后收不到，翻成 `CM_Register_Notification`：改动关在 `src/shell/devices.rs` 与
+`src/shell/mod.rs` 那一支，内核与用例不动。归编排者看手工验收的结果拍板。
+
+### Q271 —— 补上的块插在那台 Device 最后一块之后、紧挨它后面的注释之前：草稿里 `address` 那句"属于上面那张表"从此指错
+
+**From:** resident-tray 票 10（自动补空块：插线充电也读得到）
+
+**取的路**：沿用 `config::refresh` 原来的插法（`toml_edit` 把新表排在父表已有的子表之后），本票没动。草稿里插着接收器、没插线时，
+鼠标那台依次是 `[device.wireless_24g]` 的键 → `# address = "97d435"` 那段注释（"取消注释后它属于上面那张表"）→ Ble 占位；插上线
+补 Wired，块落在 `report_id = 8` 与那段注释之间（实测；`tests/config.rs` 的
+`config_refresh_fills_a_drafted_placeholder_and_adds_nothing_but_that_block` 逐行守着"只多了这几行"，不守位置）。那段注释从此在
+`[device.wired]` 底下，照它取消注释，`address` 就进了 Wired 那张表。今天无害：schema 不读 `address`（`src/config/mod.rs` 模块文档），
+两张表都静默忽略它。票面的"用户写过的注释一概不动"逐字节成立，说的话变了。
+
+**另一条路**：块插在草稿留下的那段占位紧后面（Wired 占位住在 `[device.wireless_24g]` 表头的前缀里，得在占位结尾处把那段前缀切开，
+新表排到 Dongle24G 之前），或者至少排到后面那段注释之后。站得住：块挨着自己的占位，没有哪句注释换了主人。代价是在 `toml_edit` 的
+装饰字符串里切文本、给新表挤位置编号——`edit.rs` 那两段长注释记的正是这一带的坑。更便宜的一条：把 `OPTIONAL_ADDRESS` 那句改成点名
+"它属于 `[device.wireless_24g]`"，块插在哪都不说错。
+
+**推荐**：先改那句注释（`src/config/draft.rs` 一处，`address` 进 schema 之前做完）；插法本身等 `address` 进 schema 时再定。翻案关在
+`src/config/edit.rs` 与 `tests/config.rs`。归 `/settle`。
+
+### Q272 —— 草稿"一台都没认出来"那段改成"删掉文件、重新启动 juicebar"，不指向菜单
+
+**From:** resident-tray 票 10（自动补空块：插线充电也读得到）
+
+**取的路**：`src/config/draft.rs` 的 `NOTHING_RECOGNISED` 原来叫人"删掉文件再跑一次 `juicebar config-refresh`"（没有配置时它生成草稿）。
+托盘里等价的办法是删掉文件、重新启动 juicebar（点"退出"再打开）：运行中文件没了只当读不了、不重新生成草稿（Q253），草稿只在启动时
+写。括号里那句照旧说清为什么光插上不够（插上之后只往已有的 `[[device]]` 里补空块）。`tests/config.rs` 的
+`the_draft_says_so_when_nothing_was_found` 断言新说法、且不再出现 `config-refresh`。
+
+**另一条路**：①指向菜单"登记设备 › 新建一台 Device"（票 12）——那是 spec 给这个死角的正解，但它今天不存在，写了就是假话；②托盘
+运行中发现配置里一台 Device 都没有、而本机插上了身份表认得的设备，就自动重新生成草稿。站得住：一份零 Device 的草稿里没有用户动过的
+东西。但程序分不清"草稿原样"和"用户删光了 Device、只留着改过的 `[general]`"，这正是票 12 不许自动新增 Device 的那个歧义。
+
+**推荐**：维持到票 12；票 12 落地时把这段改成指向"登记设备 ›"，与它"`docs/gaps.md` 收掉死角"那一格一起做。翻案只改
+`NOTHING_RECOGNISED` 与那条用例。归票 12（编排者派它时在 brief 里点一句）。
+
+### Q273 —— 托盘里 `refresh` 的提醒（`notes`）一声不响：扫描与所写不一致那句，命令行退场之后没了出口
+
+**From:** resident-tray 票 10（自动补空块：插线充电也读得到）
+
+**取的路**：托盘只用 `Refreshed::filled`（通知与日志）；`notes`——"认不出这是哪台设备"、"Ble 地址猜不出"、"现在不在场，没有填"，以及
+ADR-0003 那半句"扫描结果与用户所写不一致时只在命令行提醒"——一条都不记。理由：前三种每插拔一次都成立（鼠标没插线时 Wired 当然
+不在场），记进日志就是每次几行噪音；票面写的是"没有要补的，一声不响"。命令行 `config-refresh` 照旧印它们。
+
+**另一条路**：把 `notes` 分成有类型的几种（`Refreshed::notes` 从 `Vec<String>` 变成枚举），托盘把"不一致"那种记进日志。站得住：
+配置里 Wired 写成了 dongle 的 pid，插上线读不到，用户最该看见的就是这一句；票 14 删掉命令行之后，这句提醒在整个产品里不再有任何
+出口，而 `Refreshed` 的文档写着它是"这条边界唯一的出口"。代价关在 `src/config/edit.rs`（分类）、`src/tray/config.rs`（记哪种）与两份
+用例。
+
+**推荐**：票 14 删 `config-refresh` 之前补上"不一致记日志"（不挂告警：插着线时它每一遍扫描都成立，挂上就摘不掉），并改 ADR-0003
+那句"只在命令行提醒"。归票 14（编排者派它时在 brief 里点一句）。
+
+### Q274 —— 写回配置文件失败时，"配置已自动更新"的通知照弹
+
+**From:** resident-tray 票 10（自动补空块：插线充电也读得到）
+
+**取的路**：内核一次交出写回、每块一行日志、一条通知（`src/tray/config.rs` 的 `fill_blank_blocks`），外壳按顺序执行；写不进（文件
+只读、被锁）时外壳把错误记进日志（`src/shell/config.rs` 的 `execute`），排在后面的通知照样弹——用户看到"配置已自动更新"，文件其实
+没变。那一块仍然空着，下一次插拔或重启会再补一次。
+
+**另一条路**：外壳把写的结果递回内核（照状态文件那样，`warnings::Event::StateSaved`），内核收到"写成了"才弹通知、记"补上了"。站得住：
+通知不说假话。代价是外壳执行动作时借着 `App`、递不回事件，得往自己窗口投一条消息（Q250 记过同一个坎），内核还要记着"补了什么、等
+写的结果"。
+
+**推荐**：维持：用户自己 `%APPDATA%` 下的配置写不进，几乎只在文件被设成只读时发生，日志里有完整原因。日志里真见到过再翻；改动关在
+`src/tray/config.rs`、`src/shell/config.rs` 与 `tests/tray_config.rs`。归 `/settle`。
+
+### Q275 —— 草稿之外叫人跑 `config-refresh` 的几句，本票没改
+
+**From:** resident-tray 票 10（自动补空块：插线充电也读得到）
+
+**取的路**：票面只点了草稿里的提示语。其余照旧：`src/cli/config_refresh.rs:53`（命令行 `bootstrap` 印的"再跑一次
+`juicebar config-refresh`"）、`config.example.toml:118`、`README.md:34` 与 `:57`、`docs/adr/0001-wired-as-first-class-endpoint.md:18`，以及
+`src/config/draft.rs` Ble 那段 remedy 的前半句"`juicebar config-refresh` 也补不上它"（后半句"跑 `juicebar scan`"归 Q131，整句没动）。
+过渡期命令行照旧能跑，这几句今天都不假；`tests/status.rs` 照旧全绿。
+
+**另一条路**：本票一起改成"插上之后程序会自动补上"。站得住：托盘已经让这句话成真，`config.example.toml` 与 README 是用户会读的。代价
+是动到票 14 要整节重写的 README 与命令行输出，两张票撞在同几行上。
+
+**推荐**：归票 14：删命令行时这几句一起消失或改写——Q131 建议给票 14 加的那条 `git grep -nE 'juicebar (scan|caps|probe|status|config-refresh)'`
+归零正好兜住它们。Ble remedy 那半句随 Q131 归票 11。
+
+### Q276 —— 配置重读好了不重扫：修好一份坏配置、或删掉一块想让程序重补，要等下次插拔或重启
+
+**From:** resident-tray 票 10（自动补空块：插线充电也读得到）
+
+**取的路**：只在启动时与本机设备变化时扫（票面的两个触发）。配置写坏的那一刻插上线，那一遍补不了（记一行日志）；之后用户修好、重读
+好了，不再扫，要等下次插拔或重启。删掉 `[device.wired]` 想让程序重新补上（`known_devices.rs` 的 `recognise` 文档里写着的情形），也要
+重插或重启。
+
+**另一条路**：`Reloaded(Ok)` 也请求一遍扫描。站得住：上面两种情形当场就补。代价：插着线时故意删掉一块（不想让它走有线），存盘一两秒
+后程序就补回来——自动的事跟用户当场顶牛；只在插拔与启动时补，删掉的块至少活到下一次插上。
+
+**推荐**：维持。要兜住"补不了的那一遍"，可以只在上一遍因配置读不了而补不了时、下一次重读好再扫一遍（记一笔即可），改动关在
+`src/tray/config.rs` 与 `tests/tray_config.rs`。归 `/settle`。
+
 ## Settled
 
 <!-- 一条记录一行：编号、它本来的那一句话、分到哪一道、去了哪儿。正文在 git 里，每一趟的收口 commit 写在那一趟的小节里。 -->

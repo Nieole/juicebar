@@ -348,7 +348,22 @@ fn the_draft_leaves_an_absent_endpoint_as_a_commented_placeholder() {
         text.contains("# pid = 0x1005"),
         "占位里要有实测记下来的 pid"
     );
-    assert!(text.contains("config-refresh"), "要写明补全办法");
+    // 补全办法：插上之后程序会自动补上，不再叫人去跑命令行。占位那一段与开头那段话都这么说。
+    let wired = comment_run_with_block_name(&text, "wired").join("\n");
+    assert!(
+        wired.contains("插上之后程序会自动补上"),
+        "要写明补全办法：{wired}"
+    );
+    assert!(
+        !wired.contains("config-refresh"),
+        "不再叫人去跑命令行：{wired}"
+    );
+    let preamble = &text[..text.find("[general]").unwrap()];
+    assert!(
+        preamble.contains("插上之后程序会自动补上"),
+        "开头那段也这么说：{preamble}"
+    );
+    assert!(!preamble.contains("config-refresh"), "{preamble}");
 }
 
 /// 补不上的那几条 Endpoint 的占位出自**同一套逻辑**：同样的开头、同样的"怎么让它出现"、
@@ -552,6 +567,15 @@ fn the_draft_says_so_when_nothing_was_found() {
     let config = Config::parse(&text).expect("空草稿也必须解析得动");
     assert!(config.devices.is_empty());
     assert!(text.contains("都没扫到"), "要说清楚为什么一台设备都没有");
+    // 插上之后程序只补已有 Device 里的空块，救不了这份文件；办法是删掉它、重新启动，生成一份新草稿。
+    assert!(
+        text.contains("删掉") && text.contains("重新启动 juicebar"),
+        "要说清楚一台都没有时怎么办：{text}"
+    );
+    assert!(
+        !text.contains("config-refresh"),
+        "不再叫人去跑命令行：{text}"
+    );
 }
 
 // ---------------------------------------------------------------
@@ -573,9 +597,87 @@ fn config_refresh_fills_an_empty_endpoint_block_that_is_now_present() {
     assert_eq!(wired.report_id, 8);
 
     assert!(
-        refreshed.filled.iter().any(|line| line.contains("Wired")),
+        refreshed
+            .filled
+            .iter()
+            .any(|fill| fill.to_string().contains("Wired")),
         "填了什么要说出来，不能悄悄改用户的文件"
     );
+}
+
+/// 草稿里注释掉的占位也是空块：插上线之后补上的就是那一块，**别的一个字节都不动**——占位那几行注释、
+/// 用户没碰过的每一行、行与行之间的空行，原样按原次序留着。托盘每插上一次设备就可能跑一遍它，所以这里
+/// 逐行守着"只多了这几行"。
+#[test]
+fn config_refresh_fills_a_drafted_placeholder_and_adds_nothing_but_that_block() {
+    // 首次运行时插着两个接收器：两台都写进了草稿，两台的 Wired 都是注释掉的占位。
+    let before = config::draft(&[mouse_dongle(), keyboard_dongle()]);
+    // 之后插上了鼠标的线。
+    let refreshed =
+        config::refresh(&before, &[mouse_dongle(), keyboard_dongle(), mouse_wired()]).unwrap();
+
+    let (at, inserted) = inserted_lines(&before, &refreshed.text);
+    assert_eq!(
+        inserted,
+        [
+            "\n",
+            "  [device.wired]\n",
+            "  vid = 0x391D\n",
+            "  pid = 0x1005\n",
+            "  usage_page = 0xFF02\n",
+            "  usage = 0x0002\n",
+            "  report_id = 8\n",
+        ],
+        "多出来的只该是鼠标那一块 Wired（插在第 {at} 行）"
+    );
+    let config = Config::parse(&refreshed.text).unwrap();
+    assert_eq!(
+        config.devices[0].wired.as_ref().expect("补在鼠标底下").pid,
+        0x1005
+    );
+    assert!(
+        config.devices[1].wired.is_none(),
+        "键盘的线没插，它那块照旧空着"
+    );
+}
+
+/// **不新增 `[[device]]`**：本机插着一台认得的设备、而配置里没有它，也一个字节都不写。自动的事分不清"用户删掉的"
+/// 和"从没加过的"，新增只能由用户在菜单里点（resident-tray 票 12）。
+#[test]
+fn config_refresh_never_adds_a_device() {
+    // ONE_DEVICE 里只有鼠标；键盘的接收器与本体都插着。
+    let refreshed = config::refresh(
+        ONE_DEVICE,
+        &[mouse_dongle(), keyboard_dongle(), keyboard_wired()],
+    )
+    .unwrap();
+
+    assert_eq!(refreshed.text, ONE_DEVICE);
+    assert!(refreshed.filled.is_empty());
+}
+
+/// `after` 比 `before` 多出来的那一段连续的行（每行带着自己的换行），以及它插在第几行（从 0 数）。
+///
+/// **`before` 的每一行都得原样、按原次序留在 `after` 里**，否则当场失败：它守的正是"只多了这几行，别的
+/// 一个字节没动"。行按 `\n` 切、切出来的行带着换行，所以连空行与行尾也逐字节比。
+fn inserted_lines<'a>(before: &str, after: &'a str) -> (usize, Vec<&'a str>) {
+    let old: Vec<&str> = before.split_inclusive('\n').collect();
+    let new: Vec<&str> = after.split_inclusive('\n').collect();
+    let head = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+    let tail = old[head..]
+        .iter()
+        .rev()
+        .zip(new[head..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    assert_eq!(
+        head + tail,
+        old.len(),
+        "原有的行被改了或删了：从第 {head} 行起，原来是 {:?}，现在是 {:?}",
+        &old[head..old.len() - tail],
+        &new[head..new.len() - tail]
+    );
+    (head, new[head..new.len() - tail].to_vec())
 }
 
 /// ADR-0003 划死的边界：只补空缺。用户写过的值和他写的注释，一个字都不许动。
@@ -932,6 +1034,7 @@ driver = \"vgn_keyboard\"
         refreshed
             .filled
             .iter()
+            .map(ToString::to_string)
             .any(|line| line.contains("report_id") && line.contains("没有实测")),
         "补上没实测过的身份要带上告知：{:?}",
         refreshed.filled

@@ -1,7 +1,10 @@
-//! 取数线程：一次取数，以及状态文件。
+//! 取数线程：一次取数、扫一遍本机，以及状态文件。
 //!
 //! 一次取数可能要等几秒（一条 HID 超时就是三秒），放在消息循环那个线程上，右键菜单就跟着卡住。所以
 //! 它在这里，一台一台排着做；做完一次，把结果交回去（[`Report::Fetched`]），再敲一下窗口让那边来取。
+//!
+//! **扫一遍本机也排在这里**（自动补空块，[`Report::Scanned`]）：一次枚举要挨个打开本机每一条 HID collection、
+//! 问它的产品名，碰上一台不应声的设备也能等上几秒，同一个理由。
 //!
 //! **状态文件归这个线程**：取数那一层（`crate::readout::read_or_last_known`）每读到一份就当场记进手上那一份
 //! 状态、读不到时从里面取上次已知值，所以那一份得跟着取数住。内核只说什么时候存、记下哪一台是 Primary
@@ -19,6 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
 use crate::clock::{Clock, SystemClock};
 use crate::endpoints::SystemEndpoints;
+use crate::hid::{self, HidInfo};
 use crate::readout::{self, NoReading};
 use crate::round::{InHand, PauseCheck};
 use crate::state::LastKnown;
@@ -35,12 +39,16 @@ pub(super) enum Report {
     /// （[`warnings::Event::StateSaved`]）——写成了也递：挂着的那条告警要等某一次写成了才摘得掉，而写没写成
     /// 只有这里知道。
     Warnings(warnings::Event),
+    /// 扫了一遍本机：此刻在场的 HID collection，枚举不了时是完整原因。配置文件的全文不在这里读，在消息循环那边
+    /// 递进内核之前才读（`config.rs` 的 `scanned` 写了为什么）。
+    Scanned(Result<Vec<HidInfo>, String>),
 }
 
 /// 排给取数线程的活。
 enum Job {
     Fetch(FetchRequest),
     Save(SaveState),
+    Scan,
 }
 
 /// 取数线程的这一头。
@@ -91,12 +99,17 @@ impl Worker {
         self.send(Job::Save(save));
     }
 
+    /// 排一遍扫本机。
+    pub(super) fn scan(&self) {
+        self.send(Job::Scan);
+    }
+
     /// 取数线程交回来的下一样东西，没有了就是 `None`。
     pub(super) fn next_report(&self) -> Option<Report> {
         self.reports.try_recv().ok()
     }
 
-    /// 停下：排着的取数一次都不再做，排着的存盘照做，等它把手上那一样做完。
+    /// 停下：排着的取数与扫描一次都不再做，排着的存盘照做，等它把手上那一样做完。
     ///
     /// 等是有意的：它可能正在写状态文件，进程这时退出，那份文件就可能只写了一半——下次启动读回来是
     /// 坏的，就当没有上次已知值（`LastKnown::load`），而那正是"重启不等于失忆"要防的事。代价是图标
@@ -126,7 +139,7 @@ fn run(
 ) {
     for job in inbox {
         match job {
-            Job::Fetch(_) if stopping.load(Ordering::SeqCst) => {}
+            Job::Fetch(_) | Job::Scan if stopping.load(Ordering::SeqCst) => {}
             Job::Fetch(request) => {
                 tell(Report::Fetched(Box::new(fetch(&request, &mut last_known))))
             }
@@ -138,6 +151,9 @@ fn run(
                 let outcome = last_known.save(state_path).map_err(|e| format!("{e:#}"));
                 tell(Report::Warnings(warnings::Event::StateSaved(outcome)));
             }
+            Job::Scan => tell(Report::Scanned(
+                hid::enumerate().map_err(|e| format!("枚举不了本机的设备：{e:#}")),
+            )),
         }
     }
 }

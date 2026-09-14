@@ -4,7 +4,7 @@
 //! 常量**一起住在这里：改一句提示只动这一个文件，不必在 schema 和 `toml_edit` 之间翻页。
 //!
 //! `endpoint_block` 也住在这里，而 `edit` 那一侧的插入复用它——草稿写下的块与
-//! `config-refresh` 补出来的块因此逐字一致。
+//! 自动补空块补出来的块因此逐字一致。
 
 use std::collections::BTreeMap;
 
@@ -128,9 +128,9 @@ const DRAFT_PREAMBLE: &str = "\
 # 所以：注释掉的块 = 需要你看一眼的地方。程序在这里有意不猜——几套身份之间没有任何
 # 字段能自动缝合，猜错写下去的是一份错配置，而错配置比没有配置更难查。
 #
-# 该插的插好之后（键盘还要把机身模式开关拨到有线档）跑 `juicebar config-refresh`，
-# 程序会再扫一遍、把当时在场而配置里空着的 Endpoint 块填进来：**只填空着的，你写过的
-# 值和注释一概不动**（见 docs/adr/0003）。
+# 插上之后程序会自动补上：该插的插好（键盘还要把机身模式开关拨到有线档），托盘开着时
+# 会再扫一遍、把此刻在场而配置里空着的 Endpoint 块填进来，并弹一条通知说补了哪台的哪条；
+# 托盘启动时也扫一遍。**只填空着的，你写过的值和注释一概不动**（见 docs/adr/0003）。
 #
 # 每一项的详细含义见仓库里的 config.example.toml，术语见 CONTEXT.md。
 
@@ -199,10 +199,13 @@ const OPTIONAL_ADDRESS: &str = "\
 /// 这一段不能省：一份只有 `[general]` 的文件看起来像"程序坏了"，而实际原因通常是设备
 /// 没插或者它不在 [`KNOWN_DEVICES`] 里，两者要用户做的事完全不同。
 ///
-/// **这里让用户删掉文件重来，而不是"插好之后跑 `config-refresh`"**，因为后者是假话：
+/// **这里让用户删掉文件、重新启动，而不是"插上之后程序会自动补上"**，因为后者在这里是假话：
 /// [`refresh`] 只往已有的 `[[device]]` 里补空着的块，它不新增 Device（那条边界见
-/// `.scratch/parking-lot.md` 的 Q49）。而这份文件此刻没有任何 Device，删掉它不损失
-/// 任何东西——里面只有用户还没动过的默认值。
+/// `.scratch/parking-lot.md` 的 Q49；托盘里新增 Device 只能由用户在菜单里点，resident-tray 票 12）。
+/// 而这份文件此刻没有任何 Device，删掉它不损失任何东西——里面只有用户还没动过的默认值。
+///
+/// **光删掉不够，要重新启动**：托盘运行中配置文件没了，当作读不了、沿用上一份，不重新生成草稿（parking lot
+/// Q253）；草稿只在启动时没有配置文件才写。这句话怎么改的记在 parking lot Q272。
 ///
 /// [`refresh`]: crate::config::refresh
 const NOTHING_RECOGNISED: &str = "\
@@ -212,9 +215,9 @@ const NOTHING_RECOGNISED: &str = "\
 # src/config/known_devices.rs 的 KNOWN_DEVICES）。跑 `juicebar scan` 看本机到底有哪些
 # HID collection。
 #
-# 插好之后**把这个文件删掉**再跑一次 `juicebar config-refresh`，程序会重新扫一遍、生成
-# 一份带 Device 的新草稿。（不是跑 config-refresh 就够：它只往已有的 [[device]] 里补空着
-# 的块，不会替你新增一台设备。这个文件现在没有你动过的东西，删掉不损失什么。）
+# 插好之后**把这个文件删掉，再重新启动 juicebar**（右键托盘图标点\"退出\"，再打开它），程序会
+# 重新扫一遍、生成一份带 Device 的新草稿。（光插上不够：插上之后程序只往已有的 [[device]]
+# 里补空着的块，不会替你新增一台设备。这个文件现在没有你动过的东西，删掉不损失什么。）
 ";
 
 /// 扫到了、但 [`KNOWN_DEVICES`] 里没有的 vendor collection，写成注释掉的骨架。
@@ -382,8 +385,8 @@ fn commented_placeholder(
         remedy,
         block,
     } = match kind {
-        // 两条 HID 的身份实测记在表里，补不上只是因为**此刻扫不到**——插好之后
-        // `config-refresh` 就能把它填成真块。
+        // 两条 HID 的身份实测记在表里，补不上只是因为**此刻扫不到**——插上之后
+        // 托盘就能把它补成真块（自动补空块，`crate::tray::config`）。
         EndpointKind::Wired | EndpointKind::Dongle24G => Unfillable {
             why: format!("{kind} 现在扫不到"),
             // 下面那组身份可不可信，要么说"实测记下来的"，要么把没实测的那一项点出来——
@@ -394,9 +397,9 @@ fn commented_placeholder(
                 caveat.to_string()
             },
             remedy: format!(
-                "弄好之后跑 `juicebar config-refresh`，程序会扫一遍本机、把真正的\n\
-                 [device.{key}] 写进来（只填空着的块，你写过的值和注释一概不动）。到那时这几行\n\
-                 就只是历史记录了，留着或删掉都行。"
+                "插上之后程序会自动补上：托盘开着时它一出现、或者托盘启动时它在场，程序就把真正的\n\
+                 [device.{key}] 写进来，并弹一条通知（只填空着的块，你写过的值和注释一概不动）。\n\
+                 到那时这几行就只是历史记录了，留着或删掉都行。"
             ),
             // 正文是 [`endpoint_block`] 的输出，用户把 `#` 去掉得到的正是程序自己会写的
             // 那几行，两者之间不会漂。身份表对这两种恒有身份；真落到 `None`，块里退成一个

@@ -73,8 +73,12 @@ pub struct Screen {
     pub menu: Vec<menu::Action>,
     /// 至今弹过的通知，按顺序。
     pub notices: Vec<Notice>,
-    /// 配置那一格至今交出的动作，按顺序。
+    /// 配置那一格至今交出的动作，按顺序。扫一遍本机、写回配置文件这两样不在这里，在下面两格。
     pub config: Vec<config::Action>,
+    /// 至今要求扫了几遍本机（[`config::Action::Scan`]）。
+    pub scans: usize,
+    /// 至今写回配置文件的每一份全文，按顺序（[`config::Action::Write`]）。
+    pub written: Vec<String>,
 }
 
 impl Screen {
@@ -91,6 +95,8 @@ impl Screen {
                 Action::Round(round::Action::SaveState(save)) => self.saves.push(save),
                 Action::Menu(action) => self.menu.push(action),
                 Action::Notify(notice) => self.notices.push(notice),
+                Action::Config(config::Action::Scan) => self.scans += 1,
+                Action::Config(config::Action::Write(text)) => self.written.push(text),
                 Action::Config(action) => self.config.push(action),
                 Action::Log(line) => self.logs.push(line),
             }
