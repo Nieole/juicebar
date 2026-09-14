@@ -16,7 +16,7 @@ mod icon;
 mod log;
 mod look;
 mod menu;
-pub mod menu_theme;
+mod menu_theme;
 mod notify;
 mod round;
 mod worker;
@@ -55,7 +55,7 @@ struct App {
     worker: worker::Worker,
     log: log::LogFile,
     /// 让菜单的深浅跟任务栏的那两个函数，启动时取一次。
-    menu_theme: menu_theme::MenuTheme,
+    uxtheme: menu_theme::UxTheme,
 }
 
 thread_local! {
@@ -73,8 +73,8 @@ pub fn run() -> Result<()> {
     let config = Config::load(&config_path)?;
     let state_path = state_path_beside_config(&config_path);
     let last_known = LastKnown::load(&state_path);
-    let menu_theme = menu_theme::MenuTheme::load();
-    let look = look::detect(menu_theme.theming());
+    let (uxtheme, menu_theming) = menu_theme::UxTheme::load();
+    let look = look::detect(menu_theming);
 
     let hwnd = create_window()?;
     let (tray, actions) = Tray::new(config, &last_known, look, SystemClock.now());
@@ -85,7 +85,7 @@ pub fn run() -> Result<()> {
         icon: icon::TrayIcon::new(hwnd, WM_TRAY),
         worker: worker::Worker::start(hwnd, WM_REPORT, state_path, last_known),
         log,
-        menu_theme,
+        uxtheme,
     };
     for action in actions {
         route(&mut app, action);

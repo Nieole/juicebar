@@ -8,16 +8,17 @@ use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::core::w;
 
 use crate::icon::{IconSize, Theme};
-use crate::tray::{Look, MenuTheming};
+use crate::tray::Look;
+use crate::tray::menu_theme::MenuTheming;
 
-/// 问一次 Windows。菜单跟不跟得上任务栏（`menus`）是外壳启动时从 uxtheme 那里问来的（`menu_theme.rs`）。
-pub(super) fn detect(menus: MenuTheming) -> Look {
+/// 问一次 Windows。菜单跟不跟得上任务栏（`menu_theming`）是外壳启动时从 uxtheme 那里问来的（`menu_theme.rs`）。
+pub(super) fn detect(menu_theming: MenuTheming) -> Look {
     // SAFETY: 读系统的显示缩放。程序清单声明了按显示器感知缩放，所以这里拿到的是真的缩放，不是 96。
     let dpi = unsafe { GetDpiForSystem() };
     Look {
         theme: taskbar_theme(),
         size: IconSize::for_dpi(dpi),
-        menus,
+        menu_theming,
     }
 }
 

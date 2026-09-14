@@ -18,7 +18,7 @@ use juicebar::state::{LastKnown, Provenance};
 use juicebar::tray::notify::Notice;
 use juicebar::tray::round::{IconRequest, SaveState};
 use juicebar::tray::{
-    Action, Event, Fetched, Look, MenuTheming, Tray, cadence, config, menu, round, warnings,
+    Action, Event, Fetched, Look, Tray, cadence, config, menu, menu_theme, round, warnings,
 };
 
 /// 用例里那两台：一只只配了 Dongle24G 的鼠标，一台只配了 Ble 的键盘。
@@ -50,7 +50,7 @@ driver = "vgn_keyboard"
 pub const LOOK: Look = Look {
     theme: Theme::Dark,
     size: IconSize::Px16,
-    menus: MenuTheming::FollowsTaskbar,
+    menu_theming: menu_theme::MenuTheming::FollowsTaskbar,
 };
 
 /// 外壳顶替品：把内核交出来的动作落成"此刻屏幕上是什么"。

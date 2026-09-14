@@ -19,7 +19,7 @@ use super::{App, look, with_app};
 pub(super) fn popup(hwnd: HWND) -> Option<Command> {
     let model = with_app(|app| app.tray.menu())?;
     // 按任务栏此刻的深浅强制菜单深或浅（ADR-0006）。每次都重读：运行中切了深浅，这一次弹出就跟上。
-    with_app(|app| app.menu_theme.follow(look::taskbar_theme()));
+    with_app(|app| app.uxtheme.follow(look::taskbar_theme()));
     // SAFETY: 标准的托盘菜单弹法；菜单句柄由 Owned 收回。
     unsafe {
         let menu = Owned::new(CreatePopupMenu().ok()?);

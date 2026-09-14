@@ -14,8 +14,9 @@ use common::tray::{
 use juicebar::endpoints::EndpointKind;
 use juicebar::icon::{IconSettings, IconSize, IconState, Theme};
 use juicebar::state::LastKnown;
+use juicebar::tray::menu_theme::MenuTheming;
 use juicebar::tray::round::{IconRequest, SaveState};
-use juicebar::tray::{Event, Look, MenuTheming};
+use juicebar::tray::{Event, Look};
 
 /// 任一台的一次取数有了结果就是新的一轮：图标画这一轮的 Primary Device（缺省 `lowest`，此刻手上只有
 /// 鼠标这一份新鲜读数，就是它）。
@@ -45,7 +46,7 @@ fn at_startup_with_nothing_on_record_the_icon_shows_no_known_value_in_the_taskba
     let look = Look {
         theme: Theme::Light,
         size: IconSize::Px24,
-        menus: MenuTheming::FollowsTaskbar,
+        menu_theming: MenuTheming::FollowsTaskbar,
     };
 
     let (_tray, screen) = start_with_look(MOUSE_AND_KEYBOARD, &LastKnown::default(), look, NOW);
