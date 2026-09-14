@@ -940,6 +940,22 @@ trait 与两个驱动、`tests/common` 的假 Transport、`src/readout.rs`，外
 `NoReading`，不管手上有没有上次已知值；再改 `reason()` 的文档（Q233）。有了 `NoReading::failed`，内核用例罐装得出三种来路。
 归 rt-06；票面没点这一条，编排者派 rt-06 时在 brief 里点一句。
 
+### Q240 —— 两个字节函数只收像素切片，不收宽和高
+
+**From:** menu-as-designed 票 02（位图交给 Windows 之前成为纯函数）
+
+**取的路**：`tray_icon_bytes(pixels: &[Rgba])` 与 `menu_preview_bytes(pixels: &[Rgba])`（`src/icon/bytes.rs`）只收"逐行从上往下、
+每行从左往右"的像素切片，交回 `Vec<u8>`。32 位 DIB 的行本来就按 4 字节对齐、没有补白，自顶向下又不用翻行，字节里用不着宽和高；
+宽大于高的位图（票 07 那三张并排）因此照样收。宽、高只在外壳里用：填 `BITMAPINFOHEADER`，拷字节时 DIB 节那一段的长度按
+宽 × 高 × 4 算，长度对不上 `copy_from_slice` 就 panic。
+
+**另一条路**：收 `(width, height, pixels)`，在纯函数里断言 `pixels.len() == width × height`。站得住：票 07 拼宽位图时若把长度算错，
+panic 落在有用例够得着的纯函数里，而不是外壳那行拷贝；签名上也写明了"这是一张几乘几的图"。代价是两个参数只用来断言、不影响输出。
+
+**推荐**：先留切片。票 07 若给"几张并排"一个带宽高的位图类型（把 `IconBitmap` 放宽成宽 × 高，或者另开一个），就让两个函数改收
+那个类型——宽高由类型自己守着，比两个散参数好。翻案只改 `src/icon/bytes.rs` 的两个签名、`src/shell/icon.rs` 的一处调用与
+`tests/icon_bytes.rs`。归票 07 拍板。
+
 ## Settled
 
 <!-- 一条记录一行：编号、它本来的那一句话、分到哪一道、去了哪儿。正文在 git 里，每一趟的收口 commit 写在那一趟的小节里。 -->

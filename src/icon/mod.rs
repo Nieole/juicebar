@@ -12,13 +12,16 @@
 //!
 //! 纯函数：不碰 Win32 界面、不碰设备，同样的输入画出同样的位图（系统字体那一项取决于本机的字体）。
 //! 用它的有两处：托盘图标本身（票 04），与"图标样式"子菜单里每个选项前面的预览（票 07）。
-//! 交出去的是不预乘的 RGBA；做 32 位图标（`CreateIconIndirect`）时正是这个样子，塞进菜单的
-//! 32 位位图（`MENUITEMINFO::hbmpItem`）要的是预乘过的，那一步归调用方。
+//! 交出去的是不预乘的 RGBA。交给 Windows 之前换成字节的那一步也是纯函数（`bytes.rs`）：32 位图标
+//! （`CreateIconIndirect`）要不预乘的 BGRA（[`tray_icon_bytes`]），塞进菜单的 32 位位图
+//! （`MENUITEMINFO::hbmpItem`）要预乘过的（[`menu_preview_bytes`]）。
 
+mod bytes;
 mod glyphs;
 mod ring;
 mod system_font;
 
+pub use bytes::{menu_preview_bytes, tray_icon_bytes};
 use glyphs::{BOLT, BOLT_CHAR, F35, F57, Font, LOGO, LOGO_CHAR};
 
 /// ADR-0005 八项设置里管图标的那六项，也就是右键菜单"图标样式"子菜单里的六行。

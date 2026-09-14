@@ -15,7 +15,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, HICON, ICONINFO};
 use windows::core::Owned;
 
-use crate::icon::{IconBitmap, render};
+use crate::icon::{IconBitmap, render, tray_icon_bytes};
 use crate::tray::notify::Notice;
 use crate::tray::round::IconRequest;
 
@@ -135,7 +135,7 @@ fn copy_wide(text: &str, field: &mut [u16]) {
 
 /// 渲染器画好的位图 → 一个 32 位图标。
 ///
-/// 颜色位图照渲染器交出来的样子（不预乘的 RGBA，逐行从上往下），换成 Windows 要的 BGRA；掩码位图全 0，
+/// 颜色位图的字节由 [`tray_icon_bytes`] 换好（不预乘的 BGRA，自顶向下），这里只把它拷进 DIB 节；掩码位图全 0，
 /// 透明与否全看颜色位图里的不透明度。两块位图交给 `CreateIconIndirect` 之后它各自拷一份，这两块随即删掉。
 fn to_icon(bitmap: &IconBitmap) -> Result<Owned<HICON>> {
     let size = bitmap.size() as i32;
@@ -151,6 +151,7 @@ fn to_icon(bitmap: &IconBitmap) -> Result<Owned<HICON>> {
         },
         ..Default::default()
     };
+    let color_bytes = tray_icon_bytes(bitmap.pixels());
     // 单色位图每行按 16 位对齐。
     let mask_bits = vec![0u8; (size as usize).div_ceil(16) * 2 * size as usize];
     // SAFETY: 标准的"DIB 节 + 单色掩码 → 图标"用法；bits 指向 size × size × 4 字节，只在这里写。
@@ -160,11 +161,9 @@ fn to_icon(bitmap: &IconBitmap) -> Result<Owned<HICON>> {
             CreateDIBSection(None, &info, DIB_RGB_COLORS, &mut bits, None, 0)
                 .context("建不了图标的颜色位图")?,
         );
-        let pixels = std::slice::from_raw_parts_mut(bits.cast::<u8>(), bitmap.pixels().len() * 4);
-        let (pixels, _) = pixels.as_chunks_mut::<4>();
-        for (px, out) in bitmap.pixels().iter().zip(pixels) {
-            *out = [px.b, px.g, px.r, px.a];
-        }
+        // 长度按 DIB 节自己的大小取：字节与它对不上就 panic，不会写出界。
+        std::slice::from_raw_parts_mut(bits.cast::<u8>(), (size * size * 4) as usize)
+            .copy_from_slice(&color_bytes);
         let mask = Owned::new(CreateBitmap(
             size,
             size,
