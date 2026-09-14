@@ -118,6 +118,11 @@ pub enum Warning {
     /// [`Round`]，写完盘才印（`cli::status::run`）；托盘里外壳写完盘把结果交给内核，这一条挂在之后的
     /// 每一轮上，直到某一次写成（`crate::tray::warnings`）。与上面那一条同一种东西，说法也在这里定。
     StateNotSaved(String),
+    /// 配置文件读不了（写坏了，或者读不到），托盘沿用上一份读好的。
+    ///
+    /// **只有托盘有它**：托盘运行中配置文件变了就重读（`crate::tray::config`），读不了不停摆，这一条挂到下一次
+    /// 读好为止；命令行每次启动只读一次，读不了当场报错，没有上一份可沿用。
+    ConfigUnreadable(String),
 }
 
 impl fmt::Display for Warning {
@@ -131,6 +136,9 @@ impl fmt::Display for Warning {
                     f,
                     "记不下这一轮的读数（下次启动就没有上次已知值了）—— {reason}"
                 )
+            }
+            Self::ConfigUnreadable(reason) => {
+                write!(f, "读不了配置文件，沿用上一份读好的 —— {reason}")
             }
         }
     }

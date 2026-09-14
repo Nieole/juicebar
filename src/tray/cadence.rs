@@ -29,8 +29,8 @@ pub enum Action {
 
 /// 对一台 Device 做一次取数要的东西：那台 Device 与此刻的 `[general]`（暂停名单、陈旧阈值都在里面）。
 ///
-/// 连同配置一起交出去，而不是只交一个 id：配置归内核（票 09 起它会在运行中换掉），取数线程手上不留
-/// 一份会过时的。
+/// 连同配置一起交出去，而不是只交一个 id：配置归内核，运行中会换掉（配置文件变了、读好了，`super::config`），
+/// 取数线程手上不留一份会过时的。
 #[derive(Debug, Clone)]
 pub struct FetchRequest {
     pub device: Device,
