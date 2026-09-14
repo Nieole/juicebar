@@ -33,7 +33,7 @@ permalink 格式是 `https://github.com/<仓库>/blob/<提交>/<路径>#L<起>-L
 
 **一项显示两行：做不到。** MENUITEMINFO 的 fType 里没有和多行有关的取值，MFT_STRING 只说 dwTypeData 是 "a null-terminated string"（文档写明，https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuiteminfow）。文档没说字符串里的换行符会怎样。Wine 画菜单文字一律带 `DT_SINGLELINE`（源码可见，wine `dlls/win32u/menu.c` L2666-L2668、L2706-L2716）。微软演示"仿系统外观的 owner-draw 菜单"时，文字也用 `DrawThemeText(..., DT_SINGLELINE | DT_LEFT | uAccel, ...)` 画（文档写明，归档 https://learn.microsoft.com/en-us/previous-versions/bb756890(v=msdn.10)）。所以系统画的标准项是单行（推断）。样稿里设备行"名字 + 下面一行小灰字"，标准项做不出来。**实机（8.1）**：字符串里的 `\n`、`\r\n` 不换行、也不画出来，两行字接成一行，项高不变。
 
-**右对齐列：`\t` 给的不是右对齐，`\a` 才是。** 资源语法文档说，`\t` "inserts a tab in the string and is used to align text in columns"，`\a` "aligns all text that follows it flush right to the menu bar or pop-up menu"（文档写明，https://learn.microsoft.com/en-us/windows/win32/menurc/menuitem-statement）。About Menus 只说快捷键文字 "appears to the right of the menu item name, after a backslash and tab character (\t)"（文档写明，https://learn.microsoft.com/en-us/windows/win32/menurc/about-menus）。`\a` 是资源编译器的转义，用 InsertMenuItem 在运行时建菜单时它对应哪个字符，文档没写。Wine 在运行时把 `\t` 后面的文字从同一个 x（该菜单的 tab 列）起**左对齐**，把 `\b`（0x08）后面的文字**右对齐**到该列（源码可见，wine `menu.c` L2686-L2716）。据此：`\t` 得到的是"各项从同一起点开始的第二列"，真要右对齐应在字符串里放 0x08（推断，依据 Wine；实机未验证）。**实机（8.1）：这条推断被推翻。**Windows 11 上 `\t` 后面的文字贴右对齐，不是 Wine 那样左对齐；0x08 画出来与 `\t` 逐字节相同。
+**右对齐列：`\t` 给的不是右对齐，`\a` 才是。（实机推翻：两者画出来一样，都贴右，见 8.1）** 资源语法文档说，`\t` "inserts a tab in the string and is used to align text in columns"，`\a` "aligns all text that follows it flush right to the menu bar or pop-up menu"（文档写明，https://learn.microsoft.com/en-us/windows/win32/menurc/menuitem-statement）。About Menus 只说快捷键文字 "appears to the right of the menu item name, after a backslash and tab character (\t)"（文档写明，https://learn.microsoft.com/en-us/windows/win32/menurc/about-menus）。`\a` 是资源编译器的转义，用 InsertMenuItem 在运行时建菜单时它对应哪个字符，文档没写。Wine 在运行时把 `\t` 后面的文字从同一个 x（该菜单的 tab 列）起**左对齐**，把 `\b`（0x08）后面的文字**右对齐**到该列（源码可见，wine `menu.c` L2686-L2716）。据此：`\t` 得到的是"各项从同一起点开始的第二列"，真要右对齐应在字符串里放 0x08（推断，依据 Wine；实机未验证）。**实机（8.1）：这条推断被推翻。** Windows 11 上 `\t` 后面的文字贴右对齐，不是 Wine 那样左对齐；0x08 画出来与 `\t` 逐字节相同。
 
 **分组标题（小灰字）：没有这种项类型。** fType 的全部取值是 MFT_BITMAP、MFT_MENUBARBREAK、MFT_MENUBREAK、MFT_OWNERDRAW、MFT_RADIOCHECK、MFT_RIGHTJUSTIFY、MFT_RIGHTORDER、MFT_SEPARATOR、MFT_STRING，没有标题（文档写明，MENUITEMINFOW 同上）。主题的 MENU 类部件里也没有标题部件（文档写明，https://learn.microsoft.com/en-us/windows/win32/controls/parts-and-states）。能凑合的是一个 MFS_GRAYED 的字符串项：灰、点不了。但主题给 MENU_POPUPITEM 定义了 MPI_DISABLEDHOT 状态（文档写明，Parts and States 同上），也就是灰项在鼠标经过时仍有一种"悬停"外观（推断）。这和样稿里静态的"托盘上画哪一台"标题不完全一样。**实机（8.5）**：灰项被选中时画出与正常项相同的悬停底色，字仍是灰的。
 
@@ -41,11 +41,11 @@ permalink 格式是 `https://github.com/<仓库>/blob/<提交>/<路径>#L<起>-L
 
 ## 2. hbmpItem 放 32bpp 位图
 
-**逐像素 alpha：认，而且必须是预乘的。** 归档的 Vista 文档写明，主题菜单会对同时满足以下条件的位图做 alpha 混合："The bitmap is a 32bpp DIB section." "The DIB section has BI_RGB compression." "The bitmap contains pre-multiplied alpha pixels." "The bitmap is stored in hbmpChecked, hbmpUnchecked, or hbmpItem fields." 并注明 "MFT_BITMAP items do not support PARGB32 bitmaps."（文档写明，归档 https://learn.microsoft.com/en-us/previous-versions/bb757020(v=msdn.10)）。同一篇给了两种转换样例：WIC 转 `GUID_WICPixelFormat32bppPBGRA`，或 BufferedPaint + `DrawIconEx` 后对没有 alpha 的图标补预乘。深色菜单下是否同样认 alpha，没有文档（推断为认，因为走的是同一套 user32 绘制；未验证）。**实机（8.6）：认。**强制深色、强制浅色下，预乘位图的半透明像素都逐像素按 alpha 混合到菜单底色上；自顶向下（高度为负）的 DIB section 行序也照常。
+**逐像素 alpha：认，而且必须是预乘的。** 归档的 Vista 文档写明，主题菜单会对同时满足以下条件的位图做 alpha 混合："The bitmap is a 32bpp DIB section." "The DIB section has BI_RGB compression." "The bitmap contains pre-multiplied alpha pixels." "The bitmap is stored in hbmpChecked, hbmpUnchecked, or hbmpItem fields." 并注明 "MFT_BITMAP items do not support PARGB32 bitmaps."（文档写明，归档 https://learn.microsoft.com/en-us/previous-versions/bb757020(v=msdn.10)）。同一篇给了两种转换样例：WIC 转 `GUID_WICPixelFormat32bppPBGRA`，或 BufferedPaint + `DrawIconEx` 后对没有 alpha 的图标补预乘。深色菜单下是否同样认 alpha，没有文档（推断为认，因为走的是同一套 user32 绘制；未验证）。**实机（8.6）：认。** 强制深色、强制浅色下，预乘位图的半透明像素都逐像素按 alpha 混合到菜单底色上；自顶向下（高度为负）的 DIB section 行序也照常。
 
-**尺寸：会把项撑大（Wine 如此，Windows 推断）。** 文档没写 hbmpItem 的尺寸上限或缩放规则。Wine 里项高取"位图高 + 2"与文字高的较大者，并且全菜单的文字起点右移到"本菜单最宽的那张位图"的宽度（`menu->textOffset = max(...)`）（源码可见，wine `menu.c` L2073-L2090、L2670-L2671）。据此 32×32 和 100×32 都会原样画出，把该项撑高，并把整列文字推右（推断，未实机验证）。文档里唯一的宽位图示例是 MF_BITMAP 纯位图项（宽为 `SM_CXMENUCHECK × 5`），不是"文字 + hbmpItem"的情形（文档写明，"Adding Lines and Graphs to a Menu"，https://learn.microsoft.com/en-us/windows/win32/menurc/using-menus）。**实机（8.4）**：原样画、不缩放，项高与文字列都会被撑开，但规则与 Wine 不同：位图与勾共用一格，文字只右移"最宽那张位图的宽 − 16"。
+**尺寸：会把项撑大（Wine 如此，Windows 推断）。（实机查实，但规则与 Wine 不同，见 8.4）** 文档没写 hbmpItem 的尺寸上限或缩放规则。Wine 里项高取"位图高 + 2"与文字高的较大者，并且全菜单的文字起点右移到"本菜单最宽的那张位图"的宽度（`menu->textOffset = max(...)`）（源码可见，wine `menu.c` L2073-L2090、L2670-L2671）。据此 32×32 和 100×32 都会原样画出，把该项撑高，并把整列文字推右（推断，未实机验证）。文档里唯一的宽位图示例是 MF_BITMAP 纯位图项（宽为 `SM_CXMENUCHECK × 5`），不是"文字 + hbmpItem"的情形（文档写明，"Adding Lines and Graphs to a Menu"，https://learn.microsoft.com/en-us/windows/win32/menurc/using-menus）。**实机（8.4）**：原样画、不缩放，项高与文字列都会被撑开，但规则与 Wine 不同：位图与勾共用一格，文字只右移"最宽那张位图的宽 − 16"。
 
-**圆点与位图并排：不设 MNS_CHECKORBMP 时应当并排（推断）。** MNS_CHECKORBMP 的原文是："The same space is reserved for the check mark and the bitmap. If the check mark is drawn, the bitmap is not. All checkmarks and bitmaps are aligned. Used for menus where some items use checkmarks and some use bitmaps."（文档写明，https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuinfo）。反过来读，不设它时勾（圆点）和位图各占一格。Wine 正是这样：不设时位图画在 `4 + SM_CXMENUCHECK` 处，即勾的右边；设了则画在勾的位置，项被勾选时不画位图（源码可见，wine `menu.c` L2577-L2586、L2637）。主题的 MENU_POPUPCHECKBACKGROUND 另有一个 MCB_BITMAP 状态（文档写明，Parts and States），说明主题渲染对"带位图的勾选项"另有画法，具体效果没有文档（推断）。MFT_RADIOCHECK 只在 hbmpChecked 为 NULL 时才画成圆点（文档写明，MENUITEMINFOW）。**实机（8.3）：这条推断被推翻，不并排。**不设 MNS_CHECKORBMP 时，位图就画在勾那一格里，挂了位图的项勾选后圆点（或勾）根本不画；MCB_BITMAP 那种勾选底框也没看到。
+**圆点与位图并排：不设 MNS_CHECKORBMP 时应当并排（推断）。（实机推翻：不并排，见 8.3）** MNS_CHECKORBMP 的原文是："The same space is reserved for the check mark and the bitmap. If the check mark is drawn, the bitmap is not. All checkmarks and bitmaps are aligned. Used for menus where some items use checkmarks and some use bitmaps."（文档写明，https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-menuinfo）。反过来读，不设它时勾（圆点）和位图各占一格。Wine 正是这样：不设时位图画在 `4 + SM_CXMENUCHECK` 处，即勾的右边；设了则画在勾的位置，项被勾选时不画位图（源码可见，wine `menu.c` L2577-L2586、L2637）。主题的 MENU_POPUPCHECKBACKGROUND 另有一个 MCB_BITMAP 状态（文档写明，Parts and States），说明主题渲染对"带位图的勾选项"另有画法，具体效果没有文档（推断）。MFT_RADIOCHECK 只在 hbmpChecked 为 NULL 时才画成圆点（文档写明，MENUITEMINFOW）。**实机（8.3）：这条推断被推翻，不并排。** 不设 MNS_CHECKORBMP 时，位图就画在勾那一格里，挂了位图的项勾选后圆点（或勾）根本不画；MCB_BITMAP 那种勾选底框也没看到。
 
 **MNS_CHECKORBMP 改变什么：** 就是上面那段原文——勾和位图共用一格、勾了就不画位图、所有勾和位图左对齐。归档 Vista 文档的样例在给菜单加图标时总是设 `MNS_CHECKORBMP` 并清掉 `MNS_NOCHECK`，理由是 "to make the menu look good in the Windows Classic color scheme"（文档写明，bb757020）。样稿最里层"圆点 + 预览小图 + 文字"的布局，要的恰恰是**不设**它。**实机（8.3）**：不设它也并排不了；设了它，当前项用圆点换掉自己的位图，与原文一致。
 
@@ -73,16 +73,16 @@ permalink 格式是 `https://github.com/<仓库>/blob/<提交>/<路径>#L<起>-L
 
 **能否不看用户设置，强制深或强制浅：能（源码可见，第三方文档与实际用法）。** wxWidgets 把 `DarkMode_Always` 映射到 ForceDark，文档写 "force dark mode regardless of the system mode"；把 `DarkMode_Never` 映射到 ForceLight，写 "likewise force light mode"；`DarkMode_Auto` 映射到 AllowDark（wx `interface/wx/app.h` L1422-L1452，`src/msw/darkmode.cpp` L258-L280）。Notepad++ 和 darkmodelib 打开深色时调 `SetPreferredAppMode(ForceDark)`，紧接着 `FlushMenuThemes()`；关闭时回到 `Default`（notepad-plus-plus `DarkMode.cpp` L181-L193、L337-L342；darkmodelib `src/DmlibWinApi.cpp` L251-L270、L459-L460）。System Informer 给这几个值起名 `PreferredAppModeDisabled / DarkOnDark / DarkAlways`，自己用 DarkAlways（systeminformer `phlib/theme.c` L230-L241、L773）。运行中切换模式后要调 `FlushMenuThemes()` 让菜单主题刷新，这是 Notepad++ 和 darkmodelib 的做法（源码可见，同上）。**实机（8.7、8.8）**：强制深、强制浅都压得住应用模式；切完调 `FlushMenuThemes()`，下一次弹出就是新的深浅，不调则不变。高对比度下菜单主题整个关掉（源码可见，wx `src/msw/darkmode.cpp` L689 注释 "Menu theme is turned off in high contrast mode."）。
 
-**AllowDark 时跟哪个设置：大概率是"应用模式"（AppsUseLightTheme），没有直接证实。** 证据都是间接的：
+**AllowDark 时跟哪个设置：大概率是"应用模式"（AppsUseLightTheme），没有直接证实。（实机查实：跟应用模式，见 8.7）** 证据都是间接的：
 
 - uxtheme 里有两个分开的判断函数，132 叫 `ShouldAppsUseDarkMode`，138 叫 `ShouldSystemUseDarkMode`（源码可见，notepad-plus-plus `DarkMode.cpp` L88-L98）。
 - wxWidgets 把 AllowDark 写成 "Follow the global setting."，返回 `ShouldAppsUseDarkMode()`（源码可见，wx `src/msw/darkmode.cpp` L266-L269）。
 - tao 用读注册表 `HKCU\...\Themes\Personalize\AppsUseLightTheme` 来代替 `ShouldAppsUseDarkMode`，并注释该函数 "may return incorrect values on Windows 11"（源码可见，tao `src/platform_impl/windows/dark_mode.rs` L204-L240）。
 - System Informer 把 AllowDark 叫 "DarkOnDark"（源码可见，同上）。
 
-这些都指向"AllowDark 下跟随 `ShouldAppsUseDarkMode` 的结果"；而它对应 AppsUseLightTheme，是按函数名和 tao 的替代做法推出来的（推断）。**实机（8.7）：查实，跟应用模式。**Windows 模式都是深色时，应用模式深色则菜单深、应用模式浅色则菜单浅。
+这些都指向"AllowDark 下跟随 `ShouldAppsUseDarkMode` 的结果"；而它对应 AppsUseLightTheme，是按函数名和 tao 的替代做法推出来的（推断）。**实机（8.7）：查实，跟应用模式。** Windows 模式都是深色时，应用模式深色则菜单深、应用模式浅色则菜单浅。
 
-**AllowDark 时 owner 窗口是否必须 `AllowDarkModeForWindow`：未查实。** win32-darkmode 和 tao 都对窗口调了它（tao `dark_mode.rs` L140）。微软 Q&A 上有人报告只在 WM_NCCREATE 里调 `SetPreferredAppMode(AllowDark)` 就够让弹出菜单跟着变（二手来源，唯一证据：https://learn.microsoft.com/en-us/answers/questions/893697/thrilled-to-have-dwmwa-use-immersive-dark-mode-for）。用 ForceDark 时应当无关（推断）。**实机（8.9）：弹出菜单不需要。**AllowDark + FlushMenuThemes 时不调它，菜单照样跟应用模式变深；调了（本机返回 false）结果不变。
+**AllowDark 时 owner 窗口是否必须 `AllowDarkModeForWindow`：未查实。（实机查实：不必，见 8.9）** win32-darkmode 和 tao 都对窗口调了它（tao `dark_mode.rs` L140）。微软 Q&A 上有人报告只在 WM_NCCREATE 里调 `SetPreferredAppMode(AllowDark)` 就够让弹出菜单跟着变（二手来源，唯一证据：https://learn.microsoft.com/en-us/answers/questions/893697/thrilled-to-have-dwmwa-use-immersive-dark-mode-for）。用 ForceDark 时应当无关（推断）。**实机（8.9）：弹出菜单不需要。** AllowDark + FlushMenuThemes 时不调它，菜单照样跟应用模式变深；调了（本机返回 false）结果不变。
 
 ## 4. owner-draw 菜单项（MFT_OWNERDRAW）
 
@@ -122,24 +122,31 @@ Win11 任务栏自己的右键菜单、系统托盘图标（音量、网络等�
 
 ## 7. 带子菜单的标准项，`\t` 后的文字还显示吗
 
-没有文档提到。Wine 对所有弹出菜单项（不区分是否 MF_POPUP）都画 `\t` 后的文字，起点是本菜单的 tab 列；算宽度时 tab 列排在箭头宽度之前，箭头单独画在最右侧的箭头宽度里（源码可见，wine `menu.c` L2087-L2090、L2645-L2651、L2686-L2716）。所以在 Wine 里它会显示在箭头左边，不重叠。真实 Windows 是否一样：推断会显示，未查实。另要注意 `\t` 后是左对齐的列（见第 1 节），样稿里"当前值紧贴箭头"的右对齐效果要靠 0x08（推断）。**实机（8.2）**：显示，贴右对齐，紧挨箭头；`\t` 本身就贴右，不必用 0x08。
+没有文档提到。Wine 对所有弹出菜单项（不区分是否 MF_POPUP）都画 `\t` 后的文字，起点是本菜单的 tab 列；算宽度时 tab 列排在箭头宽度之前，箭头单独画在最右侧的箭头宽度里（源码可见，wine `menu.c` L2087-L2090、L2645-L2651、L2686-L2716）。所以在 Wine 里它会显示在箭头左边，不重叠。真实 Windows 是否一样：推断会显示，未查实。另要注意 `\t` 后是左对齐的列（见第 1 节；实机推翻，见 8.1），样稿里"当前值紧贴箭头"的右对齐效果要靠 0x08（推断）。**实机（8.2）**：显示，贴右对齐，紧挨箭头；`\t` 本身就贴右，不必用 0x08。
 
 ## 8. 实机验证（2026-09-14）
 
 **环境**：Windows 11 25H2，build 26200.9445（注册表 `ProductName` 写的是 "Windows 10 Pro"，以 build 号为准）；显示缩放 100%（96 DPI）。深浅设置看了两种：本机常态的"Windows 模式深色、应用模式深色"，以及用户手动切过去、看完又切回的"Windows 模式深色、应用模式浅色"（下称混合模式）。**以下结论只对这台机器、这一档缩放成立**：125% 以上的缩放、Windows 10 都没看过。
 
-**原型**：`prototype/native-menu` 分支上的 `examples/menu_proto.rs`（menu-as-designed 票 01，不进 master）。它用普通菜单项（`InsertMenuItemW`，不 owner-draw）建出一级、"托盘上画哪一台"、"图标样式"第二层，以及"画法"与"灰状态"两个最里层。预览由 `juicebar::icon::render` 按 16、32 像素画，电量 57，转成预乘过的 BGRA，放进 32 位、BI_RGB、自顶向下（高度为负）的 DIB section，挂到 `hbmpItem` 上；"灰状态"那一组是 Stale、暂停、取数失败三张并排，间距照设计稿的 max(2, round(S / 6))。弹出前调 `SetPreferredAppMode`（序号 135）设强制深或强制浅，再调 `FlushMenuThemes`（136）。选中与展开子菜单，只对本进程本线程的 `#32768` 菜单窗口发 `MN_SELECTITEM`（0x1E5）、`MN_OPENHIERARCHY`（0x1E3）这两个未公开的菜单窗口消息，没有动鼠标，也没有模拟输入。每一帧截菜单窗口的外接矩形；再用 `MN_GETHMENU` 与 `GetMenuItemRect` 取每一项的矩形，在截图里找到预览位图落在哪，逐像素核半透明像素。
+**原型**：`prototype/native-menu` 分支上的 `examples/menu_proto.rs`（menu-as-designed 票 01，不进 master）。它用普通菜单项（`InsertMenuItemW`，不 owner-draw）建出一级、"托盘上画哪一台"、"图标样式"第二层，以及"画法"与"灰状态"两个最里层。预览由 `juicebar::icon::render` 按 16、32 像素画，电量 57，转成预乘过的 BGRA，放进 32 位、BI_RGB、自顶向下（高度为负）的 DIB section，挂到 `hbmpItem` 上；"灰状态"那一组是 Stale、暂停、取数失败三张并排，间距照设计稿的 max(2, round(S / 6))。弹出前调 `SetPreferredAppMode`（序号 135）设强制深或强制浅，再调 `FlushMenuThemes`（136）。选中与展开子菜单，只对本进程本线程的 `#32768` 菜单窗口发 `MN_SELECTITEM`（0x1E5）、`MN_OPENHIERARCHY`（0x1E3）这两个未公开的菜单窗口消息；只有"键盘选中"那一帧（`dark-keyboard-focus.png`）是对这个线程的菜单窗口投了一个方向键的 `WM_KEYDOWN`。没有动鼠标，也没有 `SendInput` 一类的全局输入。每一帧截菜单窗口的外接矩形；再用 `MN_GETHMENU` 与 `GetMenuItemRect` 取每一项的矩形，在截图里找到预览位图落在哪，逐像素核半透明像素。
 
 **截图**在本文件旁边的 `native-menu-research/` 目录。菜单外面那一圈是原型自己的底板窗口，不是桌面：深色 `#0F2433`、浅色 `#CFE0EE`（设计稿级联菜单的底色），`switch` 场景是灰 `#808080`。
 
 **量出来的外观（100%）**：一行高 22 像素，分隔线 9 像素；没有位图时，文字起点距项左缘 35 像素，勾从 10 像素处起；菜单底色深 `#2C2C2C`、浅 `#F9F9F9`；悬停底色深 `#353535`、浅 `#F0F0F0`；菜单文字是 ClearType 子像素抗锯齿。
+
+**数是怎么来的**：
+
+- 每一项的矩形（项高 22、38，分隔线 9，项宽 276、292、272、324）、每扇菜单窗口的底色采样、预览位图落在项内哪里、半透明像素的最大差：原型每跑一场都写进 `log.txt`。三次运行的日志收在截图目录里：`run-log-dark-apps.txt` 是深色应用下的全部场景，`run-log-mixed.txt` 是混合模式下的 `switch` 与 `shots dark tab 16`，`run-log-bold.txt` 是 review 之后补截的"当前项加粗"。
+- 文字起点（35、51、73、125）与勾的起点（10）：从截图里量。在那一项的行里，从位图右缘往右逐列扫，取第一列与底色差超过 40 的像素。悬停底色是在对应截图的项内左侧取的像素。这两件用的是一次性的 PowerShell 脚本，没有入库。
+- "28 对截图逐字节相同"与几张截图"是同一份内容"：比的是 PNG 文件的 SHA-1。
+- 混合模式：跑之前用 PowerShell 只读 `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`，核过 `SystemUsesLightTheme=0`、`AppsUseLightTheme=1`；用户切回后再核，是 0、0。混合模式下强制深色的截图与深色应用下逐字节相同，光看截图分不出是在哪种模式下截的；靠的是这两次核对，以及 `run-log-mixed.txt` 里 AllowDark、Default 那几步的底色是浅的。
 
 ### 8.1 右列：`\t` 与 0x08 画出来一样，都贴右对齐——用 `\t`
 
 - `名字\t值` 的值**贴右对齐**：同一张菜单里长短不一的值，右缘对齐，不是 Wine 那样从同一个 x 左起（`dark-probe.png` 最后四行；`dark-style-dir-16.png` 第二层的"D 数字+底条 / 粗块 / 满格符号……"）。
 - `名字\x08值`（资源语法 `\a` 编出来的那个字符）与 `\t` 画出来**完全一样**：深浅两种 × 16、32 像素 × 每场 7 帧，共 28 对截图逐字节相同。
 - 所以贴近设计稿（`.acc{margin-left:auto}` 那种贴右）的，就是普通项自带的这一列。两种一样，用文档写着的 `\t`。
-- **一项只有一个右列。**一个字符串里放两个分隔符（`\t…\t`、`\x08…\x08`、`\t…\x08`），中间那一段不画，最后一段也不再贴右（`dark-probe.png` 第 2–4 行）。设备行"名字 ｜ 中段 ｜ 右列"的中段因此只能接在名字后面、写进左边那段文字里，中段不成列（`dark-style-dir-16.png` 一级的"Dragonfly 3 Master+  来自 Dongle24G，0 秒前……57%"）。
+- **一项只有一个右列。** 一个字符串里放两个分隔符（`\t…\t`、`\x08…\x08`、`\t…\x08`），中间那一段不画，最后一段也不再贴右（`dark-probe.png` 第 2–4 行）。设备行"名字 ｜ 中段 ｜ 右列"的中段因此只能接在名字后面、写进左边那段文字里，中段不成列（`dark-style-dir-16.png` 一级的"Dragonfly 3 Master+  来自 Dongle24G，0 秒前……57%"）。
 - 换行：`\n`、`\r\n` 都不换行，也不画出来，两行字接成一行，项高不变（`dark-probe.png` 第 5、6 行）。
 
 ### 8.2 带子菜单的项：右列照样显示，紧挨 ›
@@ -150,9 +157,9 @@ Win11 任务栏自己的右键菜单、系统托盘图标（音量、网络等�
 
 - 不设 `MNS_CHECKORBMP` 时，**预览位图就画在勾那一格里**（左上角在项内 (6, 3)），勾选的项**不画圆点**；不带 `MFT_RADIOCHECK` 的勾同样不画。深浅一样：`dark-style-dir-16.png`、`light-style-dir-16.png` 里当前值"D 数字+底条"前面没有圆点，`dark-style-gray-16.png` 里的"灰数字与灰符号两种"也没有。位图透明处露出来的是纯底色，圆点不是被压在位图下面；主题 MCB_BITMAP 那种勾选底框也没看到。
 - 同一张菜单里有的项有位图、有的没有（`dark-probe-zoom.png`，放大 4 倍）：位图那一格的宽取最宽的那张，窄的位图贴右；没有位图的项，圆点画在同一格里，与窄位图同一个中心。勾与位图始终共用一格，有位图就不画勾。
-- 设了 `MNS_CHECKORBMP`：当前项画圆点、不画它自己的预览，其余项照画预览，位置不变（`dark-checkorbmp-dir.png`）。这就是文档那句 "If the check mark is drawn, the bitmap is not"。
-- `MFS_DEFAULT`（加粗）与位图可以同时有（`dark-probe-zoom.png` 末行）。
-- **对设计稿与实现的含义**：spec「画法」一节"不设那个菜单样式，好让圆点与预览并排（原型确认）"，与设计稿最里一层的"圆点 + 预览 + 文字"，**普通项画不出来**。普通项里画得出的"标出当前选项"有三种：①设 `MNS_CHECKORBMP`，当前项用圆点换掉自己的预览（实机，有截图）；②不画圆点，当前项加粗（`MFS_DEFAULT`，一张菜单只能有一项；加粗与位图同在一项是实机看过的，"当前项加粗"的整张菜单没截）；③把圆点画进预览位图自己的左边一格（位图逐像素照画是实机查实的，所以画得出；这一种原型没截，属推断）。选哪种归设计稿（menu-as-designed 票 06）与用户审稿，见 parking lot Q210；预览那一边（`resident-tray` 票 07）照定下来的那一种做。
+- 设了 `MNS_CHECKORBMP`：当前项画圆点、不画它自己的预览，其余项照画预览，位置不变（`dark-checkorbmp-dir.png`）。"灰状态"那种宽的一格里，圆点画在这一格的右端、紧挨文字，左边空着（`dark-checkorbmp-gray.png`）。这就是文档那句 "If the check mark is drawn, the bitmap is not"。
+- `MFS_DEFAULT`（加粗）与位图可以同时有（`dark-probe-zoom.png` 末行）。给最里层的当前项加 `MFS_DEFAULT`、照旧设 `MFS_CHECKED`：当前项整行加粗，连右列的"默认"一起；其余项与每一张预览不变，预览的半透明像素最大差仍是 0；深浅一样（`dark-bold-dir-16.png`、`light-bold-gray-16.png`）。
+- **对设计稿与实现的含义**：spec「画法」一节"不设那个菜单样式，好让圆点与预览并排（原型确认）"，与设计稿最里一层的"圆点 + 预览 + 文字"，**普通项画不出来**。普通项里画得出的"标出当前选项"有三种：①设 `MNS_CHECKORBMP`，当前项用圆点换掉自己的预览（实机，单张与三张并排两种宽度都截了）；②不画圆点，当前项加粗（`MFS_DEFAULT`，一张菜单只能有一项；实机，深浅各截了一张）；③把圆点画进预览位图自己的左边一格（位图逐像素照画是实机查实的，所以画得出；这一种原型没截，属推断）。选哪种归设计稿（menu-as-designed 票 06）与用户审稿，见 parking lot Q210；预览那一边（`resident-tray` 票 07）照定下来的那一种做。
 
 ### 8.4 32 像素的预览、三张并排的宽预览：项撑高，那一张菜单的文字整列右移
 
@@ -205,7 +212,7 @@ Win11 任务栏自己的右键菜单、系统托盘图标（音量、网络等�
 
 ## 查不实的
 
-下面这些原先没拿到一手证据，或只有 Wine 与二手来源。2026-09-14 的原型在实机上（Windows 11 25H2 build 26200.9445，100% 缩放）验证了其中十条，结论写在各条里，详见第 8 节；没标"实机"的仍未查实。
+下面这些原先没拿到一手证据，或只有 Wine 与二手来源。2026-09-14 的原型在实机上（Windows 11 25H2 build 26200.9445，100% 缩放）验证了其中十条（第 11 条只看到选中态），结论写在各条里，详见第 8 节；没标"实机"的仍未查实。
 
 1. 标准项字符串里的换行符怎样显示。**实机查实（8.1）**：`\n`、`\r\n` 都不换行，也不画出来，两行字接成一行。
 2. 运行时字符串里的 0x08 在 Win10/11 主题菜单里是否右对齐。**实机查实（8.1，只看了 Win11）**：右对齐，与 `\t` 画出来逐字节相同。
@@ -217,7 +224,7 @@ Win11 任务栏自己的右键菜单、系统托盘图标（音量、网络等�
 8. AllowDark 时 owner 窗口是否必须调 `AllowDarkModeForWindow`。**实机查实（8.9）**：弹出菜单不需要。
 9. Win11 任务栏右键菜单、系统托盘图标右键菜单跟哪个设置。（仍未查实：原型只看得见自己进程的菜单。）
 10. 带子菜单的项上 `\t` 后文字是否显示、是否紧挨箭头。**实机查实（8.2）**：显示，贴右，紧挨箭头。
-11. MFS_GRAYED 的项在悬停时有没有高亮。**实机查实（8.5）**：有，与正常项同一种悬停底色，字仍是灰的（用 `MN_SELECTITEM` 选中，没用真鼠标）。
+11. MFS_GRAYED 的项在悬停时有没有高亮。**实机（选中态）+ 推断（鼠标悬停）（8.5）**：用 `MN_SELECTITEM` 选中时有高亮，与正常项同一种悬停底色，字仍是灰的；真鼠标停上去是不是同一种画法，推断是，没看过（parking lot Q211）。
 12. Win10 深色下 owner-draw 菜单的边框能否改色。Win10 没有 `DWMWA_BORDER_COLOR`；有一条二手回答说边框来自菜单窗口（类名 `#32768`）的 `WS_EX_DLGMODALFRAME`，可去掉（唯一证据，https://learn.microsoft.com/en-us/answers/questions/649537/how-to-change-color-or-remove-pop-menu-border-in-m）。（仍未查实：本机是 Win11，ADR-0006 也不做 owner-draw。）
 13. owner-draw 对整张菜单的影响范围。归档 Vista 文档一处说 owner-draw 的菜单 "will not be visually styled"，另一处又说混用时 "users will see a mix of the standard and owner-draw rendering methods"（都在 bb757020）。Win10/11 上它对背景、边框的具体影响，除了 wx 关于 Win11 圆角的那条注释，没找到一手描述。（仍未查实：ADR-0006 不做 owner-draw，原型没碰。）
 14. 以上所有 uxtheme 序号函数都是未公开的，微软可以在任何一次更新里改掉。Notepad++ 按 build 号白名单启用正是为此。2026-09-14 在 build 26200 上实机看过：133、135、136 三个序号都还在，行为照第 3 节的表。
