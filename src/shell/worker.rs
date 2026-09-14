@@ -22,18 +22,19 @@ use crate::endpoints::SystemEndpoints;
 use crate::readout::{self, NoReading};
 use crate::round::{InHand, PauseCheck};
 use crate::state::LastKnown;
-use crate::tray::Fetched;
 use crate::tray::cadence::FetchRequest;
 use crate::tray::round::SaveState;
+use crate::tray::{Fetched, warnings};
 use crate::vendor_hub::SystemProcesses;
 
 /// 取数线程交回来的东西。
 pub(super) enum Report {
     /// 一次取数有了结果，装好箱，原样递进内核（[`crate::tray::Event::Fetched`]）。
     Fetched(Box<Fetched>),
-    /// 写了一次状态文件：写成了，或者写不进的完整原因。原样递进内核（[`crate::tray::warnings::Event::SaveState`]）
-    /// ——写成了也递：挂着的那条告警要等某一次写成了才摘得掉，而写没写成只有这里知道。
-    SaveState(Result<(), String>),
+    /// 告警那一块的事，原样递进内核（[`crate::tray::Event::Warnings`]）。今天只有写了一次状态文件的结果
+    /// （[`warnings::Event::StateSaved`]）——写成了也递：挂着的那条告警要等某一次写成了才摘得掉，而写没写成
+    /// 只有这里知道。
+    Warnings(warnings::Event),
 }
 
 /// 排给取数线程的活。
@@ -135,7 +136,7 @@ fn run(
                     last_known.remember_primary(id);
                 }
                 let outcome = last_known.save(state_path).map_err(|e| format!("{e:#}"));
-                tell(Report::SaveState(outcome));
+                tell(Report::Warnings(warnings::Event::StateSaved(outcome)));
             }
         }
     }

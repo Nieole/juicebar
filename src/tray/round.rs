@@ -15,7 +15,6 @@ use crate::sources::level::Level;
 use crate::staleness::Freshness;
 use crate::state::{LastKnown, Provenance};
 
-use super::warnings::Warnings;
 use super::{Fetched, Look, hover};
 
 /// 一轮这一块的动作。
@@ -105,14 +104,15 @@ impl Rounds {
 
     /// 某台的一次取数有了结果：新的一轮。
     ///
-    /// 这一轮带着此刻还挂着的全部告警（`warnings`），不只是这一次取数问进程时的那一条（parking lot Q162）。
+    /// 这一轮带着此刻还挂着的全部告警（`warnings`，路由那一层交来的 `super::warnings::Warnings::hanging`），
+    /// 不只是这一次取数问进程时的那一条（parking lot Q162）。
     ///
     /// 状态文件只在有新东西要记的时候存：这一次取数真读到了一份（它已经记进取数线程手上那一份状态），
     /// 或者这一轮选出的 Primary Device 换了人。两样都没有就一个字节都不写。
     pub fn on_fetched(
         &mut self,
         config: &Config,
-        warnings: &Warnings,
+        warnings: Vec<Warning>,
         fetched: Fetched,
         out: &mut Vec<super::Action>,
     ) {
@@ -122,7 +122,7 @@ impl Rounds {
             InHand::Reading(row) if row.provenance == Provenance::JustRead
         );
         self.in_hand.insert(fetched.device_id, fetched.in_hand);
-        let selected = self.compose(config, fetched.at, warnings.hanging(), out);
+        let selected = self.compose(config, fetched.at, warnings, out);
         let changed = selected.is_some() && selected != self.remembered;
         if changed {
             self.remembered.clone_from(&selected);

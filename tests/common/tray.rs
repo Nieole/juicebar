@@ -214,10 +214,10 @@ pub fn fell_back(device: &str, at: Timestamp, last_known: InHand, reason: &str) 
 
 /// 外壳照内核的吩咐写了一次状态文件（[`round::Action::SaveState`]），写成了。
 pub fn state_saved() -> Event {
-    Event::Warnings(warnings::Event::SaveState(Ok(())))
+    Event::Warnings(warnings::Event::StateSaved(Ok(())))
 }
 
 /// 外壳照内核的吩咐写了一次状态文件，写不进，完整原因是 `reason`。
 pub fn state_not_saved(reason: &str) -> Event {
-    Event::Warnings(warnings::Event::SaveState(Err(reason.to_string())))
+    Event::Warnings(warnings::Event::StateSaved(Err(reason.to_string())))
 }

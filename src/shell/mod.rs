@@ -37,7 +37,7 @@ use crate::cli::{default_config_path, state_path_beside_config};
 use crate::clock::{Clock, SystemClock};
 use crate::config::Config;
 use crate::state::LastKnown;
-use crate::tray::{Action, Event, Tray, warnings};
+use crate::tray::{Action, Event, Tray};
 
 /// 托盘图标的回调消息：鼠标在图标上做了什么，在 `lParam` 里。
 const WM_TRAY: u32 = WM_APP + 1;
@@ -191,9 +191,7 @@ fn take_reports() {
     while let Some(report) = with_app(|app| app.worker.next_report()).flatten() {
         match report {
             worker::Report::Fetched(fetched) => feed(Event::Fetched(fetched)),
-            worker::Report::SaveState(outcome) => {
-                feed(Event::Warnings(warnings::Event::SaveState(outcome)));
-            }
+            worker::Report::Warnings(event) => feed(Event::Warnings(event)),
         }
     }
 }

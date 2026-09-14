@@ -23,7 +23,8 @@
 //! 这一层（[`Event`]、[`Action`]、[`Tray::handle`]）只做路由：每个关注点在这里占一格，往自己那一格里
 //! 加事件、加动作、加状态，只改自己的那两个文件（内核一个、外壳一个）。三样是大家共用的，所以住在
 //! 这里：时钟（[`Event::Tick`]）与一次取数的结果（[`Event::Fetched`]）谁关心谁看，日志
-//! （[`Action::Log`]）谁都能写。
+//! （[`Action::Log`]）谁都能写。此刻还挂着的告警也是几块共用的（「一轮」合成时带上，票 09 的配置那一块往里
+//! 挂），但它有自己挂与摘的规矩，所以住自己的一格（[`warnings`]），由这一层交给要读它的那一格。
 //!
 //! **为什么非这样不可**：票 05（各走各的节奏）、06（菜单：设备行与切换 Primary Device）、08（低电通知）、
 //! 09（配置重读与首次运行）会同时落在这一层上。写成一个大 `match`、一个大枚举，四张票就会在同几行上
@@ -104,7 +105,7 @@ impl Tray {
                 // 告警在「一轮」之前：这一次取数问进程的结果，要进它开始的这一轮。
                 self.warnings.on_fetched(&fetched, &mut out);
                 self.round
-                    .on_fetched(&self.config, &self.warnings, fetched, &mut out);
+                    .on_fetched(&self.config, self.warnings.hanging(), fetched, &mut out);
             }
             Event::Menu(command) => self.on_menu(command, &mut out),
             Event::Config(event) => self.on_config(event, &mut out),

@@ -7,14 +7,15 @@
 //! | 那件事 | 在哪儿办 | 结果怎么到这里 |
 //! |---|---|---|
 //! | 问本机在跑哪些进程 | 取数线程，每次取数之前 | [`Fetched::warning`]，经 [`Warnings::on_fetched`] |
-//! | 把读数写进状态文件 | 取数线程，照 [`SaveState`] 写 | [`Event::SaveState`]，经 [`Warnings::on_event`] |
+//! | 把读数写进状态文件 | 取数线程，照 [`SaveState`] 写 | [`Event::StateSaved`]，经 [`Warnings::on_event`] |
 //!
 //! **挂着哪几条、按什么次序，只在这里定**：这一轮的结果（[`Round::warnings`]）收的、菜单顶上画的（票 06），
 //! 都是 [`Warnings::hanging`]。
 //!
-//! **加一种告警只动这一处**（票 09 的"配置读不了"）：[`Matter`] 多一个变体，`matter_of` 多一支（编译器会
-//! 指过来），措辞照旧加在 [`Warning`] 上；然后在办那件事的地方，没办成调 [`Warnings::raise`]、办成了调
-//! [`Warnings::clear`]——票 09 就是 `on_config` 里读坏、读好那两支。
+//! **加一种告警，挂告警的这一处只多一种**（票 09 的"配置读不了"）：`Matter` 多一个变体、`matter_of` 多一支
+//! （编译器会指过来）。措辞不在这里，照旧加在 [`Warning`] 上（多一个变体连同它那一句）；然后在办那件事的
+//! 地方，没办成调 `Warnings::raise`、办成了调 `Warnings::clear`——票 09 就是 `on_config` 里读坏、读好那两支。
+//! 两个入口不对称是有意的：没办成带着原因（一条 [`Warning`]），办成了除了"是哪件事"什么都不必说。
 //!
 //! [`SaveState`]: crate::tray::round::Action::SaveState
 //! [`Round::warnings`]: crate::round::Round::warnings
@@ -46,7 +47,7 @@ pub enum Event {
     /// **写成了也要交**：不然挂着的那一条永远摘不掉（parking lot Q220）。
     ///
     /// [`SaveState`]: crate::tray::round::Action::SaveState
-    SaveState(Result<(), String>),
+    StateSaved(Result<(), String>),
 }
 
 /// 此刻还挂着的告警，一件事一格。
@@ -73,12 +74,12 @@ impl Warnings {
     /// 告警这一块自己收的事件。
     pub fn on_event(&mut self, event: Event, out: &mut Vec<Action>) {
         match event {
-            Event::SaveState(Err(reason)) => self.raise(Warning::StateNotSaved(reason), out),
-            Event::SaveState(Ok(())) => self.clear(Matter::StateFile),
+            Event::StateSaved(Err(reason)) => self.raise(Warning::StateNotSaved(reason), out),
+            Event::StateSaved(Ok(())) => self.clear(Matter::StateFile),
         }
     }
 
-    /// 此刻还挂着的全部告警，按 [`Matter`] 的次序。
+    /// 此刻还挂着的全部告警，按 `Matter` 声明的次序。
     pub fn hanging(&self) -> Vec<Warning> {
         self.hanging.values().cloned().collect()
     }
@@ -107,7 +108,7 @@ fn matter_of(warning: &Warning) -> Matter {
 }
 
 impl Tray {
-    /// 此刻还挂着的告警，按 [`Matter`] 的次序。
+    /// 此刻还挂着的告警，按 `Matter` 声明的次序。
     ///
     /// 这一轮的结果（[`Round::warnings`]）带的就是这几条；菜单顶上那几行（票 06）画的也是它们。
     ///
