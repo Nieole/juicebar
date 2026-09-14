@@ -8,12 +8,11 @@ mod common;
 
 use common::NOW;
 use common::tray::{
-    MOUSE_AND_KEYBOARD, failed, feed, fell_back, fetched, fetched_with_warning, just_read,
-    last_known_value, later, reading, start, start_with_look,
+    MOUSE_AND_KEYBOARD, failed, feed, fell_back, fetched, just_read, last_known_value, later,
+    reading, start, start_with_look,
 };
 use juicebar::endpoints::EndpointKind;
 use juicebar::icon::{IconSettings, IconSize, IconState, Theme};
-use juicebar::round::Warning;
 use juicebar::state::LastKnown;
 use juicebar::tray::round::{IconRequest, SaveState};
 use juicebar::tray::{Event, Look};
@@ -216,29 +215,6 @@ fn a_fetch_that_falls_back_to_the_last_known_value_still_logs_why_it_did_not_rea
         [
             "Dragonfly 3 Master+ 取数失败，退到上次已知值：没有可信的读数 —— Dongle24G: 读超时（3000ms 内没有回包）"
         ]
-    );
-}
-
-/// 取数之前问本机进程、没问出来：那一次取数照常去试（按"没在跑"走），那一条告警跟着它开始的这一轮，
-/// 写进日志。
-#[test]
-fn the_warning_raised_before_a_fetch_is_logged_with_the_round_it_starts() {
-    let (mut tray, mut screen) = start(MOUSE_AND_KEYBOARD, &LastKnown::default(), NOW);
-
-    feed(
-        &mut tray,
-        &mut screen,
-        fetched_with_warning(
-            "dragonfly3",
-            NOW,
-            just_read(EndpointKind::Dongle24G, 62, NOW),
-            Warning::ProcessesUnknown("假接缝这一次故意枚举不动".to_string()),
-        ),
-    );
-
-    assert_eq!(
-        screen.logs,
-        ["认不出本机在跑哪些进程，这一轮不暂停 —— 假接缝这一次故意枚举不动"]
     );
 }
 

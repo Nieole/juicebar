@@ -114,8 +114,9 @@ pub enum Warning {
     ProcessesUnknown(String),
     /// 这一轮的读数写不进状态文件：丢的是下次启动时的上次已知值，不是这一轮的结果。
     ///
-    /// **这一条不经过 [`Round`]**：写盘在这一轮合成之后，而这个纯函数碰不到磁盘。它由写盘的
-    /// 那一方造出来（今天是 `cli::status::run`），与上面那一条同一种东西，说法也在这里定。
+    /// **它由写盘的那一方造出来**：写盘在这一轮合成之后，而这个纯函数碰不到磁盘。命令行里它不经过
+    /// [`Round`]，写完盘才印（`cli::status::run`）；托盘里外壳写完盘把结果交给内核，这一条挂在之后的
+    /// 每一轮上，直到某一次写成（`crate::tray::warnings`）。与上面那一条同一种东西，说法也在这里定。
     StateNotSaved(String),
 }
 
@@ -142,7 +143,7 @@ pub struct Round<'a> {
     /// Primary Device 是谁、怎么选出来的：钉死（`Pinned`）、自动（`Lowest`）、保持上次的选择
     /// （`HeldOver`），或者选不出来（`PinnedNotFound` / `Undecided`）。规则在 `crate::primary`。
     pub primary: Selection<'a>,
-    /// 这一轮的告警。
+    /// 这一轮的告警：此刻还挂着的全部。托盘里一条挂到那件事下一次办成为止（`crate::tray::warnings`）。
     pub warnings: Vec<Warning>,
 }
 
@@ -155,8 +156,8 @@ impl<'a> Round<'a> {
     /// [`DeviceState::assess`] 加 [`Self::compose`]。
     ///
     /// `previous_primary` 是上一轮按规则选出的那台的 id（状态文件里的 `last_primary`），`None` =
-    /// 没有上一轮。`warnings` 是这一轮之前就有了的告警（今天只有 [`PauseCheck::warning`]），原样
-    /// 收进这一轮——几次取数各问过几次本机、该带哪几条，是调用方的事。
+    /// 没有上一轮。`warnings` 是此刻还挂着的告警，原样收进这一轮——该带哪几条是调用方的事：命令行带
+    /// 它那一次的 [`PauseCheck::warning`]，托盘带挂到那件事下一次办成为止的全部（`crate::tray::warnings`）。
     pub fn assess(
         general: &'a General,
         devices: impl IntoIterator<Item = (&'a Device, &'a InHand)>,

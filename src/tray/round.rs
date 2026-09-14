@@ -104,16 +104,24 @@ impl Rounds {
 
     /// 某台的一次取数有了结果：新的一轮。
     ///
+    /// 这一轮带着此刻还挂着的全部告警（`warnings`，路由那一层交来的 `super::warnings::Warnings::hanging`），
+    /// 不只是这一次取数问进程时的那一条（parking lot Q162）。
+    ///
     /// 状态文件只在有新东西要记的时候存：这一次取数真读到了一份（它已经记进取数线程手上那一份状态），
     /// 或者这一轮选出的 Primary Device 换了人。两样都没有就一个字节都不写。
-    pub fn on_fetched(&mut self, config: &Config, fetched: Fetched, out: &mut Vec<super::Action>) {
+    pub fn on_fetched(
+        &mut self,
+        config: &Config,
+        warnings: Vec<Warning>,
+        fetched: Fetched,
+        out: &mut Vec<super::Action>,
+    ) {
         log_failure(config, &fetched, out);
         let just_read = matches!(
             &fetched.in_hand,
             InHand::Reading(row) if row.provenance == Provenance::JustRead
         );
         self.in_hand.insert(fetched.device_id, fetched.in_hand);
-        let warnings = fetched.warning.into_iter().collect();
         let selected = self.compose(config, fetched.at, warnings, out);
         let changed = selected.is_some() && selected != self.remembered;
         if changed {
@@ -151,7 +159,9 @@ impl Rounds {
     /// 合成这一轮、画出来，交出这一轮选出的 Primary Device。
     ///
     /// 全部 Device 在同一个"当下"判（[`Round::assess`]）：一轮只看各台当下手上有的东西，一份几分钟前
-    /// 取到的读数此刻就是几分钟前的。上一轮是谁取自 [`Self::remembered`]；这一轮的告警写进日志。
+    /// 取到的读数此刻就是几分钟前的。上一轮是谁取自 [`Self::remembered`]。`warnings` 是此刻还挂着的全部；
+    /// 它们在挂上的那一刻就写过日志了（`super::warnings`），这里不再写——挂着的每一轮都记一行，只会把真的
+    /// 发生淹掉。
     fn compose(
         &mut self,
         config: &Config,
@@ -171,9 +181,6 @@ impl Rounds {
             warnings,
             now,
         );
-        for warning in &round.warnings {
-            out.push(super::Action::Log(warning.to_string()));
-        }
         let icon = self.icon_for(round.primary_state());
         let tooltip = hover::text(&round);
         let selected = round.primary.primary_id().map(str::to_owned);
