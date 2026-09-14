@@ -3,7 +3,7 @@
 use anyhow::{Result, anyhow, bail};
 
 use crate::sources::level::require_plausible;
-use crate::sources::{Driver, Reading, ReportKind, Transport, require_frame_len};
+use crate::sources::{BadFrame, Driver, Reading, ReportKind, Transport, require_frame_len};
 
 /// VGN 鼠标这一族的驱动。配置里写 `driver = "vgn_mouse"` 取到的就是它。
 pub struct VgnMouse;
@@ -40,7 +40,9 @@ const CMD_BATTERY_LEVEL: u8 = 4;
 pub fn read_battery(transport: &dyn Transport) -> Result<Reading> {
     let request = battery_request(transport.report_id());
     let response = transport.exchange(&request)?;
-    parse_battery(&response, transport.report_id())
+    // 走到这里设备已经答了话：解析那一步不认这一帧，就是读取异常，不是没读到。
+    let reading = parse_battery(&response, transport.report_id()).map_err(BadFrame)?;
+    Ok(reading)
 }
 
 /// 拼一帧 cmd 4：命令码在 `[0]`，不带参数所以中间全零，校验和落在末字节。

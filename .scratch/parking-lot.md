@@ -806,6 +806,64 @@ brief 里点一句）。
 **推荐**：交给票 13——开机自启是让它变常见的那张票，手工验收"勾上开机自启、重启后图标出现"时顺手看一眼低电通知。改法关在
 `src/shell/icon.rs`（可能加 `src/shell/mod.rs` 里 `TaskbarCreated` 那一支的一行）。归票 13。
 
+### Q230 —— 来路装在 `anyhow::Error` 里面、按类型取回来，没有写进变体与驱动的签名
+
+**From:** menu-as-designed 票 04（取数失败交出来路，短原因有了）
+
+**取的路**：`NoReading::Failed(anyhow::Error)` 形状不变。取数那一层造的那个错误是私有的 `Failure { cause, reason }`，
+`failure_cause()` 靠 `downcast_ref` 取回来；坏帧那一侧同样，驱动与 HID Transport 把"答了话、帧不可采信"的错包成
+`sources::BadFrame`，取数那一层 `downcast_ref` 认它。`Driver::read_battery`、`Transport::exchange` 照旧返回
+`anyhow::Result`。认的是类型，不是字符串。没包 `BadFrame` 的错算失联，别处造的 `Failed` 也算失联（Q231）。
+
+**另一条路**：把分类写到签名上：`Failed { cause, reason }`，外加驱动与 Transport 返回一个"没答话 / 坏帧"两支的错误枚举，
+编译器逼每一处造取数失败、每一个坏帧出口都说出来路。站得住：今天漏包一处 `BadFrame` 不会红，只会让那种坏帧在菜单上
+说成失联；换成类型就漏不了。
+
+**推荐**：维持，归 `/settle`。取这条路是因为 brief 让本票不碰 `src/round.rs`、`src/tray/`、`src/shell/`，而那几处按
+`Failed(_)` 匹配、外壳还自己造一个；包在解析那一步外面也让往解析里加的校验自动算上。翻案面：`src/sources/` 的两个
+trait 与两个驱动、`tests/common` 的假 Transport、`src/readout.rs`，外加托盘内核两处匹配、外壳一处构造、
+`tests/common/tray.rs` 两个构造器——后面这几处要等 mad-05 合进去再动。
+
+### Q231 —— 外壳"枚举不了本机"那一处造的取数失败，短原因说成失联
+
+**From:** menu-as-designed 票 04（取数失败交出来路，短原因有了）
+
+**取的路**：不经 `readout::read` 造的 `Failed` 说不出来路，按失联算，菜单上是"失联（没插？没配对？没开机？）"。生产
+代码里今天只有 `src/shell/worker.rs` 那一处（`SystemEndpoints::enumerate` 失败），而且只在退不到上次已知值时才上
+菜单。用例 `a_failure_made_outside_the_readout_counts_as_unreachable` 钉着这个缺省。
+
+**另一条路**：取数那一层交一个公开的构造器，外壳改用它，这一种在菜单上说一句不指向插线配对的话。站得住：枚举不了本机
+是 Win32 那一头出了事，插线配对修不好它，那三个问句指错了方向。
+
+**推荐**：维持缺省，归 rt-06（它排设备行时一起看要不要分）与 `/settle`。要分，是外壳一行、取数那一层一个构造器。
+`CONTEXT.md`「取数失败」只有三种来路，所以另说一句之前先定这一种归哪一种，还是给那个词条添第四种。
+
+### Q232 —— 暂停那一句短原因"已暂停（X 正在运行）"与悬停提示、命令行各写一遍
+
+**From:** menu-as-designed 票 04（取数失败交出来路，短原因有了）
+
+**取的路**：`NoReading::short_reason` 自己写一遍 `format!("已暂停（{} 正在运行）", hub.process())`，与 `src/tray/hover.rs`、
+`src/cli/status.rs`（前面多两个空格）里说同一件事的那半句逐字相同。spec「设备行」要"说同一件事时用同一套说法"：
+说法相同做到了，只在一处定没做到。
+
+**另一条路**：把那半句收成一处（譬如 `VendorHub` 上一个方法），三处都来问它。站得住：三份抄本迟早漂开。本票不碰
+`src/tray/`（mad-05 在改），只收两处不算收。
+
+**推荐**：交给 rt-06。它把短原因接进菜单时本来就在悬停提示旁边，三处一起收成一处：一个方法、三处调用，输出一个字不变。
+归 rt-06。
+
+### Q233 —— `DeviceState::reason()` 的文档与悬停提示的注释仍说"短原因归菜单那一侧定（Q152）"
+
+**From:** menu-as-designed 票 04（取数失败交出来路，短原因有了）
+
+**取的路**：没改。`src/round.rs` 的 `reason()` 文档写着"交的是那个值本身，不是一句另写的短话……菜单上要多短，由排菜单
+的那一侧定（parking lot Q152）"，`src/tray/hover.rs` 那条注释同一个意思。本票之后短句定在取数那一层
+（`NoReading::short_reason`），那两句不再成立。brief 让本票不碰这两个文件。
+
+**另一条路**：本票顺手改这两句文档。站得住：只改文档，不改行为。但 mad-05 正在改这两个文件，撞上了要合。
+
+**推荐**：交给 rt-06，它从 `reason()` 拿 `NoReading` 问短原因时，把这两句改成指向 `NoReading::short_reason`。归 rt-06。
+
 ## Settled
 
 <!-- 一条记录一行：编号、它本来的那一句话、分到哪一道、去了哪儿。正文在 git 里，每一趟的收口 commit 写在那一趟的小节里。 -->

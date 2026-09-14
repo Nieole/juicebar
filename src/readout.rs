@@ -17,7 +17,7 @@ use anyhow::{Result, anyhow};
 use crate::clock::Timestamp;
 use crate::config::{Device, General};
 use crate::endpoints::{EndpointKind, EndpointReading, Endpoints};
-use crate::sources::{Reading, Transport, driver_for};
+use crate::sources::{BadFrame, Reading, Transport, driver_for};
 use crate::state::{LastKnown, Provenance};
 use crate::vendor_hub::VendorHub;
 
@@ -28,7 +28,8 @@ use crate::vendor_hub::VendorHub;
 /// `Wired` 直接从枚举里消失（瞬时不在场而不是一次三秒的超时），降级几乎不要钱。
 /// 在场的 Endpoint 全都交不出一份可信的读数，才算[取数失败][NoReading::Failed]——**答了坏帧
 /// 也算**（那是读取异常而不是失联：设备答了话，只是答的那一帧不可信），所以那一支的措辞不说
-/// "都没读到"，见 [`lost_reason`]。
+/// "都没读到"，见 [`failure_reason`]。有没有哪一条答了坏帧（[`BadFrame`]）在试的时候记下，
+/// 取数失败带着它是哪一种来路交出去（[`FailureCause`]）。
 ///
 /// **让开的那几条不在"试过"之列**：厂商上位机在跑时它们压根没被打开，那是[暂停][NoReading::Paused]
 /// 而不是取数失败，两者对用户是两句不同的话（[`NoReading`] 上写了理由）。
@@ -57,6 +58,7 @@ pub fn read(
 ) -> Result<EndpointReading, NoReading> {
     let present = endpoints.present(device);
     let mut failures = Vec::new();
+    let mut answered_a_bad_frame = false;
     let yielded = yielded_to(paused_by, &present);
 
     for kind in EndpointKind::PRIORITY
@@ -86,7 +88,11 @@ pub fn read(
         match attempt {
             Ok(reading) => return Ok(reading),
             // 试过就记下原因，接着试下一条。全都失败时这些原因合起来就是取数失败的解释。
-            Err(e) => failures.push(format!("{kind}: {e:#}")),
+            Err(e) => {
+                // 认的是类型，不是那句话里有没有"读取异常"几个字（`docs/adr/0004`）。
+                answered_a_bad_frame |= e.downcast_ref::<BadFrame>().is_some();
+                failures.push(format!("{kind}: {e:#}"));
+            }
         }
     }
 
@@ -103,7 +109,11 @@ pub fn read(
             failures,
         });
     }
-    Err(NoReading::Failed(lost_reason(device, &failures)))
+    Err(NoReading::Failed(failure_reason(
+        device,
+        &failures,
+        answered_a_bad_frame,
+    )))
 }
 
 /// 这一次取数里这个 Device 让开的那几条 Endpoint：在场、且撞见的那个上位机会跟它抢的那些。
@@ -145,11 +155,13 @@ pub enum NoReading {
     /// **名字不说"失联"**：失联只是它的来路之一（`CONTEXT.md`「取数失败」）。"都试过了"里
     /// 也包括**答了坏帧**那一种，那是读取异常——设备答了话，拿失联说它是假话，所以那一支的
     /// 措辞也不说"都没读到"。几种来路对这一层是同一个下场（手上没有可印的数），所以同住一个
-    /// 变体；要用户做的事各不相同，那交给里面那句话去分说。
+    /// 变体；要用户做的事各不相同，所以**来路跟着里面那个错误走**：[`NoReading::failure_cause`]
+    /// 取得回来，菜单那一行按它说短原因（[`NoReading::short_reason`]）。
     ///
-    /// 里面那句话由 [`lost_reason`] 给出，**开头那个标记也在里面**：`Display` 对这一支一个
-    /// 字都不加，往这里塞一个自己攒的 `anyhow::Error` 会印出一句没有标记的话。措辞与三支
-    /// 怎么分见那一处（parking lot Q19 / Q23 打磨过两轮）。
+    /// 里面那句话由 [`failure_reason`] 给出，**开头那个标记也在里面**：`Display` 对这一支一个
+    /// 字都不加，往这里塞一个自己攒的 `anyhow::Error` 会印出一句没有标记的话，也说不出来路
+    /// （按失联算，见 [`NoReading::failure_cause`]）。措辞与三支怎么分见那一处（parking lot
+    /// Q19 / Q23 打磨过两轮）。
     Failed(anyhow::Error),
     /// 该走的那几条 HID 让开了，**这一次取数根本没去问** —— **暂停**。
     ///
@@ -184,19 +196,100 @@ impl NoReading {
             Self::Paused { hub, .. } => Some(hub),
         }
     }
+
+    /// 取数失败是哪一种来路（[`FailureCause`]）。`None` 即这不是取数失败而是暂停。
+    ///
+    /// 不经 [`read`] 造的取数失败说不出来路，按**失联**算。今天只有一处：外壳连本机有什么都枚举
+    /// 不了的时候自己攒的那一个——那也是去问了（问本机）、问不到。
+    pub fn failure_cause(&self) -> Option<FailureCause> {
+        match self {
+            Self::Failed(reason) => Some(cause_of(reason)),
+            Self::Paused { .. } => None,
+        }
+    }
+
+    /// 菜单那一行的短原因（`CONTEXT.md`「短原因」）：取数失败按来路各一句，暂停一句并点名是哪个
+    /// 上位机。
+    ///
+    /// **四句话只在这里定**，要说短原因的地方都来问它。它不从完整原因（`Display` 那一句）里截：
+    /// 完整原因带着每条 Endpoint 各自的错误，一行菜单放不下，截一段又说不清是哪种情形（parking
+    /// lot Q152）。所以每一句都**不带任何一条 Endpoint 的错误**，只说是哪种情形，再用问句指一下
+    /// 该去哪儿看——问句而不是结论，理由与 [`failure_reason`] 里那句"设备没插？"相同：我们只知道
+    /// 没读到，不知道为什么。
+    ///
+    /// - 失联问插线、配对、开机：去问了问不到，最常见的就是这几样。
+    /// - 读取异常问有没有上位机在抢通路：那是它最常见的来源（`CONTEXT.md`「读取异常」）。暂停的
+    ///   开关开着时，名单上的上位机撞见了就已经是暂停，走到这一句的多半是名单外的那一个。
+    /// - 一条 Endpoint 都没配那一句不问：该改的就是配置。
+    /// - 暂停那一句与悬停提示、命令行说同一件事时是同一个说法（"已暂停（…正在运行）"）。
+    pub fn short_reason(&self) -> String {
+        match self {
+            Self::Failed(reason) => match cause_of(reason) {
+                FailureCause::Unreachable => "失联（没插？没配对？没开机？）".to_string(),
+                FailureCause::ReadAnomaly => "读取异常（有上位机在抢通路？）".to_string(),
+                FailureCause::NoEndpointConfigured => "一条 Endpoint 都没配置".to_string(),
+            },
+            Self::Paused { hub, .. } => format!("已暂停（{} 正在运行）", hub.process()),
+        }
+    }
 }
+
+/// 装在 [`NoReading::Failed`] 里那个错误的来路：取数那一层造的带着它（[`Failure`]），别处造的
+/// 按失联算（[`NoReading::failure_cause`] 上写了为什么）。认的是类型，不是那句话。
+fn cause_of(reason: &anyhow::Error) -> FailureCause {
+    reason
+        .downcast_ref::<Failure>()
+        .map_or(FailureCause::Unreachable, |failure| failure.cause)
+}
+
+/// 取数失败的三种来路（`CONTEXT.md`「取数失败」）。
+///
+/// 三种对"这一格印不印数字"、对 Primary 选择是同一个答案，所以同住 [`NoReading::Failed`]；要用户
+/// 做的事各不相同——插线配对、去关上位机、改配置——所以菜单那一行按它各说一句
+/// （[`NoReading::short_reason`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureCause {
+    /// **失联**：在场的每一条都试过了、一条都没答话，或者一条都不在场——去问了、问不到。
+    Unreachable,
+    /// **读取异常**：至少一条答了话，而那一帧不可采信（[`BadFrame`]）。与超时同在一次取数里也是
+    /// 它：有一条答了话，这一次就不是"一条都没读到"。
+    ReadAnomaly,
+    /// **配置里一条 Endpoint 都没有**：无处可取，该改的是配置。
+    NoEndpointConfigured,
+}
+
+/// 取数那一层造的那句取数失败，连同它是哪一种来路。
+///
+/// 装进 [`NoReading::Failed`] 的就是它：`Display` 原样印那句完整原因、一个字不加，所以来路跟着
+/// 走，完整原因逐字节不变。**来路装在错误里面，不在 `Failed` 旁边另开一个字段**：变体的形状不变，
+/// 别处按 `Failed(_)` 匹配、自己造一个 `Failed` 的地方（托盘内核、外壳）一行不用改；代价是别处造的
+/// 那一个说不出来路，只好有个缺省（parking lot Q230、Q231）。
+#[derive(Debug)]
+struct Failure {
+    cause: FailureCause,
+    reason: String,
+}
+
+impl fmt::Display for Failure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl std::error::Error for Failure {}
 
 impl fmt::Display for NoReading {
     /// 印出去的就是那一行 Device 名字之后的全部内容。
     ///
-    /// **两句话各自完整、不共用前缀**：取数失败那一句整句由 [`lost_reason`] 给出、连开头那个
+    /// **两句话各自完整、不共用前缀**：取数失败那一句整句由 [`failure_reason`] 给出、连开头那个
     /// 标记一起，这里**一个字都不加**；暂停那一句以"暂停中"开头，在下面拼。共用一个前缀
     /// 再接不同的后半句，就等于把两种下场说成同一件事。
     ///
-    /// 取数失败那个标记因此不在这里选：它要按"试过了都失败 / 一条都不在场 / 一条都没配"分说，
-    /// 而这一层只看得见 `Failed` 这一个变体。**这不是把话藏起来**——那三条分支本来就长在
-    /// [`lost_reason`] 里，让措辞跟着判据走；这一层要再问一次"那到底是哪一种"的代价
-    /// 写在那个函数上。
+    /// 取数失败那个标记因此不在这里选：它按"试过了都失败 / 一条都不在场 / 一条都没配"分说，
+    /// 那三条分支长在 [`failure_reason`] 里，让措辞跟着判据走。
+    ///
+    /// 这里印的是**完整原因**，命令行 `status`、悬停提示与日志用它；菜单那一行放不下它，说的是
+    /// 另一句短原因（[`NoReading::short_reason`]）。
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Failed(reason) => write!(f, "{reason:#}"),
@@ -370,7 +463,7 @@ pub struct RowReading {
     pub paused_by: Option<VendorHub>,
 }
 
-/// 一份读数都没拿到时印出去的**整句话，开头那个标记也在内**。
+/// 一份读数都没拿到时印出去的**整句话，开头那个标记也在内**，连同它是哪一种来路。
 ///
 /// **整句只有这一处出处**：[`NoReading`] 的 `Display` 对取数失败那一支一个字都不加。原先标记
 /// 在那边、这句话在这边，两处说的是同一件事——要改一句话得找齐两个前缀，而那两句还都不准。
@@ -385,8 +478,12 @@ pub struct RowReading {
 /// - **一条都不在场** / **一条都没配** → "读不到"，一个字没改：一条通路都没枚举到，我们
 ///   确实什么都没读到，这句话在这两支上是实话。
 ///
-/// **不按失败的种类分**（超时还是读取异常）：那要一个分类枚举穿过每个驱动的错误路径，
-/// 而 `docs/adr/0004` 否掉的正是它——外层措辞要的那个区分，上面这三支已经免费给了。
+/// **这句话的标记不按来路分**（超时还是读取异常）：试过了都失败那一支照旧是中性的那一句，
+/// 每条 Endpoint 自己的原因紧跟其后，是哪一种已经说清了。来路另交（[`FailureCause`]），给
+/// 菜单那一行的短原因用——那里放不下每一条的原因，只能按来路说。有一条答了坏帧
+/// （`answered_a_bad_frame`）就是读取异常：有一条答了话，这一次就不是"一条都没读到"。这个
+/// 分类要穿过驱动的错误路径（[`BadFrame`]），`docs/adr/0004` 当初否掉的正是它，那份 ADR 末尾
+/// 记着它怎么被推翻的。
 ///
 /// "不在场"那句**不能只说"设备没插"**：本机枚举得到、却发不出这个协议要的那种报文的
 /// 通路同样算不在场（键盘的 vendor collection 实测就是 `in:0 out:0 feat:65`），那时设备
@@ -396,9 +493,20 @@ pub struct RowReading {
 /// 三条 Endpoint 之后这句话不再点名"输出报文"：报文种类现在是**驱动**那一维的事
 /// （键盘走 feature 报文），而 `Ble` 压根不是 HID——它不在场是因为本机的 BLE 设备里没有
 /// 那个地址。一句话要同时对三种成立，就只能说到"枚举不到"，把三个可能的原因摆成问句。
-fn lost_reason(device: &Device, failures: &[String]) -> anyhow::Error {
+fn failure_reason(
+    device: &Device,
+    failures: &[String],
+    answered_a_bad_frame: bool,
+) -> anyhow::Error {
     if !failures.is_empty() {
-        return anyhow!("没有可信的读数 —— {}", failures.join("；"));
+        return failure(
+            if answered_a_bad_frame {
+                FailureCause::ReadAnomaly
+            } else {
+                FailureCause::Unreachable
+            },
+            format!("没有可信的读数 —— {}", failures.join("；")),
+        );
     }
     // 问的是 `is_configured_in` 而不是 `hid_config_in`：后者对 Ble 恒为 None，拿它筛会把
     // 蓝牙从这份名单里漏掉，而这份名单就是要告诉用户"你配了这几条"。
@@ -408,12 +516,23 @@ fn lost_reason(device: &Device, failures: &[String]) -> anyhow::Error {
         .map(|kind| kind.to_string())
         .collect();
     if configured.is_empty() {
-        return anyhow!("读不到 —— 这个 Device 一条 Endpoint 都没配置");
+        return failure(
+            FailureCause::NoEndpointConfigured,
+            "读不到 —— 这个 Device 一条 Endpoint 都没配置".to_string(),
+        );
     }
-    anyhow!(
-        "读不到 —— 配置的 Endpoint（{}）一条都不在场：本机枚举不到它们（设备没插？蓝牙没配对？跑 `juicebar scan` 看本机有什么）",
-        configured.join("、")
+    failure(
+        FailureCause::Unreachable,
+        format!(
+            "读不到 —— 配置的 Endpoint（{}）一条都不在场：本机枚举不到它们（设备没插？蓝牙没配对？跑 `juicebar scan` 看本机有什么）",
+            configured.join("、")
+        ),
     )
+}
+
+/// 把一句取数失败连同它的来路装进 [`NoReading::Failed`] 要的那个错误里。
+fn failure(cause: FailureCause, reason: String) -> anyhow::Error {
+    anyhow::Error::new(Failure { cause, reason })
 }
 
 /// 按配置里的 `driver` 挑协议驱动，取一次数。
