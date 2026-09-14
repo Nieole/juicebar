@@ -1061,3 +1061,20 @@ fn device_with_no_endpoint() -> juicebar::config::Device {
     .devices
     .remove(0)
 }
+
+/// 罐装的取数失败：托盘内核的用例不走假枚举，也要造得出三种来路。给定的来路原样带着，完整原因
+/// 原样印出。
+#[test]
+fn a_canned_failure_keeps_its_cause_and_its_full_reason() {
+    let no_reading = NoReading::failed(
+        FailureCause::ReadAnomaly,
+        "没有可信的读数 —— Wired: 读取异常：电压 2000 mV 不在 3050..=4350 mV",
+    );
+
+    assert_eq!(no_reading.failure_cause(), Some(FailureCause::ReadAnomaly));
+    assert_eq!(no_reading.short_reason(), "读取异常（有上位机在抢通路？）");
+    assert_eq!(
+        no_reading.to_string(),
+        "没有可信的读数 —— Wired: 读取异常：电压 2000 mV 不在 3050..=4350 mV"
+    );
+}

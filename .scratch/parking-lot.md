@@ -810,10 +810,10 @@ brief 里点一句）。
 
 **From:** menu-as-designed 票 04（取数失败交出来路，短原因有了）
 
-**取的路**：`NoReading::Failed(anyhow::Error)` 形状不变。取数那一层造的那个错误是私有的 `Failure { cause, reason }`，
-`failure_cause()` 靠 `downcast_ref` 取回来；坏帧那一侧同样，驱动与 HID Transport 把"答了话、帧不可采信"的错包成
+**取的路**：`NoReading::Failed(anyhow::Error)` 形状不变。取数那一层造的那个错误是私有的 `Failure { cause, full_reason }`
+（经公开构造器 `NoReading::failed` 造），`failure_cause()` 靠 `downcast_ref` 取回来；坏帧那一侧同样，驱动与 HID Transport 把"答了话、帧不可采信"的错包成
 `sources::BadFrame`，取数那一层 `downcast_ref` 认它。`Driver::read_battery`、`Transport::exchange` 照旧返回
-`anyhow::Result`。认的是类型，不是字符串。没包 `BadFrame` 的错算失联，别处造的 `Failed` 也算失联（Q231）。
+`anyhow::Result`。认的是类型，不是字符串。没包 `BadFrame` 的错算失联，不经 `NoReading::failed` 直接造的 `Failed` 也算失联（Q231）。
 
 **另一条路**：把分类写到签名上：`Failed { cause, reason }`，外加驱动与 Transport 返回一个"没答话 / 坏帧"两支的错误枚举，
 编译器逼每一处造取数失败、每一个坏帧出口都说出来路。站得住：今天漏包一处 `BadFrame` 不会红，只会让那种坏帧在菜单上
@@ -828,14 +828,14 @@ trait 与两个驱动、`tests/common` 的假 Transport、`src/readout.rs`，外
 
 **From:** menu-as-designed 票 04（取数失败交出来路，短原因有了）
 
-**取的路**：不经 `readout::read` 造的 `Failed` 说不出来路，按失联算，菜单上是"失联（没插？没配对？没开机？）"。生产
+**取的路**：不经 `NoReading::failed`、直接往 `Failed` 里塞 `anyhow!` 的说不出来路，按失联算，菜单上是"失联（没插？没配对？没开机？）"。生产
 代码里今天只有 `src/shell/worker.rs` 那一处（`SystemEndpoints::enumerate` 失败），而且只在退不到上次已知值时才上
 菜单。用例 `a_failure_made_outside_the_readout_counts_as_unreachable` 钉着这个缺省。
 
-**另一条路**：取数那一层交一个公开的构造器，外壳改用它，这一种在菜单上说一句不指向插线配对的话。站得住：枚举不了本机
+**另一条路**：外壳改用 `NoReading::failed`（本票 review 之后已有），这一种在菜单上说一句不指向插线配对的话。站得住：枚举不了本机
 是 Win32 那一头出了事，插线配对修不好它，那三个问句指错了方向。
 
-**推荐**：维持缺省，归 rt-06（它排设备行时一起看要不要分）与 `/settle`。要分，是外壳一行、取数那一层一个构造器。
+**推荐**：维持缺省，归 rt-06（它排设备行时一起看要不要分）与 `/settle`。要分，外壳改一行，取数那一层可能添一种来路。
 `CONTEXT.md`「取数失败」只有三种来路，所以另说一句之前先定这一种归哪一种，还是给那个词条添第四种。
 
 ### Q232 —— 暂停那一句短原因"已暂停（X 正在运行）"与悬停提示、命令行各写一遍
@@ -863,6 +863,22 @@ trait 与两个驱动、`tests/common` 的假 Transport、`src/readout.rs`，外
 **另一条路**：本票顺手改这两句文档。站得住：只改文档，不改行为。但 mad-05 正在改这两个文件，撞上了要合。
 
 **推荐**：交给 rt-06，它从 `reason()` 拿 `NoReading` 问短原因时，把这两句改成指向 `NoReading::short_reason`。归 rt-06。
+
+### Q234 —— 退到上次已知值的那一行，这一轮手里没有 `NoReading` 可问短原因
+
+**From:** menu-as-designed 票 04（取数失败交出来路，短原因有了）
+
+**取的路**：短原因的入口只挂在 `NoReading` 上（`short_reason`、`failure_cause`），`src/round.rs` 一行没动。spec「设备行」要中段
+在"这一次没拿到读数"时写短原因，"即使手上有上次已知值、右列照样写着它"；而 `DeviceState::reason()` 只在 `Shown::NoReading`
+（手上没数）时交出 `NoReading`，退到上次已知值时这一次取数的原因只在 `Fetched.fell_back_because`（`src/tray/mod.rs`）里，
+这一轮没留下它。所以今天 rt-06 能给没数的那一行写短原因，给有上次已知值的那一行写不了，暂停与取数失败都一样。
+
+**另一条路**：本票就把 `fell_back_because` 接进这一轮（`InHand` 或 `DeviceState` 多带一份，`reason()` 在上次已知值那一行也交出
+它）。站得住：spec 要的正是这个，接法关在托盘内核里。但 brief 让本票不碰 `src/round.rs`、`src/tray/`，mad-05 正在改它们。
+
+**推荐**：交给 rt-06，等 mad-05 合进去再接：这一轮留下 `fell_back_because`，`reason()` 在"这一次没拿到读数"时都交出
+`NoReading`，不管手上有没有上次已知值；再改 `reason()` 的文档（Q233）。有了 `NoReading::failed`，内核用例罐装得出三种来路。
+归 rt-06；票面没点这一条，编排者派 rt-06 时在 brief 里点一句。
 
 ## Settled
 

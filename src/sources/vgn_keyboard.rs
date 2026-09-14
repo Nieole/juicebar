@@ -87,8 +87,7 @@ fn parse_dongle_data(frame: &[u8]) -> Result<Option<Reading>> {
     // "非零即真"。实测抓到过一帧别的命令的残留 `F4 01 F4 01 …`，放行它就读出 1%。
     if frame[0] != READY {
         bail!(
-            "回包的就绪标志是 {:#04X}，既不是 {NOT_READY:#04X}（未就绪）也不是 \
-             {READY:#04X}（就绪）—— 这一帧不是本次请求的应答",
+            "回包的就绪标志是 {:#04X}，既不是 {NOT_READY:#04X}（未就绪）也不是 {READY:#04X}（就绪）—— 这一帧不是本次请求的应答",
             frame[0]
         );
     }

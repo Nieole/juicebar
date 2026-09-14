@@ -28,7 +28,7 @@ use crate::vendor_hub::VendorHub;
 /// `Wired` 直接从枚举里消失（瞬时不在场而不是一次三秒的超时），降级几乎不要钱。
 /// 在场的 Endpoint 全都交不出一份可信的读数，才算[取数失败][NoReading::Failed]——**答了坏帧
 /// 也算**（那是读取异常而不是失联：设备答了话，只是答的那一帧不可信），所以那一支的措辞不说
-/// "都没读到"，见 [`failure_reason`]。有没有哪一条答了坏帧（[`BadFrame`]）在试的时候记下，
+/// "都没读到"，见 [`full_reason`]。有没有哪一条答了坏帧（[`BadFrame`]）在试的时候记下，
 /// 取数失败带着它是哪一种来路交出去（[`FailureCause`]）。
 ///
 /// **让开的那几条不在"试过"之列**：厂商上位机在跑时它们压根没被打开，那是[暂停][NoReading::Paused]
@@ -109,11 +109,7 @@ pub fn read(
             failures,
         });
     }
-    Err(NoReading::Failed(failure_reason(
-        device,
-        &failures,
-        answered_a_bad_frame,
-    )))
+    Err(full_reason(device, &failures, answered_a_bad_frame))
 }
 
 /// 这一次取数里这个 Device 让开的那几条 Endpoint：在场、且撞见的那个上位机会跟它抢的那些。
@@ -158,10 +154,10 @@ pub enum NoReading {
     /// 变体；要用户做的事各不相同，所以**来路跟着里面那个错误走**：[`NoReading::failure_cause`]
     /// 取得回来，菜单那一行按它说短原因（[`NoReading::short_reason`]）。
     ///
-    /// 里面那句话由 [`failure_reason`] 给出，**开头那个标记也在里面**：`Display` 对这一支一个
+    /// 里面那句话由 [`full_reason`] 给出，**开头那个标记也在里面**：`Display` 对这一支一个
     /// 字都不加，往这里塞一个自己攒的 `anyhow::Error` 会印出一句没有标记的话，也说不出来路
-    /// （按失联算，见 [`NoReading::failure_cause`]）。措辞与三支怎么分见那一处（parking lot
-    /// Q19 / Q23 打磨过两轮）。
+    /// （按失联算，见 [`NoReading::failure_cause`]；要带来路就走 [`NoReading::failed`]）。措辞
+    /// 与三支怎么分见那一处（parking lot Q19 / Q23 打磨过两轮）。
     Failed(anyhow::Error),
     /// 该走的那几条 HID 让开了，**这一次取数根本没去问** —— **暂停**。
     ///
@@ -184,6 +180,18 @@ pub enum NoReading {
 }
 
 impl NoReading {
+    /// 一次取数失败：来路是 `cause`，完整原因是 `full_reason`（`Display` 原样印它，一个字不加）。
+    ///
+    /// 取数那一层自己造取数失败走的就是它。别处要一个说得出来路的取数失败，也走它：托盘内核的用例
+    /// 罐装一次取数结果时不经假枚举，照样造得出三种来路。直接往 [`NoReading::Failed`] 里塞一个
+    /// `anyhow::Error` 说不出来路，按失联算。
+    pub fn failed(cause: FailureCause, full_reason: impl Into<String>) -> Self {
+        Self::Failed(anyhow::Error::new(Failure {
+            cause,
+            full_reason: full_reason.into(),
+        }))
+    }
+
     /// 让开了 Endpoint 的那个上位机。`None` 即这不是暂停而是取数失败。
     ///
     /// [`read_or_last_known`] 拿它把暂停这一维带给 [`render`]：退到上次已知值的那一行
@@ -199,8 +207,8 @@ impl NoReading {
 
     /// 取数失败是哪一种来路（[`FailureCause`]）。`None` 即这不是取数失败而是暂停。
     ///
-    /// 不经 [`read`] 造的取数失败说不出来路，按**失联**算。今天只有一处：外壳连本机有什么都枚举
-    /// 不了的时候自己攒的那一个——那也是去问了（问本机）、问不到。
+    /// 不经 [`NoReading::failed`] 造的取数失败说不出来路，按**失联**算。今天只有一处：外壳连本机
+    /// 有什么都枚举不了的时候自己攒的那一个——那也是去问了（问本机）、问不到。
     pub fn failure_cause(&self) -> Option<FailureCause> {
         match self {
             Self::Failed(reason) => Some(cause_of(reason)),
@@ -214,7 +222,7 @@ impl NoReading {
     /// **四句话只在这里定**，要说短原因的地方都来问它。它不从完整原因（`Display` 那一句）里截：
     /// 完整原因带着每条 Endpoint 各自的错误，一行菜单放不下，截一段又说不清是哪种情形（parking
     /// lot Q152）。所以每一句都**不带任何一条 Endpoint 的错误**，只说是哪种情形，再用问句指一下
-    /// 该去哪儿看——问句而不是结论，理由与 [`failure_reason`] 里那句"设备没插？"相同：我们只知道
+    /// 该去哪儿看——问句而不是结论，理由与 [`full_reason`] 里那句"设备没插？"相同：我们只知道
     /// 没读到，不知道为什么。
     ///
     /// - 失联问插线、配对、开机：去问了问不到，最常见的就是这几样。
@@ -234,8 +242,8 @@ impl NoReading {
     }
 }
 
-/// 装在 [`NoReading::Failed`] 里那个错误的来路：取数那一层造的带着它（[`Failure`]），别处造的
-/// 按失联算（[`NoReading::failure_cause`] 上写了为什么）。认的是类型，不是那句话。
+/// 装在 [`NoReading::Failed`] 里那个错误的来路：经 [`NoReading::failed`] 造的带着它（[`Failure`]），
+/// 别的按失联算（[`NoReading::failure_cause`] 上写了为什么）。认的是类型，不是那句话。
 fn cause_of(reason: &anyhow::Error) -> FailureCause {
     reason
         .downcast_ref::<Failure>()
@@ -262,17 +270,17 @@ pub enum FailureCause {
 ///
 /// 装进 [`NoReading::Failed`] 的就是它：`Display` 原样印那句完整原因、一个字不加，所以来路跟着
 /// 走，完整原因逐字节不变。**来路装在错误里面，不在 `Failed` 旁边另开一个字段**：变体的形状不变，
-/// 别处按 `Failed(_)` 匹配、自己造一个 `Failed` 的地方（托盘内核、外壳）一行不用改；代价是别处造的
-/// 那一个说不出来路，只好有个缺省（parking lot Q230、Q231）。
+/// 别处按 `Failed(_)` 匹配、自己造一个 `Failed` 的地方（托盘内核、外壳）一行不用改；代价是不经
+/// [`NoReading::failed`] 造的那一个说不出来路，只好有个缺省（parking lot Q230、Q231）。
 #[derive(Debug)]
 struct Failure {
     cause: FailureCause,
-    reason: String,
+    full_reason: String,
 }
 
 impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.reason)
+        f.write_str(&self.full_reason)
     }
 }
 
@@ -281,12 +289,12 @@ impl std::error::Error for Failure {}
 impl fmt::Display for NoReading {
     /// 印出去的就是那一行 Device 名字之后的全部内容。
     ///
-    /// **两句话各自完整、不共用前缀**：取数失败那一句整句由 [`failure_reason`] 给出、连开头那个
+    /// **两句话各自完整、不共用前缀**：取数失败那一句整句由 [`full_reason`] 给出、连开头那个
     /// 标记一起，这里**一个字都不加**；暂停那一句以"暂停中"开头，在下面拼。共用一个前缀
     /// 再接不同的后半句，就等于把两种下场说成同一件事。
     ///
     /// 取数失败那个标记因此不在这里选：它按"试过了都失败 / 一条都不在场 / 一条都没配"分说，
-    /// 那三条分支长在 [`failure_reason`] 里，让措辞跟着判据走。
+    /// 那三条分支长在 [`full_reason`] 里，让措辞跟着判据走。
     ///
     /// 这里印的是**完整原因**，命令行 `status`、悬停提示与日志用它；菜单那一行放不下它，说的是
     /// 另一句短原因（[`NoReading::short_reason`]）。
@@ -463,7 +471,7 @@ pub struct RowReading {
     pub paused_by: Option<VendorHub>,
 }
 
-/// 一份读数都没拿到时印出去的**整句话，开头那个标记也在内**，连同它是哪一种来路。
+/// 取数失败时印出去的**整句完整原因，开头那个标记也在内**，连同它是哪一种来路。
 ///
 /// **整句只有这一处出处**：[`NoReading`] 的 `Display` 对取数失败那一支一个字都不加。原先标记
 /// 在那边、这句话在这边，两处说的是同一件事——要改一句话得找齐两个前缀，而那两句还都不准。
@@ -493,13 +501,9 @@ pub struct RowReading {
 /// 三条 Endpoint 之后这句话不再点名"输出报文"：报文种类现在是**驱动**那一维的事
 /// （键盘走 feature 报文），而 `Ble` 压根不是 HID——它不在场是因为本机的 BLE 设备里没有
 /// 那个地址。一句话要同时对三种成立，就只能说到"枚举不到"，把三个可能的原因摆成问句。
-fn failure_reason(
-    device: &Device,
-    failures: &[String],
-    answered_a_bad_frame: bool,
-) -> anyhow::Error {
+fn full_reason(device: &Device, failures: &[String], answered_a_bad_frame: bool) -> NoReading {
     if !failures.is_empty() {
-        return failure(
+        return NoReading::failed(
             if answered_a_bad_frame {
                 FailureCause::ReadAnomaly
             } else {
@@ -516,23 +520,18 @@ fn failure_reason(
         .map(|kind| kind.to_string())
         .collect();
     if configured.is_empty() {
-        return failure(
+        return NoReading::failed(
             FailureCause::NoEndpointConfigured,
-            "读不到 —— 这个 Device 一条 Endpoint 都没配置".to_string(),
+            "读不到 —— 这个 Device 一条 Endpoint 都没配置",
         );
     }
-    failure(
+    NoReading::failed(
         FailureCause::Unreachable,
         format!(
             "读不到 —— 配置的 Endpoint（{}）一条都不在场：本机枚举不到它们（设备没插？蓝牙没配对？跑 `juicebar scan` 看本机有什么）",
             configured.join("、")
         ),
     )
-}
-
-/// 把一句取数失败连同它的来路装进 [`NoReading::Failed`] 要的那个错误里。
-fn failure(cause: FailureCause, reason: String) -> anyhow::Error {
-    anyhow::Error::new(Failure { cause, reason })
 }
 
 /// 按配置里的 `driver` 挑协议驱动，取一次数。

@@ -67,8 +67,7 @@ fn parse_battery(frame: &[u8], report_id: u8) -> Result<Reading> {
     let expected = checksum(frame, report_id);
     if frame[FRAME_LEN - 1] != expected {
         bail!(
-            "读取异常：回包的校验和是 {:#04X}，按 0x55 − sum − report_id 应当是 {expected:#04X} \
-             —— 这一帧不完整",
+            "读取异常：回包的校验和是 {:#04X}，按 0x55 − sum − report_id 应当是 {expected:#04X} —— 这一帧不完整",
             frame[FRAME_LEN - 1]
         );
     }
