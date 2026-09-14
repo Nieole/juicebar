@@ -1,9 +1,9 @@
-//! 托盘内核里「配置」这一块（`juicebar::tray::config`）：配置文件读到了、读坏了，首次运行。
+//! 托盘内核里「配置」这一块（`juicebar::tray::config`）：配置文件读到了、读坏了，首次运行，自动补空块。
 //!
 //! 全程只经内核的公开面：事件进（`Tray::handle`），动作出，此刻挂着的告警从 `Tray::warnings` 看；外壳由
-//! `common::tray::Screen` 顶替，它记下每一次要求取数时带着的那一份配置、弹过的通知。配置文件本身不碰：外壳
-//! 看一眼它变没变、变了重读一遍，交给内核的是读的结果，在这里罐装；首次运行写草稿也是外壳的事，内核收到的
-//! 是"写好了"。
+//! `common::tray::Screen` 顶替，它记下每一次要求取数时带着的那一份配置、弹过的通知、要求扫了几遍本机、写回配置
+//! 文件的全文。配置文件本身不碰：外壳看一眼它变没变、变了重读一遍，交给内核的是读的结果，在这里罐装；首次运行
+//! 写草稿也是外壳的事，内核收到的是"写好了"；扫一遍本机同理，内核收到的是扫到的与配置文件的全文。
 
 mod common;
 
@@ -110,6 +110,148 @@ fn a_first_run_starts_polling_the_draft_and_says_where_to_look() {
     assert_eq!(screen.fetches, ["dragonfly3"], "照常轮询草稿里的那一台");
 }
 
+// ---------------------------------------------------------------
+// 自动补空块：本机出现了认得的 Endpoint、而配置里它那块空着，就补上
+// ---------------------------------------------------------------
+
+/// 启动时扫一遍本机：托盘没开着时插上的线，启动那一刻就查得到。
+#[test]
+fn startup_scans_the_machine_once() {
+    let (_tray, screen) = start(MOUSE_AND_KEYBOARD, &LastKnown::default(), NOW);
+
+    assert_eq!(screen.scans, 1);
+}
+
+/// 本机插上或拔掉了设备：再扫一遍。托盘开着时插上的线，就在这一遍里查到。
+#[test]
+fn a_device_change_scans_the_machine_again() {
+    let text = draft(&[mouse_dongle()]);
+    let (mut tray, mut screen) = start(&text, &LastKnown::default(), NOW);
+    feed(&mut tray, &mut screen, scanned(&text, &[mouse_dongle()]));
+
+    feed(&mut tray, &mut screen, devices_changed());
+
+    assert_eq!(screen.scans, 2);
+}
+
+/// 插上一根线，系统为它冒出来的每一条 collection 各报一次"设备变了"，一口气好几次。一遍扫描还没交回来时再来的
+/// 只记一笔，交回来之后**再扫一遍**：那一遍开始之后的变化都有一遍扫描看得见，一串变化也不排出一串扫描。
+#[test]
+fn changes_while_a_scan_is_out_add_up_to_one_more_scan() {
+    let text = draft(&[mouse_dongle()]);
+    // 启动那一遍扫描还没交回来。
+    let (mut tray, mut screen) = start(&text, &LastKnown::default(), NOW);
+
+    for _ in 0..4 {
+        feed(&mut tray, &mut screen, devices_changed());
+    }
+    assert_eq!(screen.scans, 1, "那一遍还没交回来，不另排");
+
+    feed(&mut tray, &mut screen, scanned(&text, &[mouse_dongle()]));
+    assert_eq!(screen.scans, 2, "交回来之后再扫一遍，只一遍");
+
+    feed(
+        &mut tray,
+        &mut screen,
+        scanned(&text, &[mouse_dongle(), mouse_wired()]),
+    );
+    assert_eq!(screen.scans, 2, "这一遍开始之后本机没再变过，不再扫");
+    assert_eq!(screen.written.len(), 1, "后面那一遍看到了插上的线，补上了");
+}
+
+/// 扫不了（枚举不了本机、读不到配置文件）：完整原因进日志，什么都不写；之后本机再变，照样再扫。
+#[test]
+fn a_scan_that_failed_is_logged_and_the_next_change_scans_again() {
+    let (mut tray, mut screen) = start(MOUSE_AND_KEYBOARD, &LastKnown::default(), NOW);
+
+    feed(
+        &mut tray,
+        &mut screen,
+        Event::Config(config::Event::Scanned(Err(
+            "读不到配置 C:/juicebar/config.toml：另一个程序正在使用此文件，进程无法访问。 (os error 32)".to_string(),
+        ))),
+    );
+    feed(&mut tray, &mut screen, devices_changed());
+
+    assert_eq!(
+        screen.logs,
+        [
+            "没能检查配置里有没有空块可补 —— 读不到配置 C:/juicebar/config.toml：另一个程序正在使用此文件，进程无法访问。 (os error 32)"
+        ]
+    );
+    assert_eq!(screen.written, Vec::<String>::new());
+    assert_eq!(screen.scans, 2);
+}
+
+/// 配置文件此刻写坏了：补不了，原因进日志，一个字节都不写——照一份读不动的文件补，写回去的只会更坏。
+#[test]
+fn a_config_that_does_not_parse_is_not_filled() {
+    let (mut tray, mut screen) = start(MOUSE_AND_KEYBOARD, &LastKnown::default(), NOW);
+
+    feed(
+        &mut tray,
+        &mut screen,
+        scanned("[[device]\nid = ", &[mouse_dongle(), mouse_wired()]),
+    );
+
+    let [line] = screen.logs.as_slice() else {
+        panic!("该记一行日志：{:?}", screen.logs);
+    };
+    assert!(
+        line.starts_with("没能检查配置里有没有空块可补 —— 配置解析失败"),
+        "{line}"
+    );
+    assert_eq!(screen.written, Vec::<String>::new());
+    assert_eq!(screen.notices, []);
+}
+
+/// 插上了鼠标的线，而配置里它那块 Wired 空着（草稿留下的注释占位）：补上、写回配置文件；弹一条通知说补了哪台
+/// 的哪条；日志里记下补的是哪组身份。
+#[test]
+fn a_blank_block_that_is_now_present_is_filled_notified_and_logged() {
+    let text = draft(&[mouse_dongle()]);
+    let (mut tray, mut screen) = start(&text, &LastKnown::default(), NOW);
+
+    feed(
+        &mut tray,
+        &mut screen,
+        scanned(&text, &[mouse_dongle(), mouse_wired()]),
+    );
+
+    let [written] = screen.written.as_slice() else {
+        panic!("该写回配置文件一次，写了 {} 次", screen.written.len());
+    };
+    let filled = Config::parse(written).expect("写回去的配置得解析得动");
+    assert_eq!(
+        filled.devices[0].wired.as_ref().expect("补上了 Wired").pid,
+        0x1005
+    );
+    assert_eq!(
+        screen.notices,
+        [Notice {
+            title: "配置已自动更新".to_string(),
+            body: "补上了 Dragonfly 3 Master+ 的 Wired".to_string(),
+        }]
+    );
+    assert_eq!(
+        screen.logs,
+        ["自动补空块 —— dragonfly3：补上了 Wired（VID 391D PID 1005 UP FF02 U 0002）。"]
+    );
+}
+
+/// 没有要补的（鼠标的线没插，Wired 那块空着也补不上）：一声不响——不写文件、不弹通知、不记日志。
+#[test]
+fn nothing_to_fill_writes_nothing_and_says_nothing() {
+    let text = draft(&[mouse_dongle()]);
+    let (mut tray, mut screen) = start(&text, &LastKnown::default(), NOW);
+
+    feed(&mut tray, &mut screen, scanned(&text, &[mouse_dongle()]));
+
+    assert_eq!(screen.written, Vec::<String>::new());
+    assert_eq!(screen.notices, []);
+    assert_eq!(screen.logs, Vec::<String>::new());
+}
+
 /// 与 `MOUSE_AND_KEYBOARD` 同两台，只改了一个键：厂商上位机换了个进程名。
 fn another_vendor_hub() -> String {
     format!("[general]\nvendor_hub_processes = [\"VGN HUB 2.exe\"]\n{MOUSE_AND_KEYBOARD}")
@@ -136,6 +278,28 @@ fn mouse_dongle() -> HidInfo {
         product: String::new(),
         manufacturer: String::new(),
     }
+}
+
+/// 插上线之后才冒出来的鼠标本体，实测身份 `391D:1005`，与接收器只差 `pid`（与 `tests/config.rs` 里那一条相同）。
+fn mouse_wired() -> HidInfo {
+    HidInfo {
+        path: "\\\\?\\hid#vid_391d&pid_1005&mi_01&col05#7&5678abcd&0&0000".to_string(),
+        pid: 0x1005,
+        ..mouse_dongle()
+    }
+}
+
+/// 外壳收到了系统的设备变化消息：本机插上或拔掉了一个 HID 设备。
+fn devices_changed() -> Event {
+    Event::Config(config::Event::DevicesChanged)
+}
+
+/// 外壳照内核的吩咐扫了一遍本机：此刻在场的是 `collections`，配置文件此刻写着 `text`。
+fn scanned(text: &str, collections: &[HidInfo]) -> Event {
+    Event::Config(config::Event::Scanned(Ok(config::Scan {
+        collections: collections.to_vec(),
+        text: text.to_string(),
+    })))
 }
 
 /// 外壳看到配置文件变了，重读了一遍，读好了，读出来的是 `text`。

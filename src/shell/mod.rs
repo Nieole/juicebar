@@ -4,7 +4,7 @@
 //! （spec Testing Decisions），所以它要薄到一眼看完——每一段都只是"把这个事件递进去"或者"把这个
 //! 动作落到 Windows 上"，靠票面那张手工验收清单守着。
 //!
-//! 两个线程：这一个跑消息循环（一扇看不见的窗口收计时器、托盘图标的回调、资源管理器重启的广播），
+//! 两个线程：这一个跑消息循环（一扇看不见的窗口收计时器、托盘图标的回调、资源管理器重启的广播、设备插拔），
 //! 另一个取数（`worker.rs`）——一次取数可能要等几秒超时，放在这里会让右键菜单跟着卡住。
 //!
 //! 动作按内核的分格分派，每一格的执行在它自己的文件里（`cadence.rs`、`round.rs`、`menu.rs`、
@@ -12,6 +12,7 @@
 
 mod cadence;
 mod config;
+mod devices;
 mod icon;
 mod log;
 mod look;
@@ -29,7 +30,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     ChangeWindowMessageFilterEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetMessageW, KillTimer, MB_ICONERROR, MB_OK, MSG, MSGFLT_ALLOW, MessageBoxW, PostQuitMessage,
     RegisterClassW, RegisterWindowMessageW, SetTimer, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
-    WM_CONTEXTMENU, WM_DESTROY, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
+    WM_CONTEXTMENU, WM_DESTROY, WM_DEVICECHANGE, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
 };
 use windows::core::{HSTRING, w};
 
@@ -73,6 +74,8 @@ pub fn run() -> Result<()> {
     let look = look::detect();
 
     let hwnd = create_window()?;
+    // 活到这个函数返回，消息循环结束之后才注销（`devices.rs`）。
+    let _devices = devices::DeviceWatch::register(hwnd, &mut log);
     let (tray, actions) = Tray::new(config, &last_known, look, SystemClock.now());
     log.write("托盘启动");
     let mut app = App {
@@ -185,6 +188,8 @@ unsafe extern "system" fn window_proc(
             // SAFETY: 结束这个线程的消息循环。
             unsafe { PostQuitMessage(0) };
         }
+        // 本机插上或拔掉了设备（`devices.rs`）。
+        WM_DEVICECHANGE => return devices::changed(wparam, lparam),
         m if m != 0 && m == TASKBAR_CREATED.with(Cell::get) => {
             with_app(|app| app.icon.add_again());
         }
@@ -208,6 +213,7 @@ fn take_reports() {
         match report {
             worker::Report::Fetched(fetched) => feed(Event::Fetched(fetched)),
             worker::Report::Warnings(event) => feed(Event::Warnings(event)),
+            worker::Report::Scanned(scan) => config::scanned(scan),
         }
     }
 }

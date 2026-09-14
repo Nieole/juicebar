@@ -22,16 +22,49 @@ use crate::primary::PrimaryRule;
 
 /// 一次 [`refresh`] 的结果。
 ///
-/// 文本、做过的事、没做的事分成三样交出去：调用方要把后两样印在命令行上。ADR-0003 划死的
-/// 边界是"只补空缺，扫描结果与用户所写不一致时只提醒"——那句提醒就住在 [`Self::notes`] 里，
+/// 文本、做过的事、没做的事分成三样交出去：命令行把后两样印出来，托盘拿做过的事弹通知、记日志。ADR-0003
+/// 划死的边界是"只补空缺，扫描结果与用户所写不一致时只提醒"——那句提醒就住在 [`Self::notes`] 里，
 /// 它是这条边界唯一的出口。
 pub struct Refreshed {
     /// 补全之后的全文。什么都没补时与入参**逐字节相同**。
     pub text: String,
-    /// 这一次补上了哪些块，一条一句人话。
-    pub filled: Vec<String>,
+    /// 这一次补上了哪些块。
+    pub filled: Vec<Fill>,
     /// 没补的地方和为什么，一条一句人话。它不改文件，只解释。
     pub notes: Vec<String>,
+}
+
+/// [`refresh`] 补上的一块：哪台 Device 的哪条 Endpoint，补的是哪组身份。
+///
+/// 交的是结构而不只是一句话：托盘的通知说"补了哪台的哪条"，用的是 Device 的名字与 Endpoint 的种类；日志与命令行
+/// 要的是那一整句（`Display`），身份的四个字段、没实测过的那一项都在里面。
+#[derive(Debug, Clone)]
+pub struct Fill {
+    /// 补在哪一台 Device 上：它的 id。
+    pub device_id: String,
+    /// 那台 Device 的名字。
+    pub device_name: String,
+    /// 补上的是哪一条 Endpoint。
+    pub endpoint: EndpointKind,
+    /// 补上的那组身份。
+    identity: HidEndpoint,
+    /// 这组身份里没实测过的部分，没有就是空串（身份表逐台写着）。
+    caveat: &'static str,
+}
+
+impl std::fmt::Display for Fill {
+    /// "dragonfly3：补上了 Wired（VID 391D PID 1005 UP FF02 U 0002）。"，身份里有没实测过的部分就接在句号后面。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}：补上了 {}（{}）。{}",
+            self.device_id,
+            self.endpoint,
+            describe(&self.identity),
+            // 注意事项在草稿里是分行写的（一行放不下），这里要压成一句。
+            self.caveat.replace('\n', "")
+        )
+    }
 }
 
 /// 把当时在场、而配置里空着的 Endpoint 块补进这份 TOML，**只补空缺**。
@@ -131,13 +164,13 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
             // 身份里有没实测过的部分就一并说出来。`is_present` 核对的只有 VID/PID/usage
             // 四项，`report_id` 是枚举问不出来的——那一项若是抄来的猜测，用户有权知道
             // 自己刚拿到的是一个没人验过的值。
-            filled.push(format!(
-                "{}：补上了 {kind}（{}）。{}",
-                device.id,
-                describe(identity),
-                // 注意事项在草稿里是分行写的（一行放不下），命令行这里要压成一句。
-                known.caveat(kind).replace('\n', "")
-            ));
+            filled.push(Fill {
+                device_id: device.id.clone(),
+                device_name: device.name.clone(),
+                endpoint: kind,
+                identity: identity.clone(),
+                caveat: known.caveat(kind),
+            });
         }
     }
 

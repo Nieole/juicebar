@@ -31,7 +31,7 @@ mod edit;
 mod known_devices;
 
 pub use draft::draft;
-pub use edit::{Pinned, Refreshed, pin_primary, refresh};
+pub use edit::{Fill, Pinned, Refreshed, pin_primary, refresh};
 pub use known_devices::{KNOWN_DEVICES, KnownDevice};
 
 use std::path::Path;

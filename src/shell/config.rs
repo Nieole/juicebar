@@ -1,16 +1,19 @@
 //! 配置文件这一头：启动时读它（没有就先写一份草稿，首次运行），每一格时钟之前看一眼它变没变、变了重读；以及
-//! 配置那一格的动作落到哪（用系统默认程序打开它）。
+//! 配置那一格的动作落到哪（用系统默认程序打开它；扫一遍本机；把补过空块的全文写回去）。
 //!
-//! 读的结果原样递进内核（[`crate::tray::config::Event`]），沿用哪一份、挂不挂告警都是内核的事。
+//! 读的结果原样递进内核（[`crate::tray::config::Event`]），沿用哪一份、挂不挂告警、补不补空块都是内核的事。
 //!
 //! **"变没变"看的是文件的修改时间与大小**（parking lot Q250）：一次 `metadata`，不读内容，每秒一次也觉不出来；
 //! 它在消息循环这个线程上，不碰取数线程，一次取数不因它慢一分。样子变了、而且连着两格不再变（写入方多半写完了）
 //! 才读、才解析；读的那一刻文件被别人占着，不算读过，下一格再试。
+//!
+//! **写回之后不另外告诉内核，也不改记下的样子**：下一格看得出文件变了，照常等它停下来、重读，写回的那一份走
+//! 重读那条路进内核——与用户手改的一样。
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION, HWND};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -19,7 +22,8 @@ use windows::core::{HSTRING, PCWSTR};
 // 草稿怎么落盘照命令行那一套（`config-refresh`），票 14 收掉命令行时一起搬过来。
 use crate::cli::config_refresh::write_draft;
 use crate::config::Config;
-use crate::tray::config::{Action, Event};
+use crate::hid::HidInfo;
+use crate::tray::config::{Action, Event, Scan};
 
 use super::App;
 
@@ -80,6 +84,18 @@ impl ConfigFile {
         Some(Event::Reloaded(loaded.map_err(|e| format!("{e:#}"))))
     }
 
+    /// 配置文件此刻的全文（自动补空块照它补）。
+    fn read_text(&self) -> Result<String> {
+        std::fs::read_to_string(&self.path)
+            .with_context(|| format!("读不到配置 {}", self.path.display()))
+    }
+
+    /// 把配置文件整个换成这份全文（自动补空块写回）。不改记下的样子，理由见模块文档。
+    fn write(&self, text: &str) -> Result<()> {
+        std::fs::write(&self.path, text)
+            .with_context(|| format!("写不进配置 {}", self.path.display()))
+    }
+
     /// 用系统默认程序打开配置文件，与在资源管理器里双击它一样。
     fn open_in_default_program(&self, hwnd: HWND) -> Result<()> {
         let file = HSTRING::from(self.path.as_os_str());
@@ -129,5 +145,26 @@ pub(super) fn execute(action: Action, app: &mut App) {
                 app.log.write(&format!("{e:#}"));
             }
         }
+        Action::Scan => app.worker.scan(),
+        Action::Write(text) => {
+            if let Err(e) = app.config.write(&text) {
+                app.log.write(&format!("{e:#}"));
+            }
+        }
     }
+}
+
+/// 取数线程扫完了一遍本机（[`Action::Scan`]）：读一遍配置文件的全文，连同扫到的递进内核（[`Event::Scanned`]）。
+///
+/// **全文在这里读，紧挨着递进内核**：内核照它补、交出写回，外壳当场就写（[`execute`]），读与写之间只隔内核里的
+/// 几次解析。在取数线程上随枚举一起读就早了——那一份在通道里等着的工夫，用户存下的改动会被写回的那一份盖掉。
+pub(super) fn scanned(collections: Result<Vec<HidInfo>, String>) {
+    let Some(text) = super::with_app(|app| app.config.read_text()) else {
+        return;
+    };
+    let scan = collections.and_then(|collections| {
+        let text = text.map_err(|e| format!("{e:#}"))?;
+        Ok(Scan { collections, text })
+    });
+    super::feed(crate::tray::Event::Config(Event::Scanned(scan)));
 }
