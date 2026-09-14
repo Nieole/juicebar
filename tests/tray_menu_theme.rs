@@ -1,8 +1,8 @@
 //! 托盘内核里「菜单深浅」这一块（`juicebar::tray::menu_theme`）：哪些 Windows 让菜单的深浅跟得上任务栏，
 //! 以及菜单此刻实际是深是浅（ADR-0006）。
 //!
-//! 白名单的期望值照 Notepad++（`DarkMode.cpp` 的 `CheckBuildNumber`）与它按 build 分两种调法的那一处
-//! （`docs/research/native-menu-research.md` 第 3 节），不是照这边的实现推出来的。菜单实际的深浅经内核的
+//! 白名单的期望值照 Notepad++（`DarkMode.cpp` 的 `CheckBuildNumber`，`docs/research/native-menu-research.md`
+//! 第 3 节），1809 除外（parking lot Q260），不是照这边的实现推出来的。菜单实际的深浅经内核的
 //! 公开面问（`Tray::menu_theme`），外壳由 `common::tray::Screen` 顶替。
 
 mod common;
@@ -29,17 +29,18 @@ fn windows_10_before_1809_is_not_recognised() {
     }
 }
 
-/// 1809（build 17763）认得，但它的序号 135 是 `AllowDarkModeForApp(bool)`，不是 `SetPreferredAppMode`：
-/// 照后者传"强制浅色"（3）进去，会被当成 `true`，反倒允许了深色。
+/// 1809（build 17763）认不得：Notepad++ 认它，这里不认。那一版的序号 135 是 `AllowDarkModeForApp(bool)`，只能
+/// "允许深色"，菜单跟的是应用模式，做不到跟任务栏；认它只会让菜单是浅的、内核却说深（parking lot Q260，用户
+/// 2026-09-14 定）。
 #[test]
-fn windows_10_1809_is_recognised_with_allow_dark_mode_for_app() {
-    assert_eq!(app_mode_call(17763), Some(AppModeCall::AllowDarkModeForApp));
+fn windows_10_1809_is_not_recognised_because_it_cannot_force_the_menu() {
+    assert_eq!(app_mode_call(17763), None);
 }
 
-/// 1809 之后的 Windows 10 正式版认得，序号 135 已经换成了 `SetPreferredAppMode`：1903、1909（18362、18363），
+/// 1903 起的 Windows 10 正式版认得，序号 135 已经换成了 `SetPreferredAppMode`：1903、1909（18362、18363），
 /// 2004 到 22H2（19041–19045）。
 #[test]
-fn windows_10_releases_after_1809_are_recognised_with_set_preferred_app_mode() {
+fn windows_10_releases_from_1903_are_recognised_with_set_preferred_app_mode() {
     for build in [18362, 18363, 19041, 19044, 19045] {
         assert_eq!(
             app_mode_call(build),

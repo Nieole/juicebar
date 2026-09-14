@@ -13,8 +13,7 @@ use super::{Action, Look, Tray};
 /// 菜单的深浅跟不跟得上任务栏：外壳启动时问一次 Windows，随 [`Look`] 交进来，运行中不变。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuTheming {
-    /// 跟得上：认得这个版本，那两个函数也取到了，菜单是任务栏的深浅。1809 上是个例外——那一版只能"允许
-    /// 深色"，菜单跟的是应用模式（parking lot Q260）。
+    /// 跟得上：认得这个版本，那两个函数也取到了，菜单是任务栏的深浅。
     FollowsTaskbar,
     /// 认不得这个版本的 Windows：一个未公开函数都不调，菜单是系统缺省的浅色。
     UnknownWindows,
@@ -22,26 +21,27 @@ pub enum MenuTheming {
     FunctionsMissing { build: u32 },
 }
 
-/// 认得的版本上，uxtheme 序号 135 是哪一个函数。两种签名不一样，调错了不会报错，只会做错事。
+/// 认得的版本上，uxtheme 序号 135 是哪一个函数。它在不同 build 上换过签名，调错了不会报错，只会做错事——
+/// 所以白名单交出的是"按哪种签名调"，不只是"认不认得"。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppModeCall {
-    /// Windows 10 1809：`AllowDarkModeForApp(bool)`。它只能"允许深色"——允许了，菜单跟的是应用模式——
-    /// 强制不了深色，也强制不了浅色（parking lot Q260）。
-    AllowDarkModeForApp,
     /// 1903 起：`SetPreferredAppMode(mode)`，强制深色是 2、强制浅色是 3。
     SetPreferredAppMode,
 }
 
 /// 这个 build 认不认得；认得时序号 135 是哪一个函数。认不得（`None`）就一个未公开函数都不调。
 ///
-/// 照 Notepad++ 的白名单（`DarkMode.cpp` 的 `CheckBuildNumber`，调研第 3 节）：1809（17763）、1903 与 1909
+/// 照 Notepad++ 的白名单（`DarkMode.cpp` 的 `CheckBuildNumber`，调研第 3 节），但**从 1903 起**：1903 与 1909
 /// （18362、18363）、2004 起（19041 及以后，含全部 Windows 11）。之间的预览版 build 不认：序号 135 就是在
 /// 那几个预览版里换的签名。
+///
+/// Notepad++ 还认 1809（17763），这里不认：那一版的序号 135 是 `AllowDarkModeForApp(bool)`，只能"允许深色"，
+/// 允许了菜单跟的是应用模式——强制不了深浅，做不到跟任务栏。认它只会让菜单是浅的、内核却说深（parking lot
+/// Q260，用户 2026-09-14 定）。不认，菜单是系统缺省的浅色，内核也说浅色。
 ///
 /// 收的是 build 号，不是版本名：注册表里的 `ProductName` 在 Windows 11 上照样可能写着"Windows 10"。
 pub fn app_mode_call(build: u32) -> Option<AppModeCall> {
     match build {
-        17763 => Some(AppModeCall::AllowDarkModeForApp),
         18362 | 18363 | 19041.. => Some(AppModeCall::SetPreferredAppMode),
         _ => None,
     }

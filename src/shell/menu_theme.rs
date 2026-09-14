@@ -38,7 +38,6 @@ struct Calls {
 
 /// 序号 135，按这个 build 上它的真签名装好。
 enum AppMode {
-    AllowDarkModeForApp(unsafe extern "system" fn(bool) -> bool),
     SetPreferredAppMode(unsafe extern "system" fn(i32) -> i32),
 }
 
@@ -68,9 +67,6 @@ impl UxTheme {
         // SAFETY: 两个函数是按这个 build 上的真签名装好的（`take_calls`），uxtheme.dll 装进来之后从不卸载。
         unsafe {
             match calls.app_mode {
-                AppMode::AllowDarkModeForApp(allow) => {
-                    allow(dark);
-                }
                 AppMode::SetPreferredAppMode(set) => {
                     set(if dark { FORCE_DARK } else { FORCE_LIGHT });
                 }
@@ -108,17 +104,11 @@ fn take_calls(call: AppModeCall) -> Option<Calls> {
         |ordinal: usize| unsafe { GetProcAddress(uxtheme, PCSTR(without_provenance(ordinal))) };
     let app_mode = by_ordinal(135)?;
     let flush_menu_themes = by_ordinal(136)?;
-    // SAFETY: 两个序号在认得的版本上各是什么签名，照调研第 3 节的序号表；序号 135 的两种签名由
-    // `app_mode_call` 按 build 分好了。
+    // SAFETY: 两个序号在认得的版本上各是什么签名，照调研第 3 节的序号表；序号 135 按哪种签名装由
+    // `app_mode_call` 按 build 定。
     unsafe {
         Some(Calls {
             app_mode: match call {
-                AppModeCall::AllowDarkModeForApp => {
-                    AppMode::AllowDarkModeForApp(transmute::<
-                        AnyFunction,
-                        unsafe extern "system" fn(bool) -> bool,
-                    >(app_mode))
-                }
                 AppModeCall::SetPreferredAppMode => {
                     AppMode::SetPreferredAppMode(transmute::<
                         AnyFunction,
