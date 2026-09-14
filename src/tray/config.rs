@@ -17,6 +17,7 @@ use crate::config::Config;
 use crate::round::Warning;
 
 use super::Tray;
+use super::menu::OPEN_CONFIG_FILE;
 use super::notify::Notice;
 use super::warnings::Matter;
 
@@ -58,6 +59,6 @@ impl Tray {
 fn draft_notice() -> Notice {
     Notice {
         title: "已生成配置".to_string(),
-        body: "右键托盘图标，点\"打开配置文件\"看一眼".to_string(),
+        body: format!("右键托盘图标，点\"{OPEN_CONFIG_FILE}\"看一眼"),
     }
 }

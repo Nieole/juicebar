@@ -171,7 +171,7 @@ unsafe extern "system" fn window_proc(
         // 每一格也顺手取一遍取数线程交回来的东西：哪次敲门时外壳正借给别人，那一样就等到这里。
         WM_TIMER => {
             take_reports();
-            look_at_config();
+            reread_config_if_changed();
             feed(Event::Tick(SystemClock.now()));
         }
         WM_REPORT => take_reports(),
@@ -196,8 +196,8 @@ unsafe extern "system" fn window_proc(
 
 /// 看一眼配置文件变没变，变了就把重读的结果递进内核。排在这一格的时钟之前：这一格要是排出取数，带的就是
 /// 新读好的那一份。
-fn look_at_config() {
-    if let Some(event) = with_app(|app| app.config.look()).flatten() {
+fn reread_config_if_changed() {
+    if let Some(event) = with_app(|app| app.config.reread_if_changed()).flatten() {
         feed(Event::Config(event));
     }
 }

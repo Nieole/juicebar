@@ -6,6 +6,9 @@
 
 use super::Tray;
 
+/// "打开配置文件"那一项写着的字。首次运行的通知叫用户去点它（`super::config`），两处说的得是同一个名字。
+pub(super) const OPEN_CONFIG_FILE: &str = "打开配置文件";
+
 /// 右键菜单，自上而下。
 pub struct Menu {
     pub entries: Vec<Entry>,
@@ -41,7 +44,7 @@ impl Tray {
         Menu {
             entries: vec![
                 Entry {
-                    text: "打开配置文件".to_string(),
+                    text: OPEN_CONFIG_FILE.to_string(),
                     command: Command::OpenConfigFile,
                 },
                 Entry {
