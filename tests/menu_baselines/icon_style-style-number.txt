@@ -1,0 +1,34 @@
+# 由 .scratch/tray-design/icon-review.html 的“导出菜单基准”生成，别手改：改设计稿，再跑 node tests/menu_baselines/export.mjs。
+# 这一份：图标样式与它的六个子菜单，从罐装出发只改 style=number
+# 一项一行：种类（普通 / 勾选 / 单选 / 子菜单 / 分隔线）；被勾上写“勾”、单选落在它上面写“圆点”，当前项加粗写“粗”，变灰写“灰”；「文字」；有右列写 右列「…」；挂了预览写 预览(状态 电量 尺寸 底色 [键=取值 …])，几张并排时状态用 + 连起来，没写的设置取缺省值。
+# 子菜单那一行下面跟着它的内容，每深一层多缩进两个空格。〔…〕是占位：那段措辞归代码，确切字符串由内核的用例断言。罐装配置与环境见 canned.txt。
+
+子菜单 「图标样式」
+  子菜单 「画法」 右列「A 纯数字」
+    单选 圆点 粗 「A 纯数字」 预览(正常 57 16 dark style=number)
+    单选 「B 电池」 右列「16、20 像素不显示数字」 预览(正常 57 16 dark style=battery)
+    单选 「C 圆环」 预览(正常 57 16 dark style=ring)
+    单选 「D 数字+底条」 右列「默认」 预览(正常 57 16 dark)
+  子菜单 「字形」 右列「粗块」
+    单选 圆点 粗 「粗块」 右列「默认」 预览(正常 57 16 dark style=number)
+    单选 「细体」 预览(正常 57 16 dark style=number glyph=fine)
+    单选 「系统字体」 预览(正常 57 16 dark style=number glyph=system)
+  子菜单 「满电 100」 右列「满格符号」
+    单选 「照画 100」 预览(正常 100 16 dark style=number full=digits)
+    单选 「画成 99」 预览(正常 100 16 dark style=number full=cap_99)
+    单选 圆点 粗 「满格符号」 右列「默认」 预览(正常 100 16 dark style=number)
+  子菜单 「灰状态」 右列「灰数字与灰符号两种」
+    单选 「全部一个灰」 预览(Stale+暂停+取数失败 57 16 dark style=number gray=one)
+    单选 圆点 粗 「灰数字与灰符号两种」 右列「默认」 预览(Stale+暂停+取数失败 57 16 dark style=number)
+    单选 「两种，另给暂停加琥珀点」 预览(Stale+暂停+取数失败 57 16 dark style=number gray=split_pause)
+  子菜单 「没有读数时」 右列「两道横线 --」
+    单选 圆点 粗 「两道横线 --」 右列「默认」 预览(无已知值 57 16 dark style=number)
+    单选 「问号」 预览(无已知值 57 16 dark style=number no_last_known=question)
+    单选 「空的轮廓」 预览(无已知值 57 16 dark style=number no_last_known=outline)
+    单选 「程序图标」 预览(无已知值 57 16 dark style=number no_last_known=logo)
+  子菜单 「充电标记」 右列「只靠绿色」
+    单选 圆点 粗 「只靠绿色」 右列「默认」 预览(充电中 57 16 dark style=number)
+    单选 「24 像素以上加闪电」 预览(充电中 57 16 dark style=number charging=bolt_large)
+    单选 「所有尺寸都加闪电」 预览(充电中 57 16 dark style=number charging=bolt)
+  分隔线
+  普通 「恢复默认」

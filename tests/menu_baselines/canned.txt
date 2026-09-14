@@ -1,0 +1,9 @@
+# 由 .scratch/tray-design/icon-review.html 的“导出菜单基准”生成，别手改：改设计稿，再跑 node tests/menu_baselines/export.mjs。
+# 菜单基准用的罐装配置与环境。每一份基准的第二行写着它从这里出发改了什么。设备行的措辞在基准里是占位，下面“这一轮”只说各台处在哪种情形。
+
+托盘图标 16 像素；任务栏深色，所以菜单与预览都画深色
+[tray] 八项都是缺省值；primary = "lowest"；开机自启没开；没有挂着的告警
+Device dragonfly3「Dragonfly 3 Master+」：没有蓝牙地址；这一次取数读到 57%，来自 Dongle24G，新鲜——图标状态 正常
+Device neon75「VGN Neon75」：没有蓝牙地址；这一次取数失败（失联），没有上次已知值——图标状态 取数失败
+这一轮自动选出的 Primary Device：dragonfly3
+本机：没扫到没登记的蓝牙设备，也没有身份表认得、配置里却没有的 HID 设备
