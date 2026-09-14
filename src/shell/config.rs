@@ -34,6 +34,8 @@ pub(super) struct ConfigFile {
     read: Option<Stamp>,
     /// 上一格看到的样子。这一格与它一样，才算样子停下来了。
     last_look: Option<Stamp>,
+    /// 取数线程扫到的、还在等配置文件静下来才交进内核的那一份（[`scanned`]）。
+    scanned: Option<Vec<HidInfo>>,
 }
 
 /// 文件的修改时间与大小：两样都没变，就当它没变。
@@ -59,6 +61,7 @@ impl ConfigFile {
             path,
             read: seen,
             last_look: seen,
+            scanned: None,
         };
         Ok((file, config, first_run))
     }
@@ -84,10 +87,25 @@ impl ConfigFile {
         Some(Event::Reloaded(loaded.map_err(|e| format!("{e:#}"))))
     }
 
-    /// 配置文件此刻的全文（自动补空块照它补）。
-    fn read_text(&self) -> Result<String> {
-        std::fs::read_to_string(&self.path)
-            .with_context(|| format!("读不到配置 {}", self.path.display()))
+    /// 扫到的在等着、而配置文件静下来了，就读全文，交回要递进内核的那一个事件；否则是 `None`，下一格再试。
+    ///
+    /// "静下来"是**此刻的样子就是上一次重读时的样子**（[`Self::reread_if_changed`] 只在样子停下来之后才记它），读完
+    /// 再核一遍：用户正在存盘、程序刚写回还没重读，都不读——照一份半截的文件补，写回去就把用户后半截的内容盖没了。
+    /// 读的那一刻被别人占着也不算，下一格再试。
+    fn scan_if_at_rest(&mut self) -> Option<Event> {
+        if self.scanned.is_none() || stamp(&self.path) != self.read {
+            return None;
+        }
+        let text = std::fs::read_to_string(&self.path)
+            .with_context(|| format!("读不到配置 {}", self.path.display()));
+        if text.as_ref().is_err_and(is_busy) || stamp(&self.path) != self.read {
+            return None;
+        }
+        let collections = self.scanned.take()?;
+        let scan = text
+            .map(|text| Scan { collections, text })
+            .map_err(|e| format!("{e:#}"));
+        Some(Event::Scanned(scan))
     }
 
     /// 把配置文件整个换成这份全文（自动补空块写回）。不改记下的样子，理由见模块文档。
@@ -154,17 +172,29 @@ pub(super) fn execute(action: Action, app: &mut App) {
     }
 }
 
-/// 取数线程扫完了一遍本机（[`Action::Scan`]）：读一遍配置文件的全文，连同扫到的递进内核（[`Event::Scanned`]）。
+/// 取数线程扫完了一遍本机（[`Action::Scan`]）。
 ///
-/// **全文在这里读，紧挨着递进内核**：内核照它补、交出写回，外壳当场就写（[`execute`]），读与写之间只隔内核里的
-/// 几次解析。在取数线程上随枚举一起读就早了——那一份在通道里等着的工夫，用户存下的改动会被写回的那一份盖掉。
+/// 枚举不了就当场把原因递进内核（[`Event::Scanned`]），不必读文件。扫到了先存着，等配置文件静下来才读全文交出去
+/// （[`hand_over_scan`]）：内核照那份全文补、交出写回，外壳当场就写（[`execute`]），读与写之间只隔内核里的几次解析。
+/// 在取数线程上随枚举一起读就早了——那一份在通道里等着的工夫，用户存下的改动会被写回的那一份盖掉。
+///
+/// **这里借外壳不会落空**：它由 `take_reports` 在刚借外壳取出这份报告之后调用，同一个调用栈、中间不派发消息。它要是
+/// 落了空，内核那一遍扫描就永远交不回来（`crate::tray::config` 的 `Scans`），之后插拔只记一笔、不再扫。
 pub(super) fn scanned(collections: Result<Vec<HidInfo>, String>) {
-    let Some(text) = super::with_app(|app| app.config.read_text()) else {
-        return;
-    };
-    let scan = collections.and_then(|collections| {
-        let text = text.map_err(|e| format!("{e:#}"))?;
-        Ok(Scan { collections, text })
-    });
-    super::feed(crate::tray::Event::Config(Event::Scanned(scan)));
+    match collections {
+        Err(reason) => super::feed(crate::tray::Event::Config(Event::Scanned(Err(reason)))),
+        Ok(collections) => {
+            super::with_app(|app| app.config.scanned = Some(collections));
+            hand_over_scan();
+        }
+    }
+}
+
+/// 扫到的在等着、配置文件又静下来了，就读全文、递进内核。扫描刚交回来时问一次，之后每一格重读配置之后再问。
+///
+/// 取出那一份与递进内核是同一个调用栈上的两次借用；借不到外壳（窗口过程被重入）时那一份原样留着，下一格再问。
+pub(super) fn hand_over_scan() {
+    if let Some(event) = super::with_app(|app| app.config.scan_if_at_rest()).flatten() {
+        super::feed(crate::tray::Event::Config(event));
+    }
 }

@@ -122,16 +122,30 @@ fn startup_scans_the_machine_once() {
     assert_eq!(screen.scans, 1);
 }
 
-/// 本机插上或拔掉了设备：再扫一遍。托盘开着时插上的线，就在这一遍里查到。
+/// 托盘开着时插上鼠标的线：本机设备变了，再扫一遍；这一遍看到 Wired 在场、配置里那块空着，补上并弹通知。
 #[test]
-fn a_device_change_scans_the_machine_again() {
+fn plugging_in_while_running_scans_again_and_fills_the_blank_block() {
     let text = draft(&[mouse_dongle()]);
     let (mut tray, mut screen) = start(&text, &LastKnown::default(), NOW);
+    // 启动那一遍：线还没插，没有要补的。
     feed(&mut tray, &mut screen, scanned(&text, &[mouse_dongle()]));
 
     feed(&mut tray, &mut screen, devices_changed());
+    assert_eq!(screen.scans, 2, "本机设备变了，再扫一遍");
+    feed(
+        &mut tray,
+        &mut screen,
+        scanned(&text, &[mouse_dongle(), mouse_wired()]),
+    );
 
-    assert_eq!(screen.scans, 2);
+    assert_eq!(screen.written.len(), 1);
+    assert_eq!(
+        screen.notices,
+        [Notice {
+            title: "配置已自动更新".to_string(),
+            body: "补上了 Dragonfly 3 Master+ 的 Wired".to_string(),
+        }]
+    );
 }
 
 /// 插上一根线，系统为它冒出来的每一条 collection 各报一次"设备变了"，一口气好几次。一遍扫描还没交回来时再来的

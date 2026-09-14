@@ -66,28 +66,33 @@ pub enum Action {
 /// 插上一根线，系统会为它冒出来的每一条 HID collection 各报一次"设备变了"。一遍扫描还没交回来时再来的只记一笔，
 /// 交回来之后再扫**一遍**：那一遍排出之后的每一次变化都有一遍扫描看得见，而一串变化不排出一串扫描。
 #[derive(Default)]
-pub(super) struct Scans {
-    /// 排出了一遍扫描、还没交回来。
-    pending: bool,
-    /// 那一遍排出之后本机又变过：交回来之后要再扫一遍。
-    again: bool,
+pub(super) enum Scans {
+    /// 外头没有扫描。
+    #[default]
+    Idle,
+    /// 排出了一遍，还没交回来。
+    Out,
+    /// 排出了一遍、还没交回来，而那之后本机又变过：交回来之后要再扫一遍。
+    OutAndChanged,
 }
 
 impl Scans {
     /// 要扫一遍本机：外头没有扫描就排一遍，有就记一笔。
     pub(super) fn request(&mut self, out: &mut Vec<super::Action>) {
-        if self.pending {
-            self.again = true;
-            return;
-        }
-        self.pending = true;
-        out.push(super::Action::Config(Action::Scan));
+        *self = match self {
+            Self::Idle => {
+                out.push(super::Action::Config(Action::Scan));
+                Self::Out
+            }
+            Self::Out | Self::OutAndChanged => Self::OutAndChanged,
+        };
     }
 
     /// 扫描交回来了：那之间本机又变过，就再排一遍。
     fn answered(&mut self, out: &mut Vec<super::Action>) {
-        self.pending = false;
-        if std::mem::take(&mut self.again) {
+        let changed = matches!(self, Self::OutAndChanged);
+        *self = Self::Idle;
+        if changed {
             self.request(out);
         }
     }

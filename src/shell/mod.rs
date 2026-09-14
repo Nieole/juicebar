@@ -205,6 +205,8 @@ fn reread_config_if_changed() {
     if let Some(event) = with_app(|app| app.config.reread_if_changed()).flatten() {
         feed(Event::Config(event));
     }
+    // 扫到的在等配置文件静下来（`config.rs` 的 `scanned`）：重读之后再问一次。
+    config::hand_over_scan();
 }
 
 /// 取数线程交回来的东西，一样一样取出来，递进内核。
