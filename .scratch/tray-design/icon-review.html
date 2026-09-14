@@ -204,7 +204,7 @@ textarea{width:100%;min-height:190px;margin-top:10px;font:13px/1.55 "Cascadia Co
   <h2 id="h-menu">右键菜单</h2>
   <p class="hint"><b>2026-09-14 按普通原生菜单改过，待审。</b>菜单用 Windows 的普通菜单项，不自绘（ADR-0006）：一项只有一行字、一个贴右的右列；勾、圆点与预览小图共用最左边那一格；没有“小灰字标题”这种项。这一页照原型在实机上量出来的样子画（<code>docs/research/native-menu-research.md</code> 第 8 节），字体、行高、高亮归 Windows，所以这里是示意，不逐像素。</p>
   <p class="hint">自上而下：告警（有才出现）→ 每台 Device 一行 → 托盘上画哪一台 › → 图标样式 › → 菜单显示 › → 登记设备 › → 开机自启 → 打开配置文件 → 退出。<b>菜单的深浅跟任务栏</b>：深色任务栏时菜单是深色的，浅色任务栏时是浅色的；认不得的 Windows 版本上一律浅色（ADR-0006，Windows 10 1903 起才认）。</p>
-  <p class="hint"><span class="ph">虚线下划线</span>的字是占位：设备行与告警行的措辞归代码，这里抄的是写这一版时代码的说法（短原因是 <code>NoReading::short_reason</code>），<b>以代码为准</b>；导出的菜单基准里这几处只写占位。</p>
+  <p class="hint"><span class="ph">虚线下划线</span>的字是占位，措辞归代码，<b>以代码为准</b>；导出的菜单基准里这几处只写占位。设备行抄的是写这一版时代码的说法：来源和多久前照悬停提示（<code>src/tray/hover.rs</code>），短原因照 <code>NoReading::short_reason</code>，“一台 Device 都没有”那句照悬停提示。告警行代码里还没有菜单上的说法，这里是从日志那一句（<code>Warning</code> 的 <code>Display</code>）截的前半句，外加“点这里看日志”，只是示意。</p>
   <div class="menus" id="menus"></div>
   <h3 class="subhd">有告警、一台 Device 都没有</h3>
   <p class="hint">告警是不属于任何一台 Device、而用户该知道的一件没办成的事，一条一行，放在最顶上，挂到那件事下一次办成为止；点一下打开日志。三种都挂着时次序固定：认不出本机在跑哪些进程、读数记不进状态文件、配置文件读不了。配置里一台 Device 都没有时，设备行那一块换成一句说明。</p>
@@ -222,7 +222,9 @@ textarea{width:100%;min-height:190px;margin-top:10px;font:13px/1.55 "Cascadia Co
   <div id="cascade" class="cascade tall" aria-label="右键菜单的设置路径，可操作"></div>
   <h3 class="subhd">最里一层怎么标出当前选项（请拍板）</h3>
   <p class="hint">原来那一版是“圆点、预览、文字”并排。<b>普通菜单项画不出来</b>：实机上预览位图就画在勾那一格里，挂了位图的项被选中后圆点根本不画（调研 8.3）。画得出的有两种，原型都截了图：</p>
-  <p class="hint"><b>当前项加粗（这一版按它画，导出的基准也按它）</b>：每个选项的预览一张不少，当前项整行加粗，连右边的“默认”一起（<code>MFS_DEFAULT</code>，一张菜单只能有一项，而这里一张菜单恰好只有一个当前值）。<b>圆点换掉当前项的预览</b>：当前项前面是圆点、没有预览，其余照画（<code>MNS_CHECKORBMP</code>）；丢的是当前那一项的样子，而它此刻正画在托盘上。还有第三种“把圆点画进预览位图左边一格”，画得出，但圆点的颜色、大小、四档尺寸都得另定、另审，原型没截图。</p>
+  <p class="hint"><b>当前项加粗（这一版按它画，导出的基准也按它）</b>：每个选项的预览一张不少，当前项整行加粗，连右边的“默认”一起（<code>MFS_DEFAULT</code>，一张菜单只能有一项，而这里一张菜单恰好只有一个当前值）。</p>
+  <p class="hint"><b>圆点换掉当前项的预览</b>：当前项前面是圆点、没有预览，其余照画（<code>MNS_CHECKORBMP</code>）；丢的是当前那一项的样子，而它此刻正画在托盘上。</p>
+  <p class="hint">还有第三种“把圆点画进预览位图左边一格”，画得出，但圆点的颜色、大小、四档尺寸都得另定、另审，原型没截图。</p>
   <div class="menus" id="markcmp"></div>
   <div class="shots">
     <figure><img src="../../docs/research/native-menu-research/dark-bold-dir-16.png" alt="实机截图：深色菜单，画法这一层，当前项 D 数字+底条 整行加粗" loading="lazy"><figcaption>加粗，深色，画法（<code>dark-bold-dir-16.png</code>）</figcaption></figure>
@@ -626,7 +628,8 @@ function renderDetail() {
 const STYLE_KEYS = ['dir', 'glyph', 'full', 'gray', 'none', 'chg'];
 const PREVIEW_STATE = { dir:'normal', glyph:'normal', full:'normal', none:'none', chg:'chg' };
 const PREVIEW_L = 57;                                    // 预览固定画的电量；“满电 100”那一组画 100
-const GRAY_STATES = ['stale', 'paused', 'fail', 'unknown', 'none'];
+const GRAYED_ROW_STATES = ['stale', 'paused', 'fail', 'unknown', 'none'];   // 设备行在这几个图标状态下变灰
+const GRAY_PREVIEW = ['stale', 'paused', 'fail'];                           // “灰状态”那一组预览并排的三张
 const AUTO = '自动（电量最低）';
 const SEP = { kind:'sep' };
 /* 最里一层怎么标出当前选项：'bold' 当前项加粗、预览照挂；'dot' 当前项用圆点换掉自己的预览。
@@ -634,16 +637,16 @@ const SEP = { kind:'sep' };
 const MARK = 'bold';
 const byKey = k => SETTINGS.find(s => s.k === k);
 const optLabel = (s, v) => (s.opts.find(o => o[0] === v) || [, v])[1];
-const nav = { top:'style', sub:'dir' };                  // 级联菜单现在展开到哪一条路径
+const nav = { top:'icon_style', sub:'dir' };                  // 级联菜单现在展开到哪一条路径
 
 /* 罐装：页面上的菜单与导出的菜单基准都从这一份出发（导出时另写进 tests/menu_baselines/canned.txt）。
  * 每台 Device 这一轮的样子：state 图标状态，level 手上的数（没有就不写），mid 中段是哪一种（'source' 来源和多久前、
- * 'reason' 短原因、不写就空着），sample 中段在页面上画成什么——措辞归代码，抄的是写这一版时代码的说法。 */
+ * 'reason' 短原因、不写就空着），midText 中段在页面上画成什么——措辞归代码，抄的是写这一版时代码的说法。 */
 const CANNED = {
   devices: [
-    { id:'dragonfly3', name:'Dragonfly 3 Master+', state:'normal', level:57, mid:'source', sample:'来自 Dongle24G（0 秒前）',
+    { id:'dragonfly3', name:'Dragonfly 3 Master+', state:'normal', level:57, mid:'source', midText:'来自 Dongle24G（0 秒前）',
       about:'这一次取数读到 57%，来自 Dongle24G，新鲜' },
-    { id:'neon75', name:'VGN Neon75', state:'fail', mid:'reason', sample:'失联（没插？没配对？没开机？）',
+    { id:'neon75', name:'VGN Neon75', state:'fail', mid:'reason', midText:'失联（没插？没配对？没开机？）',
       about:'这一次取数失败（失联），没有上次已知值' },
   ],
   primary: 'lowest',
@@ -651,22 +654,24 @@ const CANNED = {
   ble: [],                                               // 本机扫到、没登记的蓝牙设备
   hid: [],                                               // 身份表认得、本机在场、配置里没有的 HID 设备
 };
-const WARNINGS = [                                       // 次序照内核（src/tray/warnings.rs 的 Matter）
+/* 告警行的占位，次序照内核（src/tray/warnings.rs 的 Matter）。sample 是从日志那一句（src/round.rs 里 Warning 的 Display）截的
+ * 前半句加“点这里看日志”：代码里还没有菜单上的说法，只是示意 */
+const WARNINGS = [
   { ph:'告警：认不出本机在跑哪些进程', sample:'认不出本机在跑哪些进程，点这里看日志' },
   { ph:'告警：读数记不进状态文件', sample:'记不下这一轮的读数，点这里看日志' },
   { ph:'告警：配置文件读不了', sample:'读不了配置文件，沿用上一份读好的，点这里看日志' },
 ];
 /* “设备行：一行三段”那一块的样本：每一行守一条规则。只画在页面上，不进基准——确切字符串由内核的用例断言 */
 const ROW_SAMPLES = [
-  { name:'Dragonfly 3 Master+', state:'normal', level:57, mid:'source', sample:'来自 Dongle24G（0 秒前）', why:'正常：这一次读到了' },
-  { name:'WH-1000XM5', state:'normal', level:80, mid:'source', sample:'来自 Ble（Windows 缓存，3 分钟前）', why:'正常：蓝牙读的是 Windows 缓存' },
-  { name:'WH-1000XM5', state:'stale', level:80, mid:'source', sample:'来自 Ble（Windows 缓存，3 小时前），已陈旧', why:'Stale：读到了，但太旧' },
-  { name:'VGN Neon75', state:'paused', level:64, mid:'reason', sample:'已暂停（VGN VHUB.exe 正在运行）', why:'暂停：没去问，右列是上次已知值' },
-  { name:'VGN Neon75', state:'low', level:12, mid:'reason', sample:'失联（没插？没配对？没开机？）', why:'低电：读不到了，上次已知值低电，不变灰' },
-  { name:'VGN Neon75', state:'stale', level:64, mid:'reason', sample:'读取异常（有上位机在抢通路？）', why:'Stale：读取异常，右列是上次已知值' },
-  { name:'VGN Neon75', state:'fail', mid:'reason', sample:'失联（没插？没配对？没开机？）', why:'取数失败：读不到，也没有上次已知值' },
-  { name:'VGN Neon75', state:'fail', mid:'reason', sample:'一条 Endpoint 都没配置', why:'取数失败：配置里一条 Endpoint 都没有' },
-  { name:'Dragonfly 3 Master+', state:'unknown', mid:'source', sample:'来自 Wired（0 秒前）', why:'Unknown：读到了，电量不可采信' },
+  { name:'Dragonfly 3 Master+', state:'normal', level:57, mid:'source', midText:'来自 Dongle24G（0 秒前）', why:'正常：这一次读到了' },
+  { name:'WH-1000XM5', state:'normal', level:80, mid:'source', midText:'来自 Ble（Windows 缓存，3 分钟前）', why:'正常：蓝牙读的是 Windows 缓存' },
+  { name:'WH-1000XM5', state:'stale', level:80, mid:'source', midText:'来自 Ble（Windows 缓存，3 小时前），已陈旧', why:'Stale：读到了，但太旧' },
+  { name:'VGN Neon75', state:'paused', level:64, mid:'reason', midText:'已暂停（VGN VHUB.exe 正在运行）', why:'暂停：没去问，右列是上次已知值' },
+  { name:'VGN Neon75', state:'low', level:12, mid:'reason', midText:'失联（没插？没配对？没开机？）', why:'低电：读不到了，上次已知值低电，不变灰' },
+  { name:'VGN Neon75', state:'stale', level:64, mid:'reason', midText:'读取异常（有上位机在抢通路？）', why:'Stale：读取异常，右列是上次已知值' },
+  { name:'VGN Neon75', state:'fail', mid:'reason', midText:'失联（没插？没配对？没开机？）', why:'取数失败：读不到，也没有上次已知值' },
+  { name:'VGN Neon75', state:'fail', mid:'reason', midText:'一条 Endpoint 都没配置', why:'取数失败：配置里一条 Endpoint 都没有' },
+  { name:'Dragonfly 3 Master+', state:'unknown', mid:'source', midText:'来自 Wired（0 秒前）', why:'Unknown：读到了，电量不可采信' },
   { name:'Dragonfly 3 Master+', state:'none', why:'无已知值：还没取过数，也没有上次已知值' },
 ];
 
@@ -674,19 +679,21 @@ const stateOf = k => STATES.find(s => s.k === k);
 /* 这一轮托盘画的是谁：钉死就是那一台；自动取手上有新鲜读数的几台里电量最低的（罐装里没有“保持上次的选择”那种情形） */
 function primaryOf(sc) {
   if (sc.primary !== 'lowest') return sc.primary;
-  const fresh = sc.devices.filter(d => d.mid === 'source' && d.level != null && !GRAY_STATES.includes(d.state));
+  const fresh = sc.devices.filter(d => d.mid === 'source' && d.level != null && !GRAYED_ROW_STATES.includes(d.state));
   return fresh.length ? fresh.reduce((a, b) => (b.level < a.level ? b : a)).id : null;
 }
+/* 设备行的中段是哪一种：这一次没拿到读数写短原因，不受开关影响；拿到了读数、开着“写出来源和多久前”写来源；否则空着（null） */
+const midKind = (d, o) => (d.mid === 'reason' ? '短原因' : (d.mid === 'source' && o.src === 'yes' ? '来源和多久前' : null));
 /* 设备行：〔勾〕名字 中段 ｜ 右列。整句措辞归代码，所以基准里是一个占位，占位名说清是哪一台、中段与右列各是哪一种 */
 function deviceRow(d, primaryId, o) {
-  const mid = d.mid === 'reason' ? '短原因' : (d.mid === 'source' && o.src === 'yes' ? '来源和多久前' : null);
+  const mid = midKind(d, o);
   const st = stateOf(d.state);
   return {
     kind:'normal',
-    text:{ ph:'设备行：' + d.name + (mid ? ' · ' + mid : ''), sample: d.name + (mid ? '  ' + d.sample : '') },
+    text:{ ph:'设备行：' + d.name + (mid ? ' · ' + mid : ''), sample: d.name + (mid ? '  ' + d.midText : '') },
     acc: d.level != null ? { ph:'电量', sample: d.level + '%' } : { ph:'图标状态：' + st.name, sample: st.name },
     on: o.prim === 'both' && d.id === primaryId,
-    gray: GRAY_STATES.includes(d.state),
+    gray: GRAYED_ROW_STATES.includes(d.state),
   };
 }
 /* 一级。act 是页面上点了做什么（导出时不给）；o 是那八项设置 */
@@ -695,12 +702,12 @@ function topModel(sc, o, act) {
   if (sc.warnings.length) items.push(...sc.warnings.map(w => ({ kind:'normal', text:w })), SEP);
   if (sc.devices.length) items.push(...sc.devices.map(d => deviceRow(d, primaryOf(sc), o)));
   else items.push({ kind:'normal', text:{ ph:'一台 Device 都没有的说明', sample:'配置里一个 Device 都没有' } });
-  const open = name => act && (() => act.openTop(name));
+  const openable = it => Object.assign(it, { pick: act && (() => act.openTop(it.id)) });
   items.push(SEP,
-    Object.assign(whichModel(sc), { pick: open('which') }),
-    Object.assign(styleModel(o, act), { pick: open('style') }),
-    Object.assign(menuShowModel(o, act), { pick: open('menu') }),
-    Object.assign(registerModel(sc), { pick: open('register') }),
+    openable(whichModel(sc)),
+    openable(styleModel(o, act)),
+    openable(menuShowModel(o, act)),
+    openable(registerModel(sc)),
     { kind:'check', text:'开机自启', on:false },
     SEP,
     { kind:'normal', text:'打开配置文件' },
@@ -710,17 +717,17 @@ function topModel(sc, o, act) {
 /* 托盘上画哪一台：右列写用户的选择，不是这一轮的 Primary Device（那个看设备行上的勾） */
 function whichModel(sc) {
   const pinned = sc.devices.find(d => d.id === sc.primary);
-  return { kind:'sub', text:'托盘上画哪一台', acc: pinned ? pinned.name : AUTO, items: [
+  return { kind:'sub', id:'primary', text:'托盘上画哪一台', acc: pinned ? pinned.name : AUTO, items: [
     { kind:'radio', text:AUTO, on:!pinned },
     ...sc.devices.map(d => ({ kind:'radio', text:d.name, on: d === pinned })),
   ] };
 }
 /* 图标样式：一级那一行右边不写字，第二层右边写当前值，末尾“恢复默认”只恢复这六项 */
 function styleModel(o, act) {
-  return { kind:'sub', text:'图标样式', items: [
+  return { kind:'sub', id:'icon_style', text:'图标样式', items: [
     ...STYLE_KEYS.map(k => {
       const s = byKey(k);
-      return { kind:'sub', text:s.m, acc:optLabel(s, o[k]), items:optionModel(k, o, MARK, act), pick: act && (() => act.openSub(k)) };
+      return { kind:'sub', id:k, text:s.m, acc:optLabel(s, o[k]), items:optionModel(k, o, MARK, act), pick: act && (() => act.openSub(k)) };
     }),
     SEP,
     { kind:'normal', text:'恢复默认', pick: act && act.reset },
@@ -732,7 +739,7 @@ function optionModel(k, o, mark, act) {
   return s.opts.map(([v, label]) => {
     const on = o[k] === v;
     const it = { kind:'radio', text:label, on, pick: act && (() => act.pick(k, v)),
-      pv: { states: k === 'gray' ? ['stale', 'paused', 'fail'] : [PREVIEW_STATE[k]], L: k === 'full' ? 100 : PREVIEW_L,
+      pv: { states: k === 'gray' ? GRAY_PREVIEW : [PREVIEW_STATE[k]], L: k === 'full' ? 100 : PREVIEW_L,
             o: Object.assign(styleOf(o), { [k]: v }) } };
     const acc = k === 'dir' && v === 'bat' ? '16、20 像素不显示数字' : (DEFAULTS[k] === v ? '默认' : null);
     if (acc) it.acc = acc;
@@ -744,7 +751,7 @@ function optionModel(k, o, mark, act) {
 const styleOf = o => Object.fromEntries(STYLE_KEYS.map(k => [k, o[k]]));
 /* 菜单显示：两项都是开关 */
 function menuShowModel(o, act) {
-  return { kind:'sub', text:'菜单显示', items: [
+  return { kind:'sub', id:'menu_display', text:'菜单显示', items: [
     { kind:'check', text:byKey('src').m, on: o.src === 'yes', pick: act && (() => act.toggle('src')) },
     { kind:'check', text:byKey('prim').m, on: o.prim === 'both', pick: act && (() => act.toggle('prim')) },
   ] };
@@ -763,7 +770,7 @@ function registerModel(sc) {
   const items = groups.length
     ? groups.flatMap((g, i) => (i ? [SEP, ...g] : g))
     : [{ kind:'normal', gray:true, text:'没有可登记的设备（蓝牙设备要先在 Windows 里配对）' }];
-  return { kind:'sub', text:'登记设备', items };
+  return { kind:'sub', id:'register', text:'登记设备', items };
 }
 /* 基准里要的几种情形，都从罐装出发 */
 const scenario = patch => Object.assign({}, CANNED, patch);
@@ -845,13 +852,13 @@ function drawCascade(host, theme, label, items, openAt) {
 const openFirstSub = (level, items) => items.findIndex(it => it.kind === 'sub');
 const openNone = () => -1;
 const themeName = t => (t === 'dark' ? '深色任务栏' : '浅色任务栏');
-function desk(host, theme, cap, build, cls) {
+/* 一块底板：上面一行说明，下面一条级联，build 往里画 */
+function desk(host, theme, cap, build) {
   const d = el('div', 'desk ' + theme);
-  if (cap) d.appendChild(el('p', 'cap', cap));
-  const c = el('div', 'cascade' + (cls ? ' ' + cls : ''));
+  d.appendChild(el('p', 'cap', cap));
+  const c = el('div', 'cascade');
   d.appendChild(c); host.appendChild(d);
   build(c);
-  return d;
 }
 
 function renderMenus() {
@@ -870,7 +877,7 @@ function renderMenus() {
   tab.appendChild(hd);
   ROW_SAMPLES.forEach((d, i) => {
     const r = deviceRow(d, null, set), tr = el('tr');
-    const mid = r.text.ph.split(' · ')[1] || '（空着）';
+    const mid = midKind(d, set) || '（空着）';
     for (const v of [i + 1, stateOf(d.state).name, mid, r.acc.ph, r.gray ? '灰' : '', d.why]) tr.appendChild(el('td', null, String(v)));
     tab.appendChild(tr);
   });
@@ -879,7 +886,7 @@ function renderMenus() {
 /* 页面上点了之后做什么：改设置、换展开的路径 */
 const ACT = {
   openTop: name => { nav.top = name; renderCascade(); },
-  openSub: k => { nav.top = 'style'; nav.sub = k; renderCascade(); },
+  openSub: k => { nav.top = 'icon_style'; nav.sub = k; renderCascade(); },
   pick: (k, v) => { set[k] = v; save(); renderAll(); },
   toggle: k => { set[k] = k === 'src' ? (set.src === 'yes' ? 'no' : 'yes') : (set.prim === 'both' ? 'radio' : 'both'); save(); renderAll(); },
   reset: () => { for (const k of STYLE_KEYS) set[k] = DEFAULTS[k]; save(); renderAll(); },
@@ -887,10 +894,9 @@ const ACT = {
 function renderCascade() {
   const host = document.getElementById('cascade'); host.innerHTML = '';
   const theme = set.theme; host.className = 'cascade tall ' + theme;
-  const names = { which:'托盘上画哪一台', style:'图标样式', menu:'菜单显示', register:'登记设备' };
   drawCascade(host, theme, '托盘右键菜单', topModel(CANNED, set, ACT), (level, items) => {
-    if (level === 0) return items.findIndex(it => it.text === names[nav.top]);
-    if (level === 1 && nav.top === 'style') return items.findIndex(it => it.text === byKey(nav.sub).m);
+    if (level === 0) return items.findIndex(it => it.id === nav.top);
+    if (level === 1 && nav.top === 'icon_style') return items.findIndex(it => it.id === nav.sub);
     return -1;
   });
 }
@@ -1061,17 +1067,18 @@ function textGrid(cv, W, H, pal, miss) {
   }
   return rows.join('\n');
 }
+/* 网格那一节的第一行：= 状态 电量 尺寸 底色 [键=取值 …]。图标基准与菜单基准里的预览网格共用 */
+const gridHead = (state, L, S, t, tags) => '= ' + [state, L, S, t].concat(tags).join(' ');
 /* 一项设置的一个取值，写成 [tray] 表里的 键=取值 */
 const cfg = (k, v) => { const s = byKey(k); return s.key + '=' + s.opts.find(o => o[0] === v)[2]; };
 function baselines() {
-  const themes = THEMES;
   const pal = paletteOf();
   const miss = { n: 0 };
   const grid = (cv, S, t) => textGrid(cv, S, S, pal[t], miss);
   const section = (st, S, t, o, L, tag) => {
     const cv = drawIcon(document.createElement('canvas'), S, st, Object.assign({}, o, { L, theme: t }));
     const lv = st.text ? '-' : (st.level === 'L' ? L : st.level);
-    return '= ' + [st.name, lv, S, t].concat(tag).join(' ') + '\n' + grid(cv, S, t);
+    return gridHead(st.name, lv, S, t, tag) + '\n' + grid(cv, S, t);
   };
   const head = '# 由 .scratch/tray-design/icon-review.html 的“导出基准”生成，别手改：改设计稿，再跑 tests/icon_baselines/export.mjs。\n'
     + '# 每一节第一行：= 状态 电量 尺寸 底色 [这一组改动的设置]；其余设置都是缺省值。下面一个像素一个字符，字符对照 palette.txt。\n';
@@ -1079,7 +1086,7 @@ function baselines() {
   const write = (name, sections) => { files[name + '.txt'] = head + '\n' + sections.join('\n\n') + '\n'; };
   const group = (o, L, tag) => {
     const out = [];
-    for (const st of STATES) for (const S of SIZES) for (const t of themes) out.push(section(st, S, t, o, L, tag));
+    for (const st of STATES) for (const S of SIZES) for (const t of THEMES) out.push(section(st, S, t, o, L, tag));
     return out;
   };
   const base = {};
@@ -1106,7 +1113,7 @@ function baselines() {
   write('sweep', sweep);
   const lines = ['# 基准网格里每个字符是哪种颜色：底色 字符 R G B A（A 是不透明度，颜色不预乘）。“.”是全透明。',
     '# 由 .scratch/tray-design/icon-review.html 的“导出基准”从它的调色板 PAL 算出来，别手改。'];
-  for (const t of themes) for (const [ch, q] of pal[t]) lines.push([t, ch].concat(q).join(' '));
+  for (const t of THEMES) for (const [ch, q] of pal[t]) lines.push([t, ch].concat(q).join(' '));
   files['palette.txt'] = lines.join('\n') + '\n';
   return { files, unmatched: miss.n };
 }
@@ -1144,7 +1151,8 @@ function menuBaselines() {
   };
   const GEN = '# 由 .scratch/tray-design/icon-review.html 的“导出菜单基准”生成，别手改：改设计稿，再跑 node tests/menu_baselines/export.mjs。';
   const GRAMMAR = [
-    '# 一项一行：种类（普通 / 勾选 / 单选 / 子菜单 / 分隔线）；被勾上写“勾”、单选落在它上面写“圆点”，当前项加粗写“粗”，变灰写“灰”；「文字」；有右列写 右列「…」；挂了预览写 预览(状态 电量 尺寸 底色 [键=取值 …])，几张并排时状态用 + 连起来，没写的设置取缺省值。',
+    '# 一项一行：种类（普通 / 勾选 / 单选 / 子菜单 / 分隔线）；然后依次是标记——有勾写“勾”（勾选项被勾上；普通项上的勾只标不点，就是设备行上 Primary Device 那个），单选落在它上面写“圆点”，当前项加粗写“粗”，变灰写“灰”；「文字」；有右列写 右列「…」；挂了预览写 预览(状态 电量 尺寸 底色 [键=取值 …])，几张并排时状态用 + 连起来。',
+    '# 预览里的 键=取值 只写与缺省值不同的，次序照 [tray] 表：' + STYLE_KEYS.map(k => byKey(k).key).join('、') + '。',
     '# 子菜单那一行下面跟着它的内容，每深一层多缩进两个空格。〔…〕是占位：那段措辞归代码，确切字符串由内核的用例断言。罐装配置与环境见 canned.txt。',
   ];
   const TOP = '一级只写一级：子菜单那一行下面不跟内容，内容各有一份（primary、icon_style、menu_display、register）';
@@ -1153,32 +1161,32 @@ function menuBaselines() {
   const def = Object.assign({}, DEFAULTS);
   const only = (k, v) => Object.assign({}, DEFAULTS, { [k]: v });
   const top = (sc, o) => [].concat(...topModel(sc, o).map(it => lines(it, 0, false)));
-  const sub = (sc, o, text) => lines(topModel(sc, o).find(it => it.text === text), 0, true);
+  const sub = (sc, o, id) => lines(topModel(sc, o).find(it => it.id === id), 0, true);
   const file = kv => kv.replace('=', '-');
 
   write('top', '一级，罐装。' + TOP, top(CANNED, def));
   write('top-warnings', '一级，罐装外加三条告警都挂着。' + TOP, top(SCENARIOS.warnings, def));
   write('top-no_devices', '一级，配置里一台 Device 都没有。' + TOP, top(SCENARIOS.noDevices, def));
-  write('primary', '托盘上画哪一台，罐装（primary = "lowest"）', sub(CANNED, def, '托盘上画哪一台'));
+  write('primary', '托盘上画哪一台，罐装（primary = "lowest"）', sub(CANNED, def, 'primary'));
   for (const d of CANNED.devices) {
     const sc = scenario({ primary: d.id });
     write('top-primary-' + d.id, '一级，从罐装出发只改 primary = "' + d.id + '"。' + TOP, top(sc, def));
-    write('primary-' + d.id, '托盘上画哪一台，从罐装出发只改 primary = "' + d.id + '"', sub(sc, def, '托盘上画哪一台'));
+    write('primary-' + d.id, '托盘上画哪一台，从罐装出发只改 primary = "' + d.id + '"', sub(sc, def, 'primary'));
   }
-  write('icon_style', '图标样式与它的六个子菜单，罐装（六项都是缺省值）', sub(CANNED, def, '图标样式'));
+  write('icon_style', '图标样式与它的六个子菜单，罐装（六项都是缺省值）', sub(CANNED, def, 'icon_style'));
   for (const k of STYLE_KEYS) for (const [v] of byKey(k).opts) {
-    if (v !== DEFAULTS[k]) write('icon_style-' + file(cfg(k, v)), '图标样式与它的六个子菜单，从罐装出发只改 ' + cfg(k, v), sub(CANNED, only(k, v), '图标样式'));
+    if (v !== DEFAULTS[k]) write('icon_style-' + file(cfg(k, v)), '图标样式与它的六个子菜单，从罐装出发只改 ' + cfg(k, v), sub(CANNED, only(k, v), 'icon_style'));
   }
-  write('menu_display', '菜单显示，罐装（两项都是缺省值）', sub(CANNED, def, '菜单显示'));
+  write('menu_display', '菜单显示，罐装（两项都是缺省值）', sub(CANNED, def, 'menu_display'));
   for (const k of ['src', 'prim']) for (const [v] of byKey(k).opts) {
     if (v === DEFAULTS[k]) continue;
     write('top-' + file(cfg(k, v)), '一级，从罐装出发只改 ' + cfg(k, v) + '。' + TOP, top(CANNED, only(k, v)));
-    write('menu_display-' + file(cfg(k, v)), '菜单显示，从罐装出发只改 ' + cfg(k, v), sub(CANNED, only(k, v), '菜单显示'));
+    write('menu_display-' + file(cfg(k, v)), '菜单显示，从罐装出发只改 ' + cfg(k, v), sub(CANNED, only(k, v), 'menu_display'));
   }
-  write('register', '登记设备，罐装：什么都没有', sub(CANNED, def, '登记设备'));
-  write('register-unregistered_ble', '登记设备，罐装外加本机扫到一台没登记、带电量属性的蓝牙设备 WH-1000XM5', sub(SCENARIOS.unregisteredBle, def, '登记设备'));
-  write('register-unregistered_hid', '登记设备，配置里只有 dragonfly3（没有 neon75），本机插着身份表认得的 VGN Neon75 的 Dongle24G 接收器', sub(SCENARIOS.unregisteredHid, def, '登记设备'));
-  write('register-ble_registered', '登记设备，从罐装出发只改 neon75 登记了蓝牙地址 f4ee2553b27e', sub(SCENARIOS.bleRegistered, def, '登记设备'));
+  write('register', '登记设备，罐装：什么都没有', sub(CANNED, def, 'register'));
+  write('register-unregistered_ble', '登记设备，罐装外加本机扫到一台没登记、带电量属性的蓝牙设备 WH-1000XM5', sub(SCENARIOS.unregisteredBle, def, 'register'));
+  write('register-unregistered_hid', '登记设备，配置里只有 dragonfly3（没有 neon75），本机插着身份表认得的 VGN Neon75 的 Dongle24G 接收器', sub(SCENARIOS.unregisteredHid, def, 'register'));
+  write('register-ble_registered', '登记设备，从罐装出发只改 neon75 登记了蓝牙地址 f4ee2553b27e', sub(SCENARIOS.bleRegistered, def, 'register'));
 
   files['canned.txt'] = [GEN,
     '# 菜单基准用的罐装配置与环境。每一份基准的第二行写着它从这里出发改了什么。设备行的措辞在基准里是占位，下面“这一轮”只说各台处在哪种情形。',
@@ -1191,11 +1199,10 @@ function menuBaselines() {
   ].join('\n') + '\n';
 
   const pal = paletteOf(), miss = { n: 0 }, grids = [];
-  const gray = ['stale', 'paused', 'fail'];
   for (const [v] of byKey('gray').opts) for (const S of SIZES) for (const t of THEMES) {
-    const cv = previewCanvas({ states: gray, L: PREVIEW_L, o: only('gray', v) }, S, t);
+    const cv = previewCanvas({ states: GRAY_PREVIEW, L: PREVIEW_L, o: only('gray', v) }, S, t);
     const tag = v === DEFAULTS.gray ? [] : [cfg('gray', v)];
-    grids.push('= ' + [gray.map(k => stateOf(k).name).join('+'), PREVIEW_L, S, t].concat(tag).join(' ') + '\n' + textGrid(cv, cv.width, S, pal[t], miss));
+    grids.push(gridHead(GRAY_PREVIEW.map(k => stateOf(k).name).join('+'), PREVIEW_L, S, t, tag) + '\n' + textGrid(cv, cv.width, S, pal[t], miss));
   }
   files['preview-gray.txt'] = GEN + '\n'
     + '# “灰状态”最里一层的预览：Stale、暂停、取数失败三张并排，间距 max(2, round(尺寸 / 6))。每一节第一行：= 状态+状态+状态 电量 尺寸 底色 [这一组改动的设置]；其余设置都是缺省值。下面一个像素一个字符，字符对照 tests/icon_baselines/palette.txt，“.”是全透明（三张之间的空隙也是）。\n'
