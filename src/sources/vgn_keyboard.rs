@@ -7,7 +7,7 @@
 use anyhow::{Result, bail};
 
 use crate::sources::level::require_plausible;
-use crate::sources::{Driver, Reading, ReportKind, Transport, require_frame_len};
+use crate::sources::{BadFrame, Driver, Reading, ReportKind, Transport, require_frame_len};
 
 /// VGN 键盘这一族的驱动。配置里写 `driver = "vgn_keyboard"` 取到的就是它。
 pub struct VgnKeyboard;
@@ -64,7 +64,9 @@ pub fn read_battery(transport: &dyn Transport) -> Result<Reading> {
             std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
         }
         let response = transport.exchange(&request)?;
-        if let Some(reading) = parse_dongle_data(&response)? {
+        // 走到这里 dongle 已经答了话：解析那一步不认这一帧，就是读取异常。未就绪不在其中——那一帧是
+        // 好的，只是还没有读数，连着未就绪到上界是下面那句"没有可采信的读数"，去问了、问不到。
+        if let Some(reading) = parse_dongle_data(&response).map_err(BadFrame)? {
             return Ok(reading);
         }
     }
@@ -85,8 +87,7 @@ fn parse_dongle_data(frame: &[u8]) -> Result<Option<Reading>> {
     // "非零即真"。实测抓到过一帧别的命令的残留 `F4 01 F4 01 …`，放行它就读出 1%。
     if frame[0] != READY {
         bail!(
-            "回包的就绪标志是 {:#04X}，既不是 {NOT_READY:#04X}（未就绪）也不是 \
-             {READY:#04X}（就绪）—— 这一帧不是本次请求的应答",
+            "回包的就绪标志是 {:#04X}，既不是 {NOT_READY:#04X}（未就绪）也不是 {READY:#04X}（就绪）—— 这一帧不是本次请求的应答",
             frame[0]
         );
     }

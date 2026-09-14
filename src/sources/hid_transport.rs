@@ -4,10 +4,10 @@
 //! collection 输入输出长度都是 0（实测 `in:0 out:0 feat:65`），只有 feature 报文。
 //! 见 `docs/protocol.md` 第 2、3 节。走哪一条由驱动的 `report_kind()` 说了算。
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 
 use crate::hid::{HidHandle, HidInfo};
-use crate::sources::Transport;
+use crate::sources::{BadFrame, Transport};
 
 /// 发一份输出报文、等一份输入报文。
 pub struct OutputReportTransport {
@@ -35,14 +35,17 @@ impl Transport for OutputReportTransport {
 
         // 读写缓冲区的第 0 字节都是 Report ID。剥掉它，驱动看到的下标就与
         // docs/protocol.md 里的下标一致。
+        //
+        // 走到这里设备已经答了话：回包空着、或者不是这条通路的报文，都是那一帧不可采信
+        // ——读取异常（`BadFrame`），不是没读到。
         let Some(&id) = buf.first() else {
-            bail!("回包是空的");
+            bail!(BadFrame(anyhow!("回包是空的")));
         };
         if id != self.report_id {
-            bail!(
+            bail!(BadFrame(anyhow!(
                 "回包是 Report ID {id:#04X} 的报文，不是这条通路的 {:#04X}",
                 self.report_id
-            );
+            )));
         }
         Ok(buf.split_off(1))
     }
@@ -81,15 +84,15 @@ impl Transport for FeatureReportTransport {
         let mut buf = self.handle.get_feature(self.report_id)?;
 
         // feature 缓冲区的第 0 字节同样是 Report ID。剥掉它，驱动看到的下标就与
-        // docs/protocol.md 里的下标一致。
+        // docs/protocol.md 里的下标一致。空着、或者不是这条通路的报文，同上是读取异常。
         let Some(&id) = buf.first() else {
-            bail!("回读是空的");
+            bail!(BadFrame(anyhow!("回读是空的")));
         };
         if id != self.report_id {
-            bail!(
+            bail!(BadFrame(anyhow!(
                 "回读是 Report ID {id:#04X} 的报文，不是这条通路的 {:#04X}",
                 self.report_id
-            );
+            )));
         }
         Ok(buf.split_off(1))
     }

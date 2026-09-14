@@ -14,16 +14,19 @@
 
 mod common;
 
+use anyhow::anyhow;
+
 use common::fixtures::{
-    MOUSE_BATTERY_REQUEST, MOUSE_CHARGING, MOUSE_REPORT_ID, MOUSE_RESTING_FULL, mouse_frame_with,
+    KEYBOARD_NOT_READY, KEYBOARD_REPORT_ID, KEYBOARD_STALE_RESIDUE, MOUSE_BATTERY_REQUEST,
+    MOUSE_CHARGING, MOUSE_REPORT_ID, MOUSE_RESTING_FULL, mouse_frame_with,
 };
 use common::{
-    FakeEndpoints, NOW, default_general, mouse_with_all_three_endpoints, mouse_with_both_endpoints,
-    scanned_ble, vendor_hub_running,
+    FakeEndpoints, NOW, default_general, keyboard_with_dongle_endpoint,
+    mouse_with_all_three_endpoints, mouse_with_both_endpoints, scanned_ble, vendor_hub_running,
 };
 use juicebar::config::Config;
 use juicebar::endpoints::{EndpointKind, EndpointReading};
-use juicebar::readout::{self, NoReading};
+use juicebar::readout::{self, FailureCause, NoReading};
 use juicebar::sources::Reading;
 use juicebar::state::{LastKnown, Provenance};
 
@@ -849,5 +852,229 @@ fn does_not_promise_a_reading_once_the_vendor_hub_is_closed() {
     assert_eq!(
         line,
         "暂停中 —— VGN VHUB.exe 正在运行，Dongle24G 让开（同时发命令会互相覆盖对方的应答），关掉它之后这几条才试得到"
+    );
+}
+
+// ---------------------------------------------------------------
+// 取数失败的来路与短原因（menu-as-designed 票 04）
+//
+// 取数失败有三种来路（`CONTEXT.md`「取数失败」）：失联、读取异常、配置里一条 Endpoint 都没有。
+// 这一节断言两件事：取数那一层认得出是哪一种（`NoReading::failure_cause`），以及菜单那一行的
+// 短原因（`NoReading::short_reason`）逐字是哪一句。完整原因在上面几节断言过，这里一个字都不碰。
+// ---------------------------------------------------------------
+
+/// 在场的每一条都试过了、都没答话（这里两条都超时）：那是**失联**——去问了、问不到。
+#[test]
+fn every_endpoint_timing_out_is_unreachable() {
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [
+            (EndpointKind::Wired, vec![]),
+            (EndpointKind::Dongle24G, vec![]),
+        ],
+    );
+
+    let no_reading =
+        readout::read(&mouse_with_both_endpoints(), &endpoints, None, NOW).unwrap_err();
+
+    assert_eq!(no_reading.failure_cause(), Some(FailureCause::Unreachable));
+}
+
+/// 配置里一条 Endpoint 都没有：无处可取。那是它自己的来路，不是失联——该改的是配置。
+#[test]
+fn a_device_with_no_endpoint_configured_is_its_own_cause() {
+    let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []);
+
+    let no_reading = readout::read(&device_with_no_endpoint(), &endpoints, None, NOW).unwrap_err();
+
+    assert_eq!(
+        no_reading.failure_cause(),
+        Some(FailureCause::NoEndpointConfigured)
+    );
+}
+
+/// 设备答了话，而那一帧不可采信（这里电压物理上不可能）：那是**读取异常**，不是失联。
+#[test]
+fn an_implausible_frame_is_a_read_anomaly() {
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [(
+            EndpointKind::Wired,
+            vec![mouse_frame_with(100, 2000).to_vec()],
+        )],
+    );
+
+    let no_reading =
+        readout::read(&mouse_with_both_endpoints(), &endpoints, None, NOW).unwrap_err();
+
+    assert_eq!(no_reading.failure_cause(), Some(FailureCause::ReadAnomaly));
+}
+
+/// 键盘那块共享缓冲区里别的命令留下的残留：dongle 答了话，交回来的却不是本次请求的应答。
+/// 键盘驱动与鼠标驱动各走各的协议，这一种在键盘上也得认成读取异常。
+#[test]
+fn a_keyboard_frame_left_over_from_another_command_is_a_read_anomaly() {
+    let endpoints = FakeEndpoints::new(
+        KEYBOARD_REPORT_ID,
+        [(
+            EndpointKind::Dongle24G,
+            vec![KEYBOARD_STALE_RESIDUE.to_vec()],
+        )],
+    );
+
+    let no_reading =
+        readout::read(&keyboard_with_dongle_endpoint(), &endpoints, None, NOW).unwrap_err();
+
+    assert_eq!(no_reading.failure_cause(), Some(FailureCause::ReadAnomaly));
+}
+
+/// 配置的 Endpoint 一条都不在场：一条都没去问，照 `CONTEXT.md`「失联」的定义，这也是失联。
+#[test]
+fn no_endpoint_being_present_is_unreachable() {
+    let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []);
+
+    let no_reading =
+        readout::read(&mouse_with_both_endpoints(), &endpoints, None, NOW).unwrap_err();
+
+    assert_eq!(no_reading.failure_cause(), Some(FailureCause::Unreachable));
+}
+
+/// dongle 连着答未就绪到上界：每一帧都是好的，只是一直没有读数——去问了、问不到，是失联，
+/// 不是读取异常。
+#[test]
+fn a_dongle_that_is_never_ready_is_unreachable() {
+    let endpoints = FakeEndpoints::new(
+        KEYBOARD_REPORT_ID,
+        [(
+            EndpointKind::Dongle24G,
+            vec![KEYBOARD_NOT_READY.to_vec(); 10],
+        )],
+    );
+
+    let no_reading =
+        readout::read(&keyboard_with_dongle_endpoint(), &endpoints, None, NOW).unwrap_err();
+
+    assert_eq!(no_reading.failure_cause(), Some(FailureCause::Unreachable));
+}
+
+/// 一条超时、一条答了坏帧：只要有一条答了话，这一次就不是"一条都没读到"，那是读取异常。
+#[test]
+fn one_bad_frame_among_timeouts_makes_it_a_read_anomaly() {
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [
+            (EndpointKind::Wired, vec![]),
+            (
+                EndpointKind::Dongle24G,
+                vec![mouse_frame_with(100, 2000).to_vec()],
+            ),
+        ],
+    );
+
+    let no_reading =
+        readout::read(&mouse_with_both_endpoints(), &endpoints, None, NOW).unwrap_err();
+
+    assert_eq!(no_reading.failure_cause(), Some(FailureCause::ReadAnomaly));
+}
+
+/// 不经取数那一层造的取数失败（外壳枚举不了本机时就是这样造的）说不出更多，按失联算。
+#[test]
+fn a_failure_made_outside_the_readout_counts_as_unreachable() {
+    let no_reading = NoReading::Failed(anyhow!("读不到 —— 枚举不了本机的设备"));
+
+    assert_eq!(no_reading.failure_cause(), Some(FailureCause::Unreachable));
+    assert_eq!(no_reading.short_reason(), "失联（没插？没配对？没开机？）");
+    assert_eq!(no_reading.to_string(), "读不到 —— 枚举不了本机的设备");
+}
+
+/// 失联那一句短原因：只说是失联、问一句该去哪儿看，**不带任何一条 Endpoint 的错误**——那些在
+/// 完整原因里，一行菜单放不下。
+#[test]
+fn the_short_reason_of_an_unreachable_device() {
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [
+            (EndpointKind::Wired, vec![]),
+            (EndpointKind::Dongle24G, vec![]),
+        ],
+    );
+
+    let no_reading =
+        readout::read(&mouse_with_both_endpoints(), &endpoints, None, NOW).unwrap_err();
+
+    assert_eq!(no_reading.short_reason(), "失联（没插？没配对？没开机？）");
+}
+
+/// 读取异常那一句短原因：设备答了话，所以不许说成失联；问的是它最常见的来源——有上位机在抢
+/// 那块共享缓冲区（`CONTEXT.md`「读取异常」）。
+#[test]
+fn the_short_reason_of_a_read_anomaly() {
+    let endpoints = FakeEndpoints::new(
+        MOUSE_REPORT_ID,
+        [(
+            EndpointKind::Wired,
+            vec![mouse_frame_with(100, 2000).to_vec()],
+        )],
+    );
+
+    let no_reading =
+        readout::read(&mouse_with_both_endpoints(), &endpoints, None, NOW).unwrap_err();
+
+    assert_eq!(no_reading.short_reason(), "读取异常（有上位机在抢通路？）");
+}
+
+/// 一条 Endpoint 都没配的那一句短原因：该改的是配置，不去替它猜设备没插。
+#[test]
+fn the_short_reason_of_a_device_with_no_endpoint_configured() {
+    let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []);
+
+    let no_reading = readout::read(&device_with_no_endpoint(), &endpoints, None, NOW).unwrap_err();
+
+    assert_eq!(no_reading.short_reason(), "一条 Endpoint 都没配置");
+}
+
+/// 暂停那一句短原因**点名那个上位机**：用户唯一能动手的地方就是关掉它。它不是取数失败，所以
+/// 没有来路可言。
+#[test]
+fn the_short_reason_of_a_paused_device_names_the_vendor_hub() {
+    let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, [(EndpointKind::Dongle24G, vec![])]);
+    let hub = vendor_hub_running();
+
+    let no_reading =
+        readout::read(&mouse_with_both_endpoints(), &endpoints, Some(&hub), NOW).unwrap_err();
+
+    assert_eq!(no_reading.failure_cause(), None);
+    assert_eq!(no_reading.short_reason(), "已暂停（VGN VHUB.exe 正在运行）");
+}
+
+/// 一条 Endpoint 都没配的那台。
+fn device_with_no_endpoint() -> juicebar::config::Device {
+    Config::parse(
+        r#"
+        [[device]]
+        id = "nothing_configured"
+        name = "一条都没配的那台"
+        driver = "vgn_mouse"
+        "#,
+    )
+    .expect("用例里的配置应当解析得动")
+    .devices
+    .remove(0)
+}
+
+/// 罐装的取数失败：托盘内核的用例不走假枚举，也要造得出三种来路。给定的来路原样带着，完整原因
+/// 原样印出。
+#[test]
+fn a_canned_failure_keeps_its_cause_and_its_full_reason() {
+    let no_reading = NoReading::failed(
+        FailureCause::ReadAnomaly,
+        "没有可信的读数 —— Wired: 读取异常：电压 2000 mV 不在 3050..=4350 mV",
+    );
+
+    assert_eq!(no_reading.failure_cause(), Some(FailureCause::ReadAnomaly));
+    assert_eq!(no_reading.short_reason(), "读取异常（有上位机在抢通路？）");
+    assert_eq!(
+        no_reading.to_string(),
+        "没有可信的读数 —— Wired: 读取异常：电压 2000 mV 不在 3050..=4350 mV"
     );
 }

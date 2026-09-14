@@ -69,8 +69,9 @@ pub trait Transport {
     /// 由实现自己补上和剥掉。这样驱动里的下标与 `docs/protocol.md` 直接对得上，
     /// 不必到处 +1（那是文档点名的"最容易一次性写错的地方"）。
     ///
-    /// 失败即"这条 Endpoint 这一次没读到"：超时、设备已拔、通道被厂商上位机占着，
-    /// 对调用方是同一件事。
+    /// 失败即"这条 Endpoint 这一次没交出读数"：超时、设备已拔、通道被厂商上位机占着，
+    /// 对调用方是同一件事。**要分开的只有回来了、却不可采信的那一帧**：实现把它包成
+    /// [`BadFrame`]，取数那一层靠它把读取异常与失联分开。
     fn exchange(&self, request: &[u8]) -> Result<Vec<u8>>;
 
     /// 这条通路用的 Report ID。
@@ -114,3 +115,28 @@ pub fn require_frame_len(frame: &[u8], frame_len: usize) -> Result<()> {
     }
     Ok(())
 }
+
+/// 设备答了话，而回来的这一帧不可采信——**读取异常**（`CONTEXT.md`「读取异常」）。
+///
+/// 驱动与 Transport 把这一种错包成它，取数那一层（`crate::readout`）按**类型**认出来，把取数失败
+/// 分成读取异常与失联：菜单那一行的短原因两者不是同一句，而认那句话里的字是不行的
+/// （`docs/adr/0004`）。**没包它的错一律算去问了、问不到。**
+///
+/// **包在哪儿**：设备答了话之后才发现不对的那一步。两个驱动都包在解析回包那一步外面——帧不足长、
+/// 校验和对不上、应答不是本次请求的、字段落在物理上不可能的值域外，全在那一步里，往那一步里加一道
+/// 校验也自动算上；两个 HID Transport 包的是回包空着、Report ID 不是这条通路的那两句。打不开通路、
+/// 超时、dongle 连着未就绪，都是没答话，不包。
+///
+/// **印出去一个字不变**：包上它之后，完整原因逐字节还是原来那一句。
+#[derive(Debug)]
+pub struct BadFrame(pub anyhow::Error);
+
+impl std::fmt::Display for BadFrame {
+    /// 连错误链一起印里面那个错误，自己不加一个字。`source` 因此不交出它：交出去的话，外层的
+    /// `{:#}` 会把那条链再印一遍。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for BadFrame {}
