@@ -37,11 +37,11 @@ use crate::cli::{default_config_path, state_path_beside_config};
 use crate::clock::{Clock, SystemClock};
 use crate::config::Config;
 use crate::state::LastKnown;
-use crate::tray::{Action, Event, Tray};
+use crate::tray::{Action, Event, Tray, warnings};
 
 /// 托盘图标的回调消息：鼠标在图标上做了什么，在 `lParam` 里。
 const WM_TRAY: u32 = WM_APP + 1;
-/// 取数线程交回了东西（一次取数的结果，或者一条日志），去它的通道里取。
+/// 取数线程交回了东西（一次取数的结果，或者一次写状态文件的结果），去它的通道里取。
 const WM_REPORT: u32 = WM_APP + 2;
 /// 那个每秒一格的计时器。
 const TICK_TIMER: usize = 1;
@@ -186,13 +186,13 @@ unsafe extern "system" fn window_proc(
     LRESULT(0)
 }
 
-/// 取数线程交回来的东西，一样一样取出来：一次取数的结果递进内核，一条日志写进日志文件。
+/// 取数线程交回来的东西，一样一样取出来，递进内核。
 fn take_reports() {
     while let Some(report) = with_app(|app| app.worker.next_report()).flatten() {
         match report {
             worker::Report::Fetched(fetched) => feed(Event::Fetched(fetched)),
-            worker::Report::Log(line) => {
-                with_app(|app| app.log.write(&line));
+            worker::Report::SaveState(outcome) => {
+                feed(Event::Warnings(warnings::Event::SaveState(outcome)));
             }
         }
     }

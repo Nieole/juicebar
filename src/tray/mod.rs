@@ -18,6 +18,7 @@
 //! | 菜单 | [`menu`] | `shell/menu.rs` | [`menu::Command`] | [`menu::Action`] |
 //! | 通知 | [`notify`] | `shell/notify.rs` | 看 [`Event::Fetched`] | [`notify::Notice`] |
 //! | 配置 | [`config`] | `shell/config.rs` | [`config::Event`] | [`config::Action`] |
+//! | 告警 | [`warnings`] | 没有（写状态文件的结果由 `shell/worker.rs` 交回） | 看 [`Event::Fetched`]；[`warnings::Event`] | 只写日志 |
 //!
 //! 这一层（[`Event`]、[`Action`]、[`Tray::handle`]）只做路由：每个关注点在这里占一格，往自己那一格里
 //! 加事件、加动作、加状态，只改自己的那两个文件（内核一个、外壳一个）。三样是大家共用的，所以住在
@@ -35,6 +36,7 @@ pub mod hover;
 pub mod menu;
 pub mod notify;
 pub mod round;
+pub mod warnings;
 
 use crate::clock::Timestamp;
 use crate::config::Config;
@@ -49,6 +51,8 @@ pub struct Tray {
     cadence: cadence::Cadence,
     round: round::Rounds,
     notify: notify::Notify,
+    /// 此刻还挂着的告警。几块共用：「一轮」合成时带上它，票 09 的配置那一块往里挂"配置读不了"。
+    warnings: warnings::Warnings,
     /// 点过"退出"了：之后什么事件都不再有动作——不再轮询，也不再画。
     quit: bool,
 }
@@ -76,6 +80,7 @@ impl Tray {
             cadence,
             round,
             notify: notify::Notify::default(),
+            warnings: warnings::Warnings::default(),
             quit: false,
         };
         (tray, out)
@@ -96,10 +101,14 @@ impl Tray {
                 let fetched = *fetched;
                 self.cadence.on_fetched(&self.config, &fetched);
                 self.notify.on_fetched(&self.config, &fetched, &mut out);
-                self.round.on_fetched(&self.config, fetched, &mut out);
+                // 告警在「一轮」之前：这一次取数问进程的结果，要进它开始的这一轮。
+                self.warnings.on_fetched(&fetched, &mut out);
+                self.round
+                    .on_fetched(&self.config, &self.warnings, fetched, &mut out);
             }
             Event::Menu(command) => self.on_menu(command, &mut out),
             Event::Config(event) => self.on_config(event, &mut out),
+            Event::Warnings(event) => self.warnings.on_event(event, &mut out),
         }
         out
     }
@@ -124,6 +133,8 @@ pub enum Event {
     Menu(menu::Command),
     /// 配置那一侧的事（票 09：读到了、读坏了）。
     Config(config::Event),
+    /// 告警那一侧的事：一件会挂告警的事办没办成，而它不跟着一次取数来。
+    Warnings(warnings::Event),
 }
 
 /// 某台 Device 的一次取数有了结果：取数线程交回来的全部东西。
@@ -136,8 +147,8 @@ pub struct Fetched {
     pub in_hand: InHand,
     /// 退到了上次已知值时，这一次取数自己为什么没读到（[`crate::readout::Outcome`]）。
     pub fell_back_because: Option<NoReading>,
-    /// 取数之前问本机进程时交出的那一条告警（[`crate::round::PauseCheck::warning`]）。它归这一次取数
-    /// 开始的那一轮。
+    /// 取数之前问本机进程的结果：问不出来时的那一条告警，问出来了是 `None`
+    /// （[`crate::round::PauseCheck::warning`]）。有就挂上、没有就摘掉（[`warnings`]）。
     pub warning: Option<Warning>,
 }
 

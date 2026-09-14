@@ -20,7 +20,7 @@ use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 use crate::clock::{Clock, SystemClock};
 use crate::endpoints::SystemEndpoints;
 use crate::readout::{self, NoReading};
-use crate::round::{InHand, PauseCheck, Warning};
+use crate::round::{InHand, PauseCheck};
 use crate::state::LastKnown;
 use crate::tray::Fetched;
 use crate::tray::cadence::FetchRequest;
@@ -31,8 +31,9 @@ use crate::vendor_hub::SystemProcesses;
 pub(super) enum Report {
     /// 一次取数有了结果，装好箱，原样递进内核（[`crate::tray::Event::Fetched`]）。
     Fetched(Box<Fetched>),
-    /// 一条要写进日志的话（日志文件归消息循环那一侧）。
-    Log(String),
+    /// 写了一次状态文件：写成了，或者写不进的完整原因。原样递进内核（[`crate::tray::warnings::Event::SaveState`]）
+    /// ——写成了也递：挂着的那条告警要等某一次写成了才摘得掉，而写没写成只有这里知道。
+    SaveState(Result<(), String>),
 }
 
 /// 排给取数线程的活。
@@ -133,11 +134,8 @@ fn run(
                 if let Some(id) = &save.remember_primary {
                     last_known.remember_primary(id);
                 }
-                if let Err(e) = last_known.save(state_path) {
-                    tell(Report::Log(
-                        Warning::StateNotSaved(format!("{e:#}")).to_string(),
-                    ));
-                }
+                let outcome = last_known.save(state_path).map_err(|e| format!("{e:#}"));
+                tell(Report::SaveState(outcome));
             }
         }
     }

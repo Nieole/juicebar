@@ -17,7 +17,7 @@ use juicebar::sources::Reading;
 use juicebar::state::{LastKnown, Provenance};
 use juicebar::tray::notify::Notice;
 use juicebar::tray::round::{IconRequest, SaveState};
-use juicebar::tray::{Action, Event, Fetched, Look, Tray, cadence, config, menu, round};
+use juicebar::tray::{Action, Event, Fetched, Look, Tray, cadence, config, menu, round, warnings};
 
 /// 用例里那两台：一只只配了 Dongle24G 的鼠标，一台只配了 Ble 的键盘。
 ///
@@ -210,4 +210,14 @@ pub fn fell_back(device: &str, at: Timestamp, last_known: InHand, reason: &str) 
         fell_back_because: Some(NoReading::Failed(anyhow!("{reason}"))),
         warning: None,
     }))
+}
+
+/// 外壳照内核的吩咐写了一次状态文件（[`round::Action::SaveState`]），写成了。
+pub fn state_saved() -> Event {
+    Event::Warnings(warnings::Event::SaveState(Ok(())))
+}
+
+/// 外壳照内核的吩咐写了一次状态文件，写不进，完整原因是 `reason`。
+pub fn state_not_saved(reason: &str) -> Event {
+    Event::Warnings(warnings::Event::SaveState(Err(reason.to_string())))
 }
