@@ -217,6 +217,11 @@ impl Rounds {
             theme: self.look.theme,
         }
     }
+
+    /// 此刻托盘的样子：图标照它画，菜单实际的深浅也照它答（[`super::Tray::menu_theme`]）。
+    pub(super) fn look(&self) -> Look {
+        self.look
+    }
 }
 
 /// 状态文件里这台 Device 的上次已知值，交成这一轮手上的东西；没有（或者已经过了 `very_stale_after`）

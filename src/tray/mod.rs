@@ -19,6 +19,7 @@
 //! | 通知 | [`notify`] | `shell/notify.rs` | 看 [`Event::Fetched`] | [`notify::Notice`] |
 //! | 配置 | [`config`] | `shell/config.rs` | [`config::Event`] | [`config::Action`] |
 //! | 告警 | [`warnings`] | 没有（写状态文件的结果由 `shell/worker.rs` 交回） | 看 [`Event::Fetched`]；[`warnings::Event`] | 只写日志 |
+//! | 菜单深浅 | [`menu_theme`] | `shell/menu_theme.rs` | 没有（外壳启动时问过 Windows，随 [`Look`] 交进来） | 只写日志 |
 //!
 //! 这一层（[`Event`]、[`Action`]、[`Tray::handle`]）只做路由：每个关注点在这里占一格，往自己那一格里
 //! 加事件、加动作、加状态，只改自己的那两个文件（内核一个、外壳一个）。三样是大家共用的，所以住在
@@ -35,6 +36,7 @@ pub mod cadence;
 pub mod config;
 pub mod hover;
 pub mod menu;
+pub mod menu_theme;
 pub mod notify;
 pub mod round;
 pub mod warnings;
@@ -66,7 +68,8 @@ impl Tray {
     /// 上一轮的 Primary Device。之后记读数、写盘都在取数线程那一侧（`crate::shell`），内核只说什么
     /// 时候存、记下哪一台（[`round::SaveState`]）。
     ///
-    /// `look` 是启动时任务栏的深浅色与显示缩放，本票之内不变（变了之后重画归票 07）。
+    /// `look` 是启动时任务栏的深浅色与显示缩放，本票之内不变（变了之后重画归票 07），外加菜单跟不跟得上任务栏
+    /// （[`menu_theme::MenuTheming`]，取不到那两个函数时启动这一刻记一条日志）。
     pub fn new(
         config: Config,
         last_known: &LastKnown,
@@ -74,6 +77,7 @@ impl Tray {
         now: Timestamp,
     ) -> (Self, Vec<Action>) {
         let mut out = Vec::new();
+        menu_theme::on_start(look, &mut out);
         let round = round::Rounds::new(&config, last_known, look, now, &mut out);
         let mut cadence = cadence::Cadence::default();
         cadence.on_tick(&config, now, &mut out);
@@ -116,13 +120,16 @@ impl Tray {
     }
 }
 
-/// 启动时任务栏的样子：深浅色与显示缩放。外壳去问 Windows，内核只收答案。
+/// 启动时任务栏的样子：深浅色与显示缩放，以及菜单的深浅跟不跟得上它。外壳去问 Windows，内核只收答案。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Look {
     /// 任务栏是深色还是浅色，图标的调色跟着它。
     pub theme: Theme,
     /// 按显示缩放选出的那一档尺寸（[`IconSize::for_dpi`]）。
     pub size: IconSize,
+    /// 菜单的深浅跟不跟得上任务栏。启动时问一次，运行中不变；菜单此刻实际的深浅由它与 `theme` 答
+    /// （[`Tray::menu_theme`]）。
+    pub menu_theming: menu_theme::MenuTheming,
 }
 
 /// 喂进内核的事件。

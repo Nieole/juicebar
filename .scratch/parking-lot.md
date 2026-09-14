@@ -1025,6 +1025,55 @@ panic 落在有用例够得着的纯函数里，而不是外壳那行拷贝；�
 **推荐**：维持。翻案关在 `src/shell/config.rs` 的 `ConfigFile::reread_if_changed`（样子变成"没有"时写草稿、交 `DraftWritten`），内核的
 `DraftWritten` 那一支已经在了。归 `/settle`。
 
+### Q260 —— 1809 认得，但它的序号 135 只能"允许深色"，菜单跟的是应用模式，不是任务栏
+
+**From:** menu-as-designed 票 03（菜单深浅跟任务栏）
+
+**取的路**：照票面，白名单认 1809（17763），调法与它对上：`app_mode_call(17763)` 交 `AllowDarkModeForApp`，外壳在 1809 上调
+`AllowDarkModeForApp(任务栏是深的)` 再刷新菜单主题，不把"强制浅色"（3）当 `bool` 传进去（那会反倒允许深色）。代价是 1809 上
+"跟任务栏"只成立一半：1809 还没有"Windows 模式"（`SystemUsesLightTheme` 是 1903 才有的，读不到按深色），允许了深色，菜单跟
+的是应用模式——"浅色应用"时菜单是浅的，而内核（`Tray::menu_theme`）照样说深。1809 这条调法也没有实机验证过，这台机器是
+Windows 11。
+
+**另一条路**：白名单从 1903（18362）起，1809 当认不得：一个未公开函数都不调，菜单是浅色，内核也说浅色，从头到尾说实话，
+调法只剩一种。站得住：ADR-0006 要的是菜单与预览同一套调色，1809 上两条路都给不了"跟任务栏"，这一条至少不说错；1809 如今
+只剩 LTSC 2019 还在支持期内。
+
+**推荐**：改走另一条路，归用户拍板（它改的是票面与 spec「菜单深浅」那句"1809 起"）。翻案面关在本票里：`app_mode_call`
+删一支、`AppModeCall` 与外壳的 `AppMode` 各删一个变体、`tests/tray_menu_theme.rs` 那条 1809 用例改成认不得，外加 spec 与
+ADR-0006 各改一句。
+
+### Q261 —— 内核的"菜单此刻实际深浅"按启动时那份任务栏深浅答，外壳强制时另读一次
+
+**From:** menu-as-designed 票 03（菜单深浅跟任务栏）
+
+**取的路**：外壳每次弹出之前重读 `SystemUsesLightTheme`，按那一刻强制深浅（`src/shell/menu.rs` 一行）；内核的答案是
+`Tray::menu_theme()`，按「一轮」画图标用的那份 `Look`（`Rounds` 的 `look`）答——它的 `theme` 今天是启动时那一份，运行中不换。
+运行中切了深浅，菜单跟上了，内核的答案（与图标的调色）还是旧的。今天没有谁读内核这份答案，所以看不出来；rt-07 的预览一读
+就会差。
+
+**另一条路**：本票就开一个"任务栏深浅变了"的事件（或者弹出之前把重读到的深浅喂进内核），内核换掉那份 `Look` 的 `theme`，
+外壳强制时改问内核。站得住：只有一个来源，内核的答案与菜单实际的深浅从结构上分不开。但换 `theme` 就牵出图标重画——那正是
+rt-07 的"深浅切换时重画"。
+
+**推荐**：交给 rt-07，归 rt-07。它接"深浅变了"的事件时换掉 `Rounds` 手上那份 `look`（`Tray::menu_theme` 读的就是它，不必
+另存一份），预览按 `self.menu_theme()` 选调色；外壳弹出之前那一行照留，它只管强制。编排者派 rt-07 时在 brief 里点一句：
+内核这份答案今天是启动时的。
+
+### Q262 —— Windows 的 build 号用 `GetVersionExW` 问，靠程序清单说真话
+
+**From:** menu-as-designed 票 03（菜单深浅跟任务栏）
+
+**取的路**：`GetVersionExW`（`Win32_System_SystemInformation` 本来就在 feature 里）。它只对清单里声明了支持 Windows 10 的
+程序交真 build 号，`juicebar.exe.manifest` 声明了；清单丢了（非 MSVC 工具链，`build.rs` 会警告），它交 Windows 8 的 9200，
+白名单认不得，菜单浅色，一个未公开函数都不调。
+
+**另一条路**：`RtlGetVersion`（ntdll，不看清单；要给 `windows` 加 `Wdk_System_SystemServices` feature），或者 Notepad++ 用的
+`RtlGetNtVersionNumbers`（未公开，按名字取）。站得住：不依赖清单，少一个前提。
+
+**推荐**：维持，归 `/settle`。清单本来就是这个程序跑得起来的前提（没有它，走 2.4G 读超时、DPI 选错），错也错在不调的那
+一边。翻案面：`src/shell/menu_theme.rs` 的 `windows_build` 一个函数，外加 `Cargo.toml` 一个 feature。
+
 ## Settled
 
 <!-- 一条记录一行：编号、它本来的那一句话、分到哪一道、去了哪儿。正文在 git 里，每一趟的收口 commit 写在那一趟的小节里。 -->

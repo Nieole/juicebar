@@ -14,6 +14,7 @@ use common::tray::{
 use juicebar::endpoints::EndpointKind;
 use juicebar::icon::{IconSettings, IconSize, IconState, Theme};
 use juicebar::state::LastKnown;
+use juicebar::tray::menu_theme::MenuTheming;
 use juicebar::tray::round::{IconRequest, SaveState};
 use juicebar::tray::{Event, Look};
 
@@ -45,6 +46,7 @@ fn at_startup_with_nothing_on_record_the_icon_shows_no_known_value_in_the_taskba
     let look = Look {
         theme: Theme::Light,
         size: IconSize::Px24,
+        menu_theming: MenuTheming::FollowsTaskbar,
     };
 
     let (_tray, screen) = start_with_look(MOUSE_AND_KEYBOARD, &LastKnown::default(), look, NOW);
