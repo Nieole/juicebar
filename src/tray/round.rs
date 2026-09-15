@@ -374,7 +374,7 @@ fn log_failure(config: &Config, fetched: &Fetched, out: &mut Vec<super::Action>)
 
 /// 图标上画的那个数。
 ///
-/// 陈旧到只该说日期的那一档不画数（parking lot Q151 交给本票的那一半）：命令行那一行在这一档只印日期，
+/// 陈旧到只该说日期的那一档不画数（parking lot Q151 交给本票的那一半）：悬停提示与菜单那一行在这一档只写日期，
 /// 理由对图标一字不差——十天前的一个 62 画在托盘上就是一句假话。图标状态照旧（Stale，或者低电），
 /// 渲染器在有状态、没有数的时候画"没有读数时"那个符号，日期由悬停提示说。
 fn percent_to_draw(state: &DeviceState<'_>) -> Option<u8> {

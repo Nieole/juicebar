@@ -130,10 +130,7 @@ fn a_charging_device_still_takes_part_in_the_comparison() {
     );
 }
 
-/// 票面第 4 条：全部不可信时保持上次的选择，不来回跳。
-///
-/// `status` 手上永远没有"上次"（一次性命令：枚举、取数、印几行、退出），所以这一条只有
-/// 在这里断言得到——那份记忆的家见 parking lot Q41。
+/// 票面第 4 条：全部不可信时保持上次的选择，不来回跳。那份记忆的家见 parking lot Q41。
 #[test]
 fn holds_on_to_the_last_choice_when_nothing_is_trustworthy() {
     let candidates = [
@@ -164,9 +161,9 @@ fn picks_nobody_when_nothing_is_trustworthy_and_there_is_no_last_choice() {
     );
 }
 
-/// 上次选的那台已经不在配置里了：同样选不出来，不保持一个印不出来的名字。
+/// 上次选的那台已经不在配置里了：同样选不出来，不保持一个画不出来的名字。
 ///
-/// 保持它的后果是那一行根本不存在——`status` 一行都不标，而它说的是"保持上次的选择"，
+/// 保持它的后果是那一行根本不存在——菜单里一行都不打勾，而它说的是"保持上次的选择"，
 /// 用户找不到那一行。
 #[test]
 fn does_not_hold_on_to_a_device_that_is_no_longer_configured() {
@@ -275,66 +272,4 @@ fn reads_any_other_string_as_a_device_id_to_pin() {
             .primary,
         PrimaryRule::Pinned("dragonfly3".to_string())
     );
-}
-
-/// 票面第 6 条：`status` 标出当前 Primary Device。
-///
-/// 用的是 `CONTEXT.md` 的词，原样——那一条的 _Avoid_ 正是「主设备、默认设备、当前设备
-/// 混用」，所以这里不能是"主设备"、也不能只是一个星号。
-#[test]
-fn marks_the_primary_device_by_name() {
-    assert_eq!(
-        Selection::Lowest("dragonfly3").label("dragonfly3", "Dragonfly 3 Master+"),
-        "Dragonfly 3 Master+（Primary Device）"
-    );
-}
-
-/// 别的 Device 那一行原样印名字。
-#[test]
-fn leaves_the_other_device_names_alone() {
-    assert_eq!(
-        Selection::Lowest("neon75").label("dragonfly3", "Dragonfly 3 Master+"),
-        "Dragonfly 3 Master+"
-    );
-}
-
-/// 标注落在一行**没有新鲜读数**的 Device 上时要交代一句。
-///
-/// 保持上次的选择意味着那一行印的是"已陈旧"、Unknown 或者干脆"读不到"——不说一句，
-/// 这个标注看起来就是个 bug。
-#[test]
-fn explains_a_marker_that_comes_from_the_last_round() {
-    let note = Selection::HeldOver("neon75")
-        .note()
-        .expect("保持上次的选择要交代一句");
-
-    assert!(note.contains("上次"), "说清这个标注是上一轮的：{note}");
-}
-
-/// 钉死的 id 不在册时，一行都不标——那更要说出来。
-#[test]
-fn explains_a_pinned_id_that_names_no_device() {
-    let note = Selection::PinnedNotFound("dragonfly4")
-        .note()
-        .expect("钉了个不存在的 id 一定要说出来");
-
-    assert!(note.contains("dragonfly4"), "把那个 id 原样印出来：{note}");
-}
-
-/// 一行都标不出来时也说一句，否则"没有标注"看着像 bug。
-#[test]
-fn explains_why_no_device_got_the_marker() {
-    let note = Selection::Undecided.note().expect("选不出来也要交代一句");
-
-    assert!(
-        note.contains("Primary Device"),
-        "说的是 Primary Device 这件事：{note}"
-    );
-}
-
-/// 正常选出来的两种不多说话：那一行上的标注已经把话说完了。
-#[test]
-fn says_nothing_extra_when_the_marker_speaks_for_itself() {
-    assert_eq!(Selection::Lowest("dragonfly3").note(), None);
-    assert_eq!(Selection::Pinned("dragonfly3").note(), None);
 }

@@ -267,6 +267,51 @@ fn nothing_to_fill_writes_nothing_and_says_nothing() {
     assert_eq!(screen.logs, Vec::<String>::new());
 }
 
+/// 本机此刻在场的身份与配置里写下的对不上（Wired 那块写成了接收器的 `0x1A05`，插着的有线本体是 `0x1005`）：一个字都不改
+/// ——用户写过的值一概不动（ADR-0003）——但记一行日志，把两条身份都摆出来：插上线读不到，查"为什么"的人要的就是这一句。
+/// 不弹通知、不挂告警：插着线时每一遍扫描都成立，挂上就摘不掉（parking lot Q273）。同一次扫描里"没补上"的那几句（这台的
+/// Ble 空着）照旧一声不响。
+#[test]
+fn a_scan_that_disagrees_with_what_the_user_wrote_is_logged_and_nothing_else() {
+    let text = "\
+[[device]]
+id = \"dragonfly3\"
+name = \"Dragonfly 3 Master+\"
+driver = \"vgn_mouse\"
+
+  [device.wired]
+  vid = 0x391D
+  pid = 0x1A05
+  usage_page = 0xFF02
+  usage = 0x0002
+  report_id = 8
+
+  [device.wireless_24g]
+  vid = 0x391D
+  pid = 0x1A05
+  usage_page = 0xFF02
+  usage = 0x0002
+  report_id = 8
+";
+    let (mut tray, mut screen) = start(text, &LastKnown::default(), NOW);
+
+    feed(
+        &mut tray,
+        &mut screen,
+        scanned(text, &[mouse_dongle(), mouse_wired()]),
+    );
+
+    assert_eq!(
+        screen.logs,
+        [
+            "扫描到的与配置里写的不一致 —— dragonfly3：Wired 你写的是 VID 391D PID 1A05 UP FF02 U 0002，而本机此刻在场的是 VID 391D PID 1005 UP FF02 U 0002（我记下的这台设备的 Wired 身份）。没有动它——你写过的值一概不改。"
+        ]
+    );
+    assert_eq!(screen.written, Vec::<String>::new());
+    assert_eq!(screen.notices, []);
+    assert!(tray.warnings().is_empty(), "{:?}", tray.warnings());
+}
+
 /// 配置里 `[tray]` 有认不出的取值：启动时照缺省值画，把每一处认不出记进日志——不说出来，用户会以为自己选的画法就长
 /// 这样。
 #[test]

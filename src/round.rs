@@ -3,8 +3,7 @@
 //! 这个模块交出**这一轮的结果**，而且是结构化的：每台 Device 的图标状态、电量（有的话）、
 //! 来源 Endpoint、多久前、一句短原因；Primary Device 是谁、怎么选出来的（钉死 / 自动 / 保持上次
 //! 的选择）；这一轮的告警。托盘要的就是它——图标画 Primary Device 的那一格，悬停提示与菜单行
-//! 从它排出来。命令行在过渡期也从它排版（`cli::status`）：那几行一个字不变，两句 stderr 成了
-//! 这一轮的告警（措辞跟着换成了"这一轮"）。
+//! 从它排出来。
 //!
 //! **它是纯函数**：输入是配置、各台 Device 这一轮手上有的东西（一次取数的结果或上次已知值、
 //! 暂停与否）、上一轮选的是谁、已经有了的告警、以及"当下"；不碰 Win32 界面、不碰硬件、不问时钟。
@@ -16,7 +15,7 @@
 //!   问本机有没有厂商上位机在跑，它交给取数的是撞见的那个上位机，交给这一轮的是问不出来时的
 //!   那一条告警——后者是这个模块的词，所以那条规则住在这里。
 //! - **记进状态文件**在调用方：这一轮选出的 Primary Device 要不要记下来、读数什么时候写盘，
-//!   都是外壳（今天是 `cli::status::run`）的事。这里只交出"选出了谁"。
+//!   都是托盘那一侧的事（`crate::tray::round` 决定，外壳去写）。这里只交出"选出了谁"。
 
 use std::fmt;
 
@@ -33,8 +32,8 @@ use crate::vendor_hub::{Processes, VendorHub};
 
 /// 一台 Device 这一轮手上有的东西——这一轮的输入。
 ///
-/// 一次取数交出来的就是它：命令行拿的是那个 `Result`（[`crate::readout::read_or_last_known`]），托盘拿的是连同
-/// "退到上次已知值时这一次为什么没读到"的那一份（[`Outcome`]），见下面两个 `From`。无已知值是一次取数都还没有
+/// 一次取数交出来的就是它：托盘拿的是连同"退到上次已知值时这一次为什么没读到"的那一份（[`Outcome`]）；只有那个
+/// `Result` 的（[`crate::readout::read_or_last_known`]）也转得过来，见下面两个 `From`。无已知值是一次取数都还没有
 /// 结果的时候，常驻之后每台设备刚启动时都是它。
 ///
 /// 它归调用方所有、一轮一轮地留着（托盘里某台 Device 两次取数之间会过好几轮），这一轮只借它：
@@ -43,7 +42,7 @@ pub enum InHand {
     /// 一份读数：这一次取数读到的，或者上次已知值——哪一种由 [`RowReading::provenance`] 分辨。
     ///
     /// 上次已知值走这里的，是说不出"这一次为什么没读到"的那几种：刚启动时从状态文件里拿出来的（还没有"这一次"），
-    /// 以及命令行的那一份（它只标"上次已知值"）。
+    /// 以及只交了那个 `Result` 的那一份（[`crate::readout::read_or_last_known`]）。
     Reading(RowReading),
     /// 这一次取数没读到（`because`：取数失败的某一种来路，或者暂停），退到了上次已知值（`last_known`）。
     ///
@@ -91,8 +90,8 @@ impl From<Outcome> for InHand {
 ///
 /// 它要在取数**之前**问——撞见的那个上位机递给随后的每一次取数，好让它们让开那几条 HID
 /// （[`Self::paused_by`]）；问不出来时的那一条告警（[`Self::warning`]）由调用方交给这一轮
-/// （[`Round::assess`] 的 `warnings`）。命令行一次 `status` 只问一次，全部 Device 共用：一次进程
-/// 枚举不便宜，而这一次里它的答案不会变（parking lot Q27）。
+/// （[`Round::assess`] 的 `warnings`）。托盘的取数线程每次取数之前问一次（`crate::shell`）：一次进程
+/// 枚举不便宜，而这一次取数里它的答案不会变（parking lot Q27）。
 pub struct PauseCheck {
     paused_by: Option<VendorHub>,
     warning: Option<Warning>,
@@ -141,20 +140,19 @@ pub enum Warning {
     ProcessesUnknown(String),
     /// 这一轮的读数写不进状态文件：丢的是下次启动时的上次已知值，不是这一轮的结果。
     ///
-    /// **它由写盘的那一方造出来**：写盘在这一轮合成之后，而这个纯函数碰不到磁盘。命令行里它不经过
-    /// [`Round`]，写完盘才印（`cli::status::run`）；托盘里外壳写完盘把结果交给内核，这一条挂在之后的
-    /// 每一轮上，直到某一次写成（`crate::tray::warnings`）。与上面那一条同一种东西，说法也在这里定。
+    /// **它由写盘的那一方造出来**：写盘在这一轮合成之后，而这个纯函数碰不到磁盘。外壳写完盘把结果交给内核，
+    /// 这一条挂在之后的每一轮上，直到某一次写成（`crate::tray::warnings`）。与上面那一条同一种东西，说法也在这里定。
     StateNotSaved(String),
     /// 配置文件读不了（写坏了，或者读不到），托盘沿用上一份读好的。
     ///
-    /// **只有托盘有它**：托盘运行中配置文件变了就重读（`crate::tray::config`），读不了不停摆，这一条挂到下一次
-    /// 读好为止；命令行每次启动只读一次，读不了当场报错，没有上一份可沿用。
+    /// 托盘运行中配置文件变了就重读（`crate::tray::config`），读不了不停摆，这一条挂到下一次读好为止。启动时读不了
+    /// 没有上一份可沿用，托盘起不来（parking lot Q251）。
     ConfigUnreadable(String),
 }
 
 impl Warning {
     /// 那件事没办成的那半句，不带完整原因：菜单顶上一条告警一行，写的就是它（`crate::tray::menu`）；`Display` 在它
-    /// 后面接完整原因，日志与命令行印那一整句。两处说的是同一件事，所以前半句只在这里写一次。
+    /// 后面接完整原因，日志记那一整句。两处说的是同一件事，所以前半句只在这里写一次。
     pub fn headline(&self) -> &'static str {
         match self {
             Self::ProcessesUnknown(_) => "认不出本机在跑哪些进程，这一轮不暂停",
@@ -197,8 +195,8 @@ impl<'a> Round<'a> {
     /// [`DeviceState::assess`] 加 [`Self::compose`]。
     ///
     /// `previous_primary` 是上一轮按规则选出的那台的 id（状态文件里的 `last_primary`），`None` =
-    /// 没有上一轮。`warnings` 是此刻还挂着的告警，原样收进这一轮——该带哪几条是调用方的事：命令行带
-    /// 它那一次的 [`PauseCheck::warning`]，托盘带挂到那件事下一次办成为止的全部（`crate::tray::warnings`）。
+    /// 没有上一轮。`warnings` 是此刻还挂着的告警，原样收进这一轮——该带哪几条是调用方的事：托盘带挂到那件事
+    /// 下一次办成为止的全部（`crate::tray::warnings`；[`PauseCheck::warning`] 是其中一条的来处）。
     pub fn assess(
         general: &'a General,
         devices: impl IntoIterator<Item = (&'a Device, &'a InHand)>,
@@ -215,8 +213,8 @@ impl<'a> Round<'a> {
 
     /// 已经各自判完的几台合成一轮：选出 Primary Device，收下这一轮的告警。纯函数。
     ///
-    /// 与 [`Self::assess`] 的差别只在"当下"：这里每台带着它自己判过的那个。命令行走这一条——
-    /// 它一台一台依次取数，每台的"当下"就是它自己取数的那一刻（`cli::status::run` 上写了为什么）。
+    /// 与 [`Self::assess`] 的差别只在"当下"：这里每台带着它自己判过的那个。[`Self::assess`] 在同一个"当下"判完
+    /// 全部之后走的也是这里。
     pub fn compose(
         general: &'a General,
         devices: Vec<DeviceState<'a>>,
@@ -290,7 +288,7 @@ impl<'a> DeviceState<'a> {
     ///   [`NoReading::Paused`]），不是"本机有上位机在跑"：一副只配了 `Ble` 的耳机压根没有让开的
     ///   东西。
     /// - **上次已知值里记着的"充电中"不算充电中**：那是当时的状态，不是现在的
-    ///   （[`Provenance::charging_now`]，命令行那一行守的是同一条）。
+    ///   （[`Provenance::charging_now`]，悬停提示与菜单那一行守的是同一条）。
     /// - **上次已知值一律 Stale**，哪怕它是十秒前取的：它有多新，和设备此刻在不在，是两件事
     ///   （`CONTEXT.md`「上次已知值」）。当场读到的按陈旧阈值判。
     /// - 陈旧到不该再显示数字的那一档（只有 `Ble` 到得了）在这里仍是 Stale 一类，照样参与低电判定
@@ -347,18 +345,17 @@ impl<'a> DeviceState<'a> {
     ///
     /// `None` = 没有读数，或者那份读数说不出取得时刻（那台 BLE 设备没有更新时间戳）。
     ///
-    /// 命令行那一行在 `Ble` 上印的是 Windows 报的那个缓存年龄（parking lot Q21），与这个数在
-    /// 命令行里恰好相等：它每台用自己取数那一刻的"当下"判，而取得时刻正是那一刻减去缓存年龄。
-    /// 两者只在"当下"晚于取数时分开——那时这里多出来的正是真实流逝的那几秒。
+    /// `Ble` 那一级也是从取得时刻算到"当下"，不是 Windows 当时报的那个缓存年龄（parking lot Q21）：两者在取数那一刻
+    /// 相等，之后这里多出来的正是真实流逝的那几秒——托盘常驻，那正是要写出来的数。
     pub fn age_secs(&self) -> Option<u64> {
         self.reading().and_then(|(_, staleness)| staleness.age_secs)
     }
 
     /// 这一次取数为什么没拿到读数（取数失败的三种来路，或者暂停）：手上没有读数时是取数那一层交出的那个；退到了
     /// 上次已知值时也有，是这一次取数自己的原因（parking lot Q234）。这一次读到了、无已知值（没有什么失败了），
-    /// 或者手上的上次已知值说不出"这一次"（刚启动时从状态文件里拿的、命令行的那一份）时没有。
+    /// 或者手上的上次已知值说不出"这一次"（刚启动时从状态文件里拿的那一份）时没有。
     ///
-    /// 交的是那个值本身：菜单设备行说它的短原因（[`NoReading::short_reason`]），命令行、悬停提示与日志说完整原因
+    /// 交的是那个值本身：菜单设备行说它的短原因（[`NoReading::short_reason`]），悬停提示与日志说完整原因
     /// （`Display`），而它的变体还分得出是暂停还是取数失败。
     pub fn reason(&self) -> Option<&'a NoReading> {
         match self.shown {
@@ -371,14 +368,20 @@ impl<'a> DeviceState<'a> {
     /// 就不参与 `lowest` 比较——那与一份 Unknown 的读数是两回事（`CONTEXT.md`：Unknown 也不等于
     /// 设备离线）。
     ///
-    /// **"还算不算现状"只看陈旧阈值，不看来路**，与命令行一直以来的判法一个字不差：拿出来顶上的
-    /// 上次已知值，若取得时刻还在阈值以内，照样以 `Fresh` 参与 `lowest`——而图标状态说它 Stale。
-    /// 两处对不上，记在 parking lot Q154。
+    /// **"还算不算现状"看陈旧阈值，也看来路**：上次已知值一律不算，哪怕它的取得时刻还在阈值以内——与图标状态说它
+    /// Stale 是同一个判断（[`is_stale`]）。一台刚失联的设备因此不会拿几十秒前的数去抢 `lowest`，全都不可信时"保持上次
+    /// 的选择"也才走得到（parking lot Q154、Q166）。当场读到的照陈旧阈值判。
     pub fn candidate(&self) -> Option<CandidateReading> {
-        let (_, staleness) = self.reading()?;
+        let (row, staleness) = self.reading()?;
+        // 对两维都穷举：加一档陈旧或者加一种来路时，编译器会把人指到这里来问一句"它参与 lowest 吗"。
+        let freshness = match (row.provenance, staleness.freshness) {
+            (Provenance::JustRead, freshness) => freshness,
+            (Provenance::LastKnown, Freshness::Fresh | Freshness::Stale) => Freshness::Stale,
+            (Provenance::LastKnown, Freshness::VeryStale) => Freshness::VeryStale,
+        };
         Some(CandidateReading {
             level: self.level()?,
-            freshness: staleness.freshness,
+            freshness,
         })
     }
 }
@@ -411,7 +414,7 @@ fn icon_state(shown: &Shown<'_>, level_source: LevelSource, low_battery: u8) -> 
 
 /// 手上那份读数不能当现状了吗。
 ///
-/// 对两维都穷举、不写通配分支，理由与 `cli::status` 里 `stale_marker` 那一条相同：加一档陈旧
+/// 对两维都穷举、不写通配分支，理由与悬停提示里那张陈旧标注的表（`crate::tray::hover`）相同：加一档陈旧
 /// 或者加一种来路时，编译器会把人指到这里来。那一处要把五格排成四句不同的话，这里只要一个
 /// 是非，所以两边各写一张穷举的表，不合成一个。
 fn is_stale(provenance: Provenance, freshness: Freshness) -> bool {

@@ -458,3 +458,55 @@ fn with_only_the_radio_marking_the_primary_device_no_row_is_checked() {
     );
     assert!(!device_row(&menu, "VGN Neon75").checked);
 }
+
+/// 钉死的那一台读不到，照样是这一轮的 Primary Device，那一行照旧打勾——标注跟着 Device 走，不跟着读数走；另一台不打。
+#[test]
+fn the_row_of_a_pinned_device_that_could_not_be_read_is_checked() {
+    let config = format!("[general]\nprimary = \"neon75\"\n{MOUSE_AND_KEYBOARD}");
+    let (mut tray, mut screen) = start(&config, &LastKnown::default(), NOW);
+    feed(
+        &mut tray,
+        &mut screen,
+        fetched(
+            "dragonfly3",
+            NOW,
+            just_read(EndpointKind::Dongle24G, 57, NOW),
+        ),
+    );
+    feed(
+        &mut tray,
+        &mut screen,
+        fetched(
+            "neon75",
+            NOW,
+            failed_because(FailureCause::Unreachable, "读不到 —— 用例里的完整原因"),
+        ),
+    );
+
+    let menu = tray.menu(NOW);
+
+    assert!(device_row(&menu, "VGN Neon75").checked, "钉死的那一台");
+    assert!(!device_row(&menu, "Dragonfly 3 Master+").checked);
+}
+
+/// 这一轮没有一个新鲜且可信的读数，保持上次的选择：状态文件里记着的那一台照旧打勾，托盘不因为一轮读不到就跳开。
+#[test]
+fn the_row_of_a_primary_device_held_over_is_checked() {
+    let mut last_known = LastKnown::default();
+    last_known.remember_primary("neon75");
+    let (mut tray, mut screen) = start(MOUSE_AND_KEYBOARD, &last_known, NOW);
+    feed(
+        &mut tray,
+        &mut screen,
+        fetched(
+            "dragonfly3",
+            NOW,
+            failed_because(FailureCause::Unreachable, "读不到 —— 用例里的完整原因"),
+        ),
+    );
+
+    let menu = tray.menu(NOW);
+
+    assert!(device_row(&menu, "VGN Neon75").checked, "上次选的那一台");
+    assert!(!device_row(&menu, "Dragonfly 3 Master+").checked);
+}

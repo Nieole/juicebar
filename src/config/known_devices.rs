@@ -36,7 +36,7 @@ pub struct KnownDevice {
     pub wired_hint: &'static str,
     /// 这条 Wired 身份里有没有**没实测过**的部分。没有就是空串。
     ///
-    /// 它会跟着占位一起写进草稿，也会跟在 `config-refresh` 那句"补上了 Wired"后面。
+    /// 它会跟着占位一起写进草稿，也会跟在自动补空块那句"补上了 Wired"后面（日志）。
     /// 为什么非要说出来：`is_present` 只核对 VID/PID/usage 四项，`report_id` 是枚举问不出
     /// 来的，所以那一项若是抄来的猜测，补出来的块就带着一个没人验过的值——而报文编号错了的
     /// 帧会被设备静默丢弃，看起来和"设备没反应"一模一样（`docs/protocol.md` 的教训）。
@@ -114,7 +114,7 @@ pub const KNOWN_DEVICES: &[KnownDevice] = &[
     // 这一条的 Wired 至今**没有实测过**：键盘要把机身模式开关拨到有线档才枚举得出来，
     // 仅插线不够。VID/PID/usage 取自 docs/protocol.md 记下的观察，`report_id` 是照它的
     // Dongle24G 抄的（那一条实测就是 0）。写下去不会造成错配置：草稿里它是注释掉的占位，
-    // 而 `config-refresh` 只在本机真的枚举得到这组 VID/PID/usage 时才把它填成真块。
+    // 而自动补空块只在本机真的枚举得到这组 VID/PID/usage 时才把它填成真块。
     KnownDevice {
         id: "neon75",
         name: "VGN Neon75",
@@ -145,7 +145,7 @@ pub const KNOWN_DEVICES: &[KnownDevice] = &[
 /// 这里**不要求**这条通路能发输出报文，而 `HidEndpoints::find_output_collection` 要求。
 /// 两处问的不是同一个问题：那边要发命令取数，这边只是往配置里写下一条身份。键盘的 vendor
 /// collection 实测是 `in:0 out:0 feat:65`，按输出报文筛会把它筛掉——于是那条最需要
-/// `config-refresh` 的 Endpoint 反而永远补不上。
+/// 自动补空块的 Endpoint 反而永远补不上。
 pub(super) fn is_present(endpoint: &HidEndpoint, collections: &[HidInfo]) -> bool {
     collections.iter().any(|c| {
         c.vid == endpoint.vid

@@ -17,7 +17,6 @@ use crate::primary::PrimaryRule;
 use crate::round::Warning;
 
 use super::device_row::{self, RowDisplay};
-use super::register::{NEW_DEVICE, REGISTER};
 use super::{Tray, hover};
 
 /// "打开配置文件"那一项写着的字。首次运行的通知叫用户去点它（`super::config`），两处说的得是同一个名字。
@@ -158,22 +157,16 @@ impl Tray {
         if !items.is_empty() {
             items.push(Item::Separator);
         }
-        // 一台都没有：设备行那一块写一句说明（命令行里"配置 … 里一个 Device 都没有。"那一行在托盘里的样子），接着指向
-        // "登记设备 ›"里的"新建一台 Device"——首次运行一台设备都没插，插上之后从那里加进来（票 12）。普通项、不变灰——
-        // 变灰说的是"这不是现状"，而一台都没有正是现状（parking lot Q285）。
+        // 一台都没有：设备行那一块写一句说明（与悬停提示同一句），指向"登记设备 ›"里的"新建一台 Device"——首次运行
+        // 一台设备都没插，插上之后从那里加进来（票 12）。普通项、不变灰——变灰说的是"这不是现状"，而一台都没有正是
+        // 现状（parking lot Q285）。
         if self.config.devices.is_empty() {
             items.push(Item::Entry(Entry {
                 placeholder: Some(Placeholder {
                     text: "〔一台 Device 都没有的说明〕".to_string(),
                     right: None,
                 }),
-                ..Entry::new(
-                    Kind::Normal,
-                    format!(
-                        "{}：插上设备或配对蓝牙之后，到\"{REGISTER}\"里点\"{NEW_DEVICE}\"",
-                        hover::NO_DEVICE
-                    ),
-                )
+                ..Entry::new(Kind::Normal, hover::no_device())
             }));
         }
         let display = RowDisplay::of(&self.config.tray);

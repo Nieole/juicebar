@@ -167,9 +167,6 @@ low_battery = 20
 stale_after = 3600
 very_stale_after = 86400
 
-# 列表里是否显示未在 [[device]] 中登记的 BLE 设备。
-show_unknown_ble = false
-
 # 检测到厂商上位机在运行时暂停 HID 轮询。这不是防御性设计：键盘 dongle 的 feature 报文是
 # 一块保存最近一次应答的共享缓冲区，两个程序同时发命令会互相覆盖对方的应答，双方都读到
 # 错数据。Ble 不参与这个竞争，照常轮询。
@@ -308,8 +305,8 @@ fn unrecognised_header() -> String {
 # level_source = \"auto\"
 #   # 是接收器就填 wireless_24g，是插线冒出来的本体就填 wired。
 {}#
-# `juicebar caps` 能问出一条 collection 声明的 Report ID，`juicebar probe` 能试探它认不认
-# 已知的读命令。
+# 源码树里的诊断示例程序帮得上忙（要管理员终端）：`cargo run --example caps` 能问出一条
+# collection 声明的 Report ID，`cargo run --example probe` 能试探它认不认已知的读命令。
 # ---------------------------------------------------------------
 ",
         comment_out(&blank_endpoint_block(EndpointKind::Dongle24G), "#   ")

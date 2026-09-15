@@ -173,7 +173,7 @@ fn run(
     }
 }
 
-/// 对一台 Device 做一次取数，照命令行 `status` 那一套：先问一次本机进程（暂停检测），枚举一次本机，取一个
+/// 对一台 Device 做一次取数：先问一次本机进程（暂停检测），枚举一次本机，取一个
 /// "当下"，取数——读不到就退到上次已知值。
 fn fetch(request: &FetchRequest, last_known: &mut LastKnown) -> Fetched {
     let pause = PauseCheck::detect(&request.general, &SystemProcesses);

@@ -20,7 +20,7 @@
 //! **五个文件，一个公开面。**上面那句"住在一处"说的是这个模块，不是一个文件：schema、
 //! 解析、以及全部公开面的 re-export 在这里，那张写死的实测身份表与"这台设备对上表里
 //! 哪一条"的判定在 `known_devices`，草稿的生成与那批用户可见的文案在 `draft`，
-//! `toml_edit` 那套格式保留的原地编辑（`config-refresh` 的补全与 `primary` 的回写）
+//! `toml_edit` 那套格式保留的原地编辑（自动补空块、`primary` 与 `[tray]` 的回写、登记与新建 Device）
 //! 在 `edit`，`[tray]` 表的键、取值与认不出时的处置在 `tray`。
 //!
 //! 拆开的是**内部安排**：加一台设备、改一句草稿文案、改回写机制这三件不相干的事从此
@@ -32,13 +32,13 @@ mod known_devices;
 mod tray;
 
 pub use draft::draft;
-pub use edit::{Fill, Pinned, Refreshed, pin_primary, refresh};
+pub use edit::{Fill, Note, Pinned, Refreshed, pin_primary, refresh};
 pub use edit::{NewDevice, add_device, register_ble, unregister_ble};
 pub use edit::{TrayWritten, write_tray};
 pub use known_devices::{KNOWN_DEVICES, KnownDevice, UnregisteredHid};
 pub use tray::{PrimaryMark, TraySetting, TraySettings, Unrecognised};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
@@ -47,6 +47,40 @@ use crate::endpoints::EndpointKind;
 use crate::primary::PrimaryRule;
 use crate::sources::level::LevelSource;
 use crate::sources::{Driver, driver_for};
+
+/// 配置文件的位置：`%APPDATA%\juicebar\config.toml`。日志与状态文件都在它旁边（`crate::state::path_beside_config`）。
+///
+/// "配置在哪"只能有一个答案：两处各算一遍，迟早会有一处算的是另一个路径，而那种错表现出来是"程序说没有配置，
+/// 可我明明写了"。
+pub fn default_path() -> Result<PathBuf> {
+    let appdata = std::env::var("APPDATA").map_err(|_| {
+        anyhow!("读不到环境变量 APPDATA，不知道配置文件该在哪（缺省是 %APPDATA%\\juicebar\\config.toml）")
+    })?;
+    Ok(Path::new(&appdata).join("juicebar").join("config.toml"))
+}
+
+/// 首次运行：扫一遍本机，把一份带注释的草稿（[`draft`]）写到 `path`，一个字都不印。托盘启动时没有配置文件就走这里
+/// （`crate::shell`），叫人去看一眼的是一条通知（`crate::tray::config`）。
+///
+/// **只从无到有，绝不覆盖。**用 `create_new` 而不是先 `exists()` 再写：调用方已经查过文件不在了，但那之后到这里之间
+/// 它可能被建出来（另一个 juicebar 实例、用户自己），而配置是用户的东西，宁可报一句错也不能把它盖掉。
+///
+/// [`draft`]: fn@draft
+pub fn write_draft(path: &Path) -> Result<()> {
+    let draft = draft(&crate::hid::enumerate()?);
+
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("建不了目录 {}", dir.display()))?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("写不进配置 {}", path.display()))?;
+    std::io::Write::write_all(&mut file, draft.as_bytes())
+        .with_context(|| format!("写不进配置 {}", path.display()))?;
+    Ok(())
+}
 
 /// 一份配置文件的全部内容。
 #[derive(Debug, Clone, Deserialize)]
@@ -69,6 +103,9 @@ pub struct Config {
 /// 秒的陈旧阈值意味着每一份读数在取到的同一刻就已经陈旧——一份没写 `[general]` 的配置
 /// 会因此让整个工具把所有读数都标成不可信。缺省的那几个数与 `config.example.toml` 的
 /// 注释是同一份。
+///
+/// **删掉的键照样静默忽略**，不让整份配置读不动：`show_unknown_ble`（未登记的蓝牙设备的去处是菜单"登记设备"，
+/// parking lot Q286）还写在用户真在用的配置里，那份配置照读。
 #[derive(Debug, Clone, Deserialize)]
 pub struct General {
     /// 托盘图标当下画哪个 Device，也就是 Primary Device：`"lowest"` 是当前电量最低的
@@ -81,13 +118,6 @@ pub struct General {
     /// 选择，不是 `"lowest"` 自动选出来的结果，见 parking lot Q41）。
     #[serde(default)]
     pub primary: PrimaryRule,
-    /// 列表里是否显示未在 `[[device]]` 里登记的 BLE 设备。
-    ///
-    /// 说的是本机扫得到、而配置里没有对应 `[[device]]` 的那些。缺省是关的：一台机器
-    /// 上的 BLE 设备多数跟键鼠无关（耳机、手机、手环），默认全列出来只会把两行有用的
-    /// 埋掉。它是一条**独立的输出维度**，不是某个 Device 那一行上的事。
-    #[serde(default)]
-    pub show_unknown_ble: bool,
     /// Wired 的轮询间隔，秒。走线取数，设备还在外部供电，不耗它的电，可以勤一点。
     ///
     /// 它同时**决定 Wired 的陈旧阈值**（3 倍，见 `crate::staleness`）：改了间隔阈值
@@ -179,7 +209,6 @@ impl Default for General {
     fn default() -> Self {
         Self {
             primary: PrimaryRule::default(),
-            show_unknown_ble: false,
             poll_interval_wired: default_poll_interval_wired(),
             poll_interval_24g: default_poll_interval_24g(),
             poll_interval_bluetooth: default_poll_interval_bluetooth(),

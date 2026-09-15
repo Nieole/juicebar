@@ -23,7 +23,7 @@ use anyhow::Result;
 /// 猜的是没人验过的那一半。
 ///
 /// 协议逻辑仍然写成各模块里的自由函数，trait 这一层只做分发：驱动自己的测试对着自由
-/// 函数断言，不必绕 `dyn`；而 `status` 拿到的是一个 `&dyn Driver`。
+/// 函数断言，不必绕 `dyn`；而取数那一层（`crate::readout`）拿到的是一个 `&dyn Driver`。
 pub trait Driver {
     /// 这个家族的 HID Endpoint 走哪种报文。
     fn report_kind(&self) -> ReportKind;

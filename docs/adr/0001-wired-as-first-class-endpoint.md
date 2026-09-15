@@ -15,6 +15,6 @@ voltage。
 
 - 一个 Device 最多有三条 Endpoint，取数时按 `Wired > Dongle24G > Ble` 依次尝试，遇第一个成功即停。
 - 配置多出 `[device.wired]` 块，且它**只在设备插线时才扫得到**——自举时通常缺席，需要
-  `juicebar config-refresh` 事后补全。
+  事后补全（托盘在本机插上它时自动补上空着的那一块，resident-tray 票 10）。
 - 两台设备的插线行为并不一致，判定逻辑不能通吃：鼠标插线即切有线传数据（`1005` 枚举、dongle
   超时）；键盘则要把模式开关拨到有线才枚举 `502F`，仅插线时数据仍走 2.4G 且 dongle 照常应答。

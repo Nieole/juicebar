@@ -1,16 +1,15 @@
 //! 悬停提示的文字：从这一轮的结果排出来（spec 用户故事 16：名字、电量、来源和多久前）。
 //!
 //! 一行一件事：名字；电量（或者为什么没有电量）；来源与多久前，连同它能不能当现状；暂停时再加一行点
-//! 那个上位机的名。托盘的悬停提示认换行，一行一件事比挤成命令行那样的一长行好读。
+//! 那个上位机的名。托盘的悬停提示认换行，一行一件事比挤成一长行好读。
 //!
-//! **措辞与命令行那一行一个字不差**（`cli::status::render`）：电量那一段、"来自 X（多久前）"、陈旧与暂停
-//! 两个标注、读不到时的那句原因。两处是同一个用户读的同一件事，说法漂开，他就得学两套。命令行那一行
-//! 在票 14 退场，那时这里就是唯一的一份；在那之前两边各有一张陈旧标注的表（这里多一个"，"，因为它
-//! 接在同一行后面），改一边要记得另一边。
+//! **这几句说法只在这里定一份**：电量那一段、"来自 X（多久前）"、陈旧与暂停两个标注、读不到时的那句原因。菜单
+//! 设备行的中段说同一件事时用的就是这里的函数（[`source_and_age`] 等，`super::device_row`）：同一个用户读的同一件事，
+//! 说法漂开，他就得学两套。命令行 `status` 那一行原先也说这几句，它随命令行退场（`docs/adr/0008`），那批排版用例
+//! 迁到了 `tests/tray_hover.rs`。
 //!
-//! 与命令行不同的只有该删的：电压与"未充电"不写（悬停提示放不下，也不是用户停下来看它时要的东西），
-//! "多久前"从取得时刻与当下减出来（`Ble` 那一级也是：托盘常驻，Windows 当时报的缓存年龄过一分钟就
-//! 不对了）。
+//! 有两样不写：电压与"未充电"（悬停提示放不下，也不是用户停下来看它时要的东西）。"多久前"从取得时刻与当下减出来
+//! （`Ble` 那一级也是：托盘常驻，Windows 当时报的缓存年龄过一分钟就不对了）。
 
 use crate::bluetooth::age_text;
 use crate::endpoints::EndpointKind;
@@ -21,20 +20,27 @@ use crate::sources::level::level_for;
 use crate::staleness::{Freshness, Staleness};
 use crate::state::Provenance;
 
+use super::register::{NEW_DEVICE, REGISTER};
+
 /// 悬停提示最长多少个 UTF-16 单元：`NOTIFYICONDATAW::szTip` 是 128 格，末尾一格要留给 NUL。
 ///
 /// 超出的部分 Windows 不会替我们截，外壳硬塞进去只会截在一个随便的地方；所以在这里截，截处留一个
 /// 省略号（[`text`]）。完整的原因在日志里。
 pub const MAX_UTF16: usize = 127;
 
-/// 配置里一台 Device 都没登记时说的那一句：悬停提示写它，菜单设备行那一块也写它（`super::menu`）。
-pub(super) const NO_DEVICE: &str = "配置里一个 Device 都没有";
+/// 配置里一台 Device 都没登记时说的那一句，接着指路：插上之后到"登记设备"里新建。悬停提示写它，菜单设备行那一块也写它
+/// （`super::menu`）——用户先看到的往往是悬停提示（parking lot Q333）。两个名字取菜单里那两项的常量，改名跟着走。
+pub(super) fn no_device() -> String {
+    format!(
+        "配置里一个 Device 都没有：插上设备或配对蓝牙之后，到\"{REGISTER}\"里点\"{NEW_DEVICE}\""
+    )
+}
 
 /// 这一轮的悬停提示：Primary Device 那一台的样子；选不出 Primary Device 时，说为什么。
 pub fn text(round: &Round<'_>) -> String {
-    // 一台都没登记是根上的原因：那时说"选不出谁"只是同一件事的第二遍（命令行那一行也在这时不补那句）。
+    // 一台都没登记是根上的原因：那时说"选不出谁"只是同一件事的第二遍。
     if round.devices.is_empty() {
-        return NO_DEVICE.to_string();
+        return no_device();
     }
     fit(match (round.primary_state(), round.primary) {
         (Some(state), _) => device_lines(state).join("\n"),
@@ -144,7 +150,9 @@ pub(super) fn paused_note(row: &RowReading) -> Option<String> {
 
 /// 陈旧标注：新鲜、这一次取数读到的什么都不加，其余每一种都以"已陈旧"开头。
 ///
-/// 与命令行那一张（`cli::status::stale_marker`）一格对一格，理由写在那边。对两维都穷举、不写通配分支：
+/// 几档共用一个词：`CONTEXT.md` 只给了一个 **Stale**，用户要分辨的也只有"能不能当现状"。"不显示百分比"那半句交代百分比
+/// 去哪了（电量那一行已经换成了日期）。**上次已知值一律带标注，新鲜那一档也带**：阈值答的是"这个数多新"，而上次已知值的
+/// 问题是设备此刻不在——等一等不会自己变新，得先把设备找出来（`crate::state::Provenance`）。对两维都穷举、不写通配分支：
 /// 加一档陈旧或者加一种来路时，编译器会把人指到这里来。
 fn stale_marker(provenance: Provenance, freshness: Freshness) -> &'static str {
     match (provenance, freshness) {
