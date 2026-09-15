@@ -1,6 +1,6 @@
-//! `config.toml` 这一头：读取、自举草稿的生成、只填空缺的补全，以及 `primary` 的回写。
+//! `config.toml` 这一头：读取、自举草稿的生成、只填空缺的补全，以及 `primary` 与 `[tray]` 的回写。
 //!
-//! 四样住在一处是有意的——它们说的是同一份文件的同一套 schema，分开住就会漂。
+//! 几样住在一处是有意的——它们说的是同一份文件的同一套 schema，分开住就会漂。
 //! **读**走 `toml` + serde，要的是类型化的模型；**写**走 `toml_edit`，要的是保住用户
 //! 写下的注释（见 `docs/adr/0003`）。
 //!
@@ -17,11 +17,11 @@
 //! 字段名沿用 `CONTEXT.md` 的词：配置里的 `wireless_24g` 块在代码里叫
 //! `dongle_24g`，因为它描述的正是 Dongle24G 这条 Endpoint。
 //!
-//! **四个文件，一个公开面。**上面那句"住在一处"说的是这个模块，不是一个文件：schema、
+//! **五个文件，一个公开面。**上面那句"住在一处"说的是这个模块，不是一个文件：schema、
 //! 解析、以及全部公开面的 re-export 在这里，那张写死的实测身份表与"这台设备对上表里
 //! 哪一条"的判定在 `known_devices`，草稿的生成与那批用户可见的文案在 `draft`，
 //! `toml_edit` 那套格式保留的原地编辑（`config-refresh` 的补全与 `primary` 的回写）
-//! 在 `edit`。
+//! 在 `edit`，`[tray]` 表的键、取值与认不出时的处置在 `tray`。
 //!
 //! 拆开的是**内部安排**：加一台设备、改一句草稿文案、改回写机制这三件不相干的事从此
 //! 各改一个文件，而调用点看见的仍然是 `config::<名字>` 那一处，一个字都不必改。
@@ -29,10 +29,13 @@
 mod draft;
 mod edit;
 mod known_devices;
+mod tray;
 
 pub use draft::draft;
 pub use edit::{Fill, Pinned, Refreshed, pin_primary, refresh};
+pub use edit::{TrayWritten, write_tray};
 pub use known_devices::{KNOWN_DEVICES, KnownDevice};
+pub use tray::{PrimaryMark, TraySetting, TraySettings, Unrecognised};
 
 use std::path::Path;
 
@@ -48,6 +51,10 @@ pub struct Config {
     /// 不属于任何单个 Device 的那些选项。`[general]` 整节缺席时全取缺省值。
     #[serde(default)]
     pub general: General,
+    /// `[tray]`：托盘图标怎么画、菜单里写什么（ADR-0005 的八项设置，`tray.rs`）。整节缺席时全取缺省值；认不出的取值
+    /// 也按缺省值处理，不让整份配置读不动（[`TraySettings::unrecognised`]）。
+    #[serde(default)]
+    pub tray: TraySettings,
     /// 登记在册的 Device，顺序即配置里的书写顺序。
     #[serde(rename = "device", default)]
     pub devices: Vec<Device>,

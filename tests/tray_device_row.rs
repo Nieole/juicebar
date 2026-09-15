@@ -388,3 +388,73 @@ fn the_row_of_the_primary_device_is_checked() {
     );
     assert!(!device_row(&menu, "VGN Neon75").checked);
 }
+
+/// 关掉"写出来源和多久前"（`[tray] menu_source = false`）：有读数的那一行中段空着，只剩名字与右列的电量；这一次没读到的
+/// 那一行照写短原因——关掉来源不等于关掉原因（spec 用户故事 14）。
+#[test]
+fn without_source_and_age_a_row_with_a_reading_writes_only_its_name_but_a_failed_row_keeps_its_short_reason()
+ {
+    let config = format!("[tray]\nmenu_source = false\n{MOUSE_AND_KEYBOARD}");
+    let (mut tray, mut screen) = start(&config, &LastKnown::default(), NOW);
+    feed(
+        &mut tray,
+        &mut screen,
+        fetched(
+            "dragonfly3",
+            NOW,
+            just_read(EndpointKind::Dongle24G, 57, NOW),
+        ),
+    );
+    feed(
+        &mut tray,
+        &mut screen,
+        fetched(
+            "neon75",
+            NOW,
+            failed_because(FailureCause::Unreachable, "读不到 —— 用例里的完整原因"),
+        ),
+    );
+
+    assert_eq!(
+        row(&tray, NOW, "Dragonfly 3 Master+"),
+        row_of("Dragonfly 3 Master+", "57%（Reported Level）", false)
+    );
+    assert_eq!(
+        row(&tray, NOW, "VGN Neon75"),
+        row_of(
+            "VGN Neon75  失联（没插？没配对？没开机？）",
+            "取数失败",
+            true
+        )
+    );
+}
+
+/// 只留单选（`[tray] primary_mark = "radio"`）：这一轮的 Primary Device 那一行也不打勾，哪一行都不打——这一轮是谁，
+/// 只剩图标本身在说。
+#[test]
+fn with_only_the_radio_marking_the_primary_device_no_row_is_checked() {
+    let config = format!("[tray]\nprimary_mark = \"radio\"\n{MOUSE_AND_KEYBOARD}");
+    let (mut tray, mut screen) = start(&config, &LastKnown::default(), NOW);
+    feed(
+        &mut tray,
+        &mut screen,
+        fetched(
+            "dragonfly3",
+            NOW,
+            just_read(EndpointKind::Dongle24G, 57, NOW),
+        ),
+    );
+    feed(
+        &mut tray,
+        &mut screen,
+        fetched("neon75", NOW, just_read(EndpointKind::Ble, 80, NOW)),
+    );
+
+    let menu = tray.menu(NOW);
+
+    assert!(
+        !device_row(&menu, "Dragonfly 3 Master+").checked,
+        "它是这一轮的 Primary Device，照样不打勾"
+    );
+    assert!(!device_row(&menu, "VGN Neon75").checked);
+}

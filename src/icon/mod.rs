@@ -11,7 +11,8 @@
 //! - **系统字体**走 Windows 的文字渲染（`system_font.rs`），豁免逐像素，只断言结构。
 //!
 //! 纯函数：不碰 Win32 界面、不碰设备，同样的输入画出同样的位图（系统字体那一项取决于本机的字体）。
-//! 用它的有两处：托盘图标本身（票 04），与"图标样式"子菜单里每个选项前面的预览（票 07）。
+//! 用它的有两处：托盘图标本身（票 04），与"图标样式"子菜单里每个选项前面的预览（票 07，几张并排的拼法是
+//! [`render_preview`]）。
 //! 交出去的是不预乘的 RGBA。交给 Windows 之前换成字节的那一步也是纯函数（`bytes.rs`）：32 位图标
 //! （`CreateIconIndirect`）要不预乘的 BGRA（[`tray_icon_bytes`]），塞进菜单的 32 位位图
 //! （`MENUITEMINFO::hbmpItem`）要预乘过的（[`menu_preview_bytes`]）。
@@ -279,6 +280,78 @@ pub fn render(
     let mut canvas = Canvas::new(size.px() as i32);
     draw_icon(&mut canvas, settings, state, percent, theme.palette());
     canvas.into_bitmap()
+}
+
+/// 几张图标从左往右并排拼成的一张位图：右键菜单"图标样式"最里一层每个选项前面的那张预览（`resident-tray`
+/// 票 07）。"灰状态"那一组是三张，别的组只有一张——一张时它就是那一张图标本身。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewBitmap {
+    width: u32,
+    height: u32,
+    pixels: Vec<Rgba>,
+}
+
+impl PreviewBitmap {
+    /// 宽，像素。
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// 高，像素：就是图标的边长。
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// (x, y) 那个像素，左上角是 (0, 0)。
+    ///
+    /// # Panics
+    ///
+    /// 坐标出了位图。
+    pub fn pixel(&self, x: u32, y: u32) -> Rgba {
+        assert!(
+            x < self.width && y < self.height,
+            "({x}, {y}) 不在 {}×{} 的预览里",
+            self.width,
+            self.height
+        );
+        self.pixels[(y * self.width + x) as usize]
+    }
+
+    /// 全部像素，逐行从上往下、每行从左往右。
+    pub fn pixels(&self) -> &[Rgba] {
+        &self.pixels
+    }
+}
+
+/// 画一张预览：`states` 里的每个状态各画一张图标（[`render`]，同一组设置、电量、尺寸、调色），从左往右并排。
+///
+/// 照设计稿的 `previewCanvas` 拼：两张之间空 max(2, round(边长 / 6)) 个像素，空隙全透明；每张原样拷过去，不缩放、
+/// 不混合。宽 = 张数 × 边长 + 空隙，高 = 边长。菜单项上挂的就是这张（`shell/menu.rs`）。
+pub fn render_preview(
+    settings: IconSettings,
+    states: &[IconState],
+    percent: Option<u8>,
+    size: IconSize,
+    theme: Theme,
+) -> PreviewBitmap {
+    let side = size.px();
+    let gap = 2.max(round(f64::from(side) / 6.0)) as u32;
+    let count = states.len() as u32;
+    let width = count * side + count.saturating_sub(1) * gap;
+    let mut pixels = vec![Rgba::default(); (width * side) as usize];
+    for (index, &state) in (0u32..).zip(states) {
+        let icon = render(settings, state, percent, size, theme);
+        let left = index * (side + gap);
+        for (y, row) in (0u32..).zip(icon.pixels().chunks(side as usize)) {
+            let start = (y * width + left) as usize;
+            pixels[start..start + row.len()].copy_from_slice(row);
+        }
+    }
+    PreviewBitmap {
+        width,
+        height: side,
+        pixels,
+    }
 }
 
 // ---------- 颜色与状态（设计稿的 PAL 与 STATES） ----------

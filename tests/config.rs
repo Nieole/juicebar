@@ -1,9 +1,11 @@
-//! 配置文件这一头：解析、自举草稿、`config-refresh` 的补全、`primary` 的回写。
+//! 配置文件这一头：解析（连同 `[tray]` 表）、自举草稿、`config-refresh` 的补全、`primary` 与 `[tray]` 的回写。
 //!
-//! 四样东西各住一个文件（`src/config/`），而公开面仍然是一处，所以用例也在同一个文件里。
+//! 这几样东西各住一个文件（`src/config/`），而公开面仍然是一处，所以用例也在同一个文件里。
 
 use juicebar::config::{self, Config};
+use juicebar::config::{PrimaryMark, TraySetting, TraySettings};
 use juicebar::hid::HidInfo;
+use juicebar::icon::{Charging, Full, Glyph, Gray, IconSettings, NoLastKnown, Style};
 use juicebar::primary::PrimaryRule;
 use juicebar::sources::level::LevelSource;
 
@@ -110,6 +112,40 @@ fn the_shipped_example_config_parses() {
     let ids: Vec<&str> = config.devices.iter().map(|d| d.id.as_str()).collect();
     assert_eq!(ids, ["dragonfly3", "neon75"]);
     assert_eq!(config.devices[1].driver, "vgn_keyboard");
+}
+
+/// 样例配置写着 `[tray]` 整张表：八个键一个不少、次序照 ADR-0005，每一个都认得，写的正是缺省值（设计稿页底按缺省值
+/// 生成的那一份）。样例里写一个认不出的取值、漏一个键，这里就红。
+#[test]
+fn the_example_config_writes_every_tray_key_with_its_default() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/config.example.toml");
+    let text = std::fs::read_to_string(path).unwrap();
+
+    let config = Config::parse(&text).unwrap();
+
+    assert_eq!(config.tray, TraySettings::default());
+    let keys: Vec<&str> = text
+        .lines()
+        .skip_while(|line| line.trim() != "[tray]")
+        .skip(1)
+        .take_while(|line| !line.trim_start().starts_with('['))
+        .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+        .filter_map(|line| line.split('=').next())
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "style",
+            "glyph",
+            "full",
+            "gray",
+            "no_last_known",
+            "charging",
+            "menu_source",
+            "primary_mark"
+        ]
+    );
 }
 
 /// 插线时才出现的那条 Endpoint 也要读得出来。
@@ -1515,4 +1551,354 @@ fn the_low_battery_threshold_defaults_to_twenty() {
         partial.general.low_battery, 20,
         "[general] 在，只是没写这一项"
     );
+}
+
+// ---------------------------------------------------------------
+// [tray]：ADR-0005 的八项设置
+// ---------------------------------------------------------------
+
+/// `[tray]` 整节缺席：八项都是 ADR-0005 写着的缺省值，一句"认不出"都没有。
+#[test]
+fn an_absent_tray_section_reads_as_the_adr_0005_defaults() {
+    let config = Config::parse(ONE_DEVICE).unwrap();
+
+    assert_eq!(
+        config.tray.icon,
+        IconSettings {
+            style: Style::Bar,
+            glyph: Glyph::Block,
+            full: Full::Block,
+            gray: Gray::Split,
+            no_last_known: NoLastKnown::Dash,
+            charging: Charging::Color,
+        }
+    );
+    assert!(config.tray.menu_source);
+    assert_eq!(config.tray.primary_mark, PrimaryMark::Both);
+    assert!(config.tray.unrecognised.is_empty());
+}
+
+/// ADR-0005 的对外契约：每个键的每个取值都读得出来，读成它说的那一项。键与取值照 ADR 抄成字面量，不照实现的表反推。
+#[test]
+fn every_value_of_every_tray_key_reads_as_what_it_says() {
+    let read = |line: &str| {
+        let config = Config::parse(&format!("[tray]\n{line}\n")).unwrap();
+        assert!(
+            config.tray.unrecognised.is_empty(),
+            "{line} 应当认得：{:?}",
+            config.tray.unrecognised
+        );
+        config.tray
+    };
+
+    let styles = [
+        ("number", Style::Number),
+        ("battery", Style::Battery),
+        ("ring", Style::Ring),
+        ("bar", Style::Bar),
+    ];
+    for (value, style) in styles {
+        assert_eq!(read(&format!("style = \"{value}\"")).icon.style, style);
+    }
+    let glyphs = [
+        ("block", Glyph::Block),
+        ("fine", Glyph::Fine),
+        ("system", Glyph::System),
+    ];
+    for (value, glyph) in glyphs {
+        assert_eq!(read(&format!("glyph = \"{value}\"")).icon.glyph, glyph);
+    }
+    let fulls = [
+        ("digits", Full::Digits),
+        ("cap_99", Full::Cap99),
+        ("block", Full::Block),
+    ];
+    for (value, full) in fulls {
+        assert_eq!(read(&format!("full = \"{value}\"")).icon.full, full);
+    }
+    let grays = [
+        ("one", Gray::One),
+        ("split", Gray::Split),
+        ("split_pause", Gray::SplitPause),
+    ];
+    for (value, gray) in grays {
+        assert_eq!(read(&format!("gray = \"{value}\"")).icon.gray, gray);
+    }
+    let no_last_knowns = [
+        ("dash", NoLastKnown::Dash),
+        ("question", NoLastKnown::Question),
+        ("outline", NoLastKnown::Outline),
+        ("logo", NoLastKnown::Logo),
+    ];
+    for (value, no_last_known) in no_last_knowns {
+        assert_eq!(
+            read(&format!("no_last_known = \"{value}\""))
+                .icon
+                .no_last_known,
+            no_last_known
+        );
+    }
+    let chargings = [
+        ("color", Charging::Color),
+        ("bolt_large", Charging::BoltLarge),
+        ("bolt", Charging::Bolt),
+    ];
+    for (value, charging) in chargings {
+        assert_eq!(
+            read(&format!("charging = \"{value}\"")).icon.charging,
+            charging
+        );
+    }
+    assert!(read("menu_source = true").menu_source);
+    assert!(!read("menu_source = false").menu_source);
+    assert_eq!(
+        read("primary_mark = \"both\"").primary_mark,
+        PrimaryMark::Both
+    );
+    assert_eq!(
+        read("primary_mark = \"radio\"").primary_mark,
+        PrimaryMark::Radio
+    );
+}
+
+/// 认不出的取值（笔误、写错了类型）按缺省值处理，**不让整份配置读不动**——与 `primary` 写错时一样；每一处认不出记一句，
+/// 说清是哪个键、写的是什么、按什么处理（托盘把它写进日志）。同一张表里写对了的照常生效，设备照常读出来。
+#[test]
+fn an_unrecognised_tray_value_falls_back_to_its_default_and_says_so() {
+    let text = format!(
+        "[tray]\nstyle = \"squre\"\nglyph = \"fine\"\nmenu_source = \"yes\"\nprimary_mark = 2\n{ONE_DEVICE}"
+    );
+
+    let config = Config::parse(&text).expect("认不出的 [tray] 取值不该让整份配置读不动");
+
+    assert_eq!(config.tray.icon.style, Style::Bar);
+    assert_eq!(config.tray.icon.glyph, Glyph::Fine, "写对了的照常生效");
+    assert!(config.tray.menu_source);
+    assert_eq!(config.tray.primary_mark, PrimaryMark::Both);
+    assert_eq!(config.devices.len(), 1);
+    let said: Vec<String> = config
+        .tray
+        .unrecognised
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        said,
+        [
+            "[tray] 里的 style = \"squre\" 认不出，按缺省值 \"bar\" 处理",
+            "[tray] 里的 menu_source = \"yes\" 认不出，按缺省值 true 处理",
+            "[tray] 里的 primary_mark = 2 认不出，按缺省值 \"both\" 处理",
+        ]
+    );
+}
+
+/// `tray` 写成了别的东西（不是一张表）：八项都按缺省值处理，说一句，配置照样读得动。
+#[test]
+fn a_tray_key_that_is_not_a_table_falls_back_to_every_default() {
+    let text = format!("tray = \"number\"\n{ONE_DEVICE}");
+
+    let config = Config::parse(&text).expect("写错的 tray 不该让整份配置读不动");
+
+    assert_eq!(config.tray.icon, IconSettings::default());
+    let said: Vec<String> = config
+        .tray
+        .unrecognised
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        said,
+        ["[tray] 不是一张表（写成了 \"number\"），八项都按缺省值处理"]
+    );
+}
+
+/// 一份**用户手写过的** `[tray]`：表上方、键上方各一句注释，一个行尾注释，写了两项、其余没写。
+const HANDWRITTEN_TRAY: &str = r#"# 我自己的配置
+[general]
+primary = "lowest"
+
+# 托盘我自己调过
+[tray]
+# 数字大一点
+style = "number"   # A 纯数字
+charging = "bolt"
+
+[[device]]
+id = "dragonfly3"
+name = "Dragonfly 3 Master+"
+driver = "vgn_mouse"
+"#;
+
+/// 回写之后逐行对一遍：`before` 与 `after` 行数一样时，交出不一样的那几对行。
+fn changed_lines<'a>(before: &'a str, after: &'a str) -> Vec<(&'a str, &'a str)> {
+    let (before, after): (Vec<&str>, Vec<&str>) =
+        (before.lines().collect(), after.lines().collect());
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "行数都不该变：\n{}",
+        after.join("\n")
+    );
+    before
+        .into_iter()
+        .zip(after)
+        .filter(|(before, after)| before != after)
+        .collect()
+}
+
+/// 菜单里改了一项：只动 `[tray]` 里那一个键的那一行，行尾注释原样留着；读回来就是新的取值。
+#[test]
+fn tray_writeback_changes_only_that_key_on_its_own_line() {
+    let written = config::write_tray(HANDWRITTEN_TRAY, &[TraySetting::Style(Style::Ring)]).unwrap();
+
+    assert!(written.changed);
+    assert_eq!(
+        changed_lines(HANDWRITTEN_TRAY, &written.text),
+        [(
+            "style = \"number\"   # A 纯数字",
+            "style = \"ring\"   # A 纯数字"
+        )]
+    );
+    assert_eq!(
+        Config::parse(&written.text).unwrap().tray.icon.style,
+        Style::Ring
+    );
+}
+
+/// `[tray]` 在、那个键没写：在这张表最后一个键后面补一行，别的一行都不动。
+#[test]
+fn tray_writeback_adds_the_key_at_the_end_of_the_tray_table_when_it_is_not_written() {
+    let written = config::write_tray(HANDWRITTEN_TRAY, &[TraySetting::Glyph(Glyph::Fine)]).unwrap();
+
+    assert!(written.changed);
+    let mut expected: Vec<&str> = HANDWRITTEN_TRAY.lines().collect();
+    let after_charging = expected
+        .iter()
+        .position(|line| *line == "charging = \"bolt\"")
+        .unwrap()
+        + 1;
+    expected.insert(after_charging, "glyph = \"fine\"");
+    assert_eq!(written.text.lines().collect::<Vec<_>>(), expected);
+}
+
+/// 配置里压根没有 `[tray]`：建一张真表（不是行内表），排在 `[general]` 后面、所有 `[[device]]` 前面，前面空一行，
+/// 里面只有这一个键；别的一行都不动。
+#[test]
+fn tray_writeback_creates_the_tray_table_after_general_when_there_is_none() {
+    let written =
+        config::write_tray(HANDWRITTEN_CONFIG, &[TraySetting::MenuSource(false)]).unwrap();
+
+    assert!(written.changed);
+    let mut expected: Vec<&str> = HANDWRITTEN_CONFIG.lines().collect();
+    let end_of_general = expected
+        .iter()
+        .position(|line| line.starts_with("poll_interval_wired"))
+        .unwrap()
+        + 1;
+    for (offset, line) in ["", "[tray]", "menu_source = false"]
+        .into_iter()
+        .enumerate()
+    {
+        expected.insert(end_of_general + offset, line);
+    }
+    assert_eq!(written.text.lines().collect::<Vec<_>>(), expected);
+    assert!(!Config::parse(&written.text).unwrap().tray.menu_source);
+}
+
+/// 配置里连 `[general]` 都没有：新建的 `[tray]` 排在所有 `[[device]]` 前面（写在后面，TOML 会把它读成那台 Device 的一张子表）。
+#[test]
+fn tray_writeback_puts_a_new_tray_table_before_every_device_when_there_is_no_general() {
+    let written =
+        config::write_tray(ONE_DEVICE, &[TraySetting::PrimaryMark(PrimaryMark::Radio)]).unwrap();
+
+    let config = Config::parse(&written.text).unwrap();
+    assert_eq!(config.tray.primary_mark, PrimaryMark::Radio);
+    assert_eq!(config.devices.len(), 1);
+    assert!(
+        written.text.find("[tray]").unwrap() < written.text.find("[[device]]").unwrap(),
+        "[tray] 要排在 [[device]] 前面：\n{}",
+        written.text
+    );
+}
+
+/// 本来就写着这个取值：一个字节都不写。没写、要的正是缺省值：同样不写——不然会凭空多出一张表、一行字来。
+#[test]
+fn tray_writeback_writes_nothing_when_the_value_is_already_in_effect_as_written() {
+    let same = config::write_tray(HANDWRITTEN_TRAY, &[TraySetting::Style(Style::Number)]).unwrap();
+    assert!(!same.changed);
+    assert_eq!(same.text, HANDWRITTEN_TRAY);
+
+    let default = config::write_tray(ONE_DEVICE, &[TraySetting::Style(Style::Bar)]).unwrap();
+    assert!(!default.changed);
+    assert_eq!(default.text, ONE_DEVICE);
+}
+
+/// 那个键写着一个认不出的取值（今天按缺省值画）：点了缺省值那一项，照样把那一行写成它——文件里的笔误就此没了，
+/// 日志里那一句也不再出现。
+#[test]
+fn tray_writeback_replaces_an_unrecognised_value_even_with_the_default() {
+    let before = "[tray]\nstyle = \"squre\"\n";
+
+    let written = config::write_tray(before, &[TraySetting::Style(Style::Bar)]).unwrap();
+
+    assert!(written.changed);
+    assert_eq!(
+        changed_lines(before, &written.text),
+        [("style = \"squre\"", "style = \"bar\"")]
+    );
+    assert!(
+        Config::parse(&written.text)
+            .unwrap()
+            .tray
+            .unrecognised
+            .is_empty()
+    );
+}
+
+/// "恢复默认"：图标样式那六项里写着别的取值的，各自那一行写回缺省值；没写的不补；"菜单显示"那两项不动。
+#[test]
+fn restoring_the_icon_defaults_rewrites_only_the_icon_keys_that_differ() {
+    let before = HANDWRITTEN_TRAY.replace(
+        "charging = \"bolt\"",
+        "charging = \"bolt\"\nmenu_source = false",
+    );
+
+    let written = config::write_tray(&before, &TraySetting::icon_defaults()).unwrap();
+
+    assert!(written.changed);
+    assert_eq!(
+        changed_lines(&before, &written.text),
+        [
+            (
+                "style = \"number\"   # A 纯数字",
+                "style = \"bar\"   # A 纯数字"
+            ),
+            ("charging = \"bolt\"", "charging = \"color\""),
+        ]
+    );
+    let tray = Config::parse(&written.text).unwrap().tray;
+    assert_eq!(tray.icon, IconSettings::default());
+    assert!(!tray.menu_source, "菜单显示那两项不归恢复默认管");
+}
+
+/// 用户把 `[tray]` 写成了行内表：照样只改那一项，同一张行内表里别的项不动。
+#[test]
+fn tray_writeback_survives_a_tray_section_written_as_an_inline_table() {
+    let before = "tray = { style = \"number\", charging = \"bolt\" }\n";
+
+    let written = config::write_tray(before, &[TraySetting::Style(Style::Ring)]).unwrap();
+
+    let tray = Config::parse(&written.text).unwrap().tray;
+    assert_eq!(tray.icon.style, Style::Ring);
+    assert_eq!(tray.icon.charging, Charging::Bolt);
+}
+
+/// `tray` 写成了一张表以外的东西：写不进去，**当场说出来、一个字节都不写**，而不是 panic 或者把它整个换掉。
+#[test]
+fn tray_writeback_refuses_a_tray_key_that_is_not_a_table() {
+    let error = config::write_tray("tray = \"number\"\n", &[TraySetting::Style(Style::Ring)])
+        .expect_err("写不进一张不是表的 [tray]")
+        .to_string();
+
+    assert!(error.contains("[tray]"), "得说清是哪一处：{error}");
 }

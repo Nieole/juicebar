@@ -28,6 +28,8 @@ type AnyFunction = unsafe extern "system" fn() -> isize;
 pub(super) struct UxTheme {
     /// 跟不上任务栏时是 `None`：一个都没取到手，也就一个都不调。
     calls: Option<Calls>,
+    /// 启动时交给内核的那一份：菜单跟不跟得上任务栏。之后每次再问任务栏的样子（`look.rs`）都带着它。
+    menu_theming: MenuTheming,
 }
 
 /// 取到手的那两个函数。
@@ -45,16 +47,23 @@ impl UxTheme {
     /// 启动时问一次：这个版本认不认得，认得就去取那两个函数。连同交给内核的那一份：菜单跟不跟得上任务栏。
     pub(super) fn load() -> (Self, MenuTheming) {
         let build = windows_build();
-        let Some(call) = app_mode_call(build) else {
-            return (Self { calls: None }, MenuTheming::UnknownWindows);
+        let (calls, menu_theming) = match app_mode_call(build).map(take_calls) {
+            None => (None, MenuTheming::UnknownWindows),
+            Some(Some(calls)) => (Some(calls), MenuTheming::FollowsTaskbar),
+            Some(None) => (None, MenuTheming::FunctionsMissing { build }),
         };
-        match take_calls(call) {
-            Some(calls) => (Self { calls: Some(calls) }, MenuTheming::FollowsTaskbar),
-            None => (
-                Self { calls: None },
-                MenuTheming::FunctionsMissing { build },
-            ),
-        }
+        (
+            Self {
+                calls,
+                menu_theming,
+            },
+            menu_theming,
+        )
+    }
+
+    /// 菜单跟不跟得上任务栏：启动时问到的那一份。
+    pub(super) fn menu_theming(&self) -> MenuTheming {
+        self.menu_theming
     }
 
     /// 弹出菜单之前：按任务栏此刻的深浅强制菜单深或浅，再刷新菜单主题——不刷新，这一次弹出的还是上一种。

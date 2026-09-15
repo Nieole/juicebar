@@ -8,11 +8,12 @@
 mod common;
 
 use common::NOW;
-use common::tray::{LOOK, MOUSE_AND_KEYBOARD, start_with_look};
-use juicebar::icon::Theme;
+use common::tray::{LOOK, MOUSE_AND_KEYBOARD, feed, start_with_look};
+use juicebar::icon::{IconSize, Theme};
 use juicebar::state::LastKnown;
-use juicebar::tray::Look;
+use juicebar::tray::menu::{Item, Kind, Menu, Preview};
 use juicebar::tray::menu_theme::{AppModeCall, MenuTheming, app_mode_call};
+use juicebar::tray::{Event, Look};
 
 /// 按这个样子启动内核，问它菜单此刻实际是深是浅。
 fn menu_theme_at_startup(look: Look) -> Theme {
@@ -129,4 +130,86 @@ fn when_the_two_functions_cannot_be_had_startup_logs_why_the_menu_is_light() {
             "菜单跟不上任务栏的深浅，退回浅色 —— 认得这个版本的 Windows（build 26200），却从 uxtheme.dll 取不到那两个函数（序号 135、136）"
         ]
     );
+}
+
+/// 运行中任务栏切了深浅（外壳把此刻的样子喂进来）：菜单此刻实际的深浅跟着换，不停在启动时那一份（parking lot Q261）。
+#[test]
+fn after_the_taskbar_switches_the_menu_theme_follows_it() {
+    let (mut tray, mut screen) =
+        start_with_look(MOUSE_AND_KEYBOARD, &LastKnown::default(), LOOK, NOW);
+
+    feed(
+        &mut tray,
+        &mut screen,
+        Event::LookChanged(Look {
+            theme: Theme::Light,
+            ..LOOK
+        }),
+    );
+
+    assert_eq!(tray.menu_theme(), Theme::Light);
+}
+
+/// 预览的尺寸是托盘此刻那一档，调色是菜单此刻实际的深浅：切成浅色任务栏、150% 缩放之后弹出的菜单，"图标样式"里每一张
+/// 预览都是 24 像素、浅色。
+#[test]
+fn every_preview_is_drawn_at_the_trays_size_in_the_menus_actual_theme() {
+    let (mut tray, mut screen) =
+        start_with_look(MOUSE_AND_KEYBOARD, &LastKnown::default(), LOOK, NOW);
+
+    feed(
+        &mut tray,
+        &mut screen,
+        Event::LookChanged(Look {
+            theme: Theme::Light,
+            size: IconSize::Px24,
+            ..LOOK
+        }),
+    );
+
+    let previews = previews(&tray.menu(NOW));
+    assert_eq!(previews.len(), 20, "六组一共 20 个选项，每个一张");
+    assert!(
+        previews
+            .iter()
+            .all(|preview| (preview.size, preview.theme) == (IconSize::Px24, Theme::Light)),
+        "{previews:?}"
+    );
+}
+
+/// 菜单跟不上任务栏（认不得的 Windows）：深色任务栏上菜单是系统缺省的浅色，预览照菜单画浅色——托盘图标照旧是深色。
+#[test]
+fn where_the_menu_cannot_follow_the_taskbar_previews_are_light_while_the_icon_stays_dark() {
+    let look = Look {
+        theme: Theme::Dark,
+        menu_theming: MenuTheming::UnknownWindows,
+        ..LOOK
+    };
+
+    let (tray, screen) = start_with_look(MOUSE_AND_KEYBOARD, &LastKnown::default(), look, NOW);
+
+    assert_eq!(screen.icon().theme, Theme::Dark);
+    let previews = previews(&tray.menu(NOW));
+    assert!(!previews.is_empty());
+    assert!(
+        previews.iter().all(|preview| preview.theme == Theme::Light),
+        "{previews:?}"
+    );
+}
+
+/// 菜单里挂着的每一张预览，一层层往里找。
+fn previews(menu: &Menu) -> Vec<Preview> {
+    fn walk(items: &[Item], out: &mut Vec<Preview>) {
+        for item in items {
+            if let Item::Entry(entry) = item {
+                out.extend(entry.preview.clone());
+                if let Kind::Submenu(children) = &entry.kind {
+                    walk(children, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&menu.items, &mut out);
+    out
 }

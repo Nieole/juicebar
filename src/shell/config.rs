@@ -18,7 +18,7 @@ use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION};
 
 // 草稿怎么落盘照命令行那一套（`config-refresh`），票 14 收掉命令行时一起搬过来。
 use crate::cli::config_refresh::write_draft;
-use crate::config::{Config, pin_primary};
+use crate::config::{Config, TraySetting, pin_primary, write_tray};
 use crate::hid::HidInfo;
 use crate::primary::PrimaryRule;
 use crate::tray::config::{Action, Event, Scan};
@@ -123,6 +123,18 @@ impl ConfigFile {
         }
         Ok(())
     }
+
+    /// 把 `[tray]` 里这几个键写成菜单里点的取值：读此刻文件的全文，照配置那道缝格式保留地只改这几个键（[`write_tray`]），
+    /// 真改了才写。不改记下的样子，理由见模块文档。
+    fn write_tray(&self, settings: &[TraySetting]) -> Result<()> {
+        let text = std::fs::read_to_string(&self.path)
+            .with_context(|| format!("读不到配置 {}", self.path.display()))?;
+        let written = write_tray(&text, settings)?;
+        if written.changed {
+            self.write(&written.text)?;
+        }
+        Ok(())
+    }
 }
 
 /// 文件此刻的样子；读不到它的属性（文件不在）就是 `None`。
@@ -159,6 +171,12 @@ pub(super) fn execute(action: Action, app: &mut App) {
             if let Err(e) = app.config.write_primary(&rule) {
                 app.log
                     .write(&format!("没能把托盘上画哪一台写回配置 —— {e:#}"));
+            }
+        }
+        Action::WriteTray(settings) => {
+            if let Err(e) = app.config.write_tray(&settings) {
+                app.log
+                    .write(&format!("没能把图标样式与菜单显示写回配置 —— {e:#}"));
             }
         }
     }

@@ -241,6 +241,12 @@ unsafe extern "system" fn window_proc(
         }
         // 本机插上或拔掉了设备（`devices.rs`）。
         WM_DEVICECHANGE => return devices::changed(wparam, lparam),
+        // 任务栏的样子可能变了：切了深浅色、改了显示缩放（`look.rs`）。看完照样交给缺省处理。
+        m if look::is_change(m) => {
+            look::changed();
+            // SAFETY: 照 Windows 的缺省处理。
+            return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+        }
         m if m != 0 && m == TASKBAR_CREATED.with(Cell::get) => {
             with_app(|app| app.icon.add_again());
         }

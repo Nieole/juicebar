@@ -18,8 +18,8 @@
 use std::fmt::Write as _;
 
 use juicebar::icon::{
-    Charging, Full, Glyph, Gray, IconBitmap, IconSettings, IconSize, IconState, NoLastKnown, Rgba,
-    Style, Theme, render,
+    Charging, Full, Glyph, Gray, IconBitmap, IconSettings, IconSize, IconState, NoLastKnown,
+    PreviewBitmap, Rgba, Style, Theme, render, render_preview,
 };
 
 /// 显示缩放落在四档之外时取最近的一档；正好落在两档中间时取小的那一档。
@@ -261,6 +261,54 @@ fn the_baselines_cover_every_value_of_every_setting_in_all_states_sizes_and_them
     }
 }
 
+// ---------- 菜单预览：几张并排 ----------
+
+/// "灰状态"那一组预览：Stale、暂停、取数失败三张从左往右并排，间距 max(2, round(尺寸 / 6))，空隙全透明。三个取值 ×
+/// 4 个尺寸 × 2 种调色，与设计稿导出的像素网格逐像素比对（`tests/menu_baselines/preview-gray.txt`）。
+#[test]
+fn the_gray_preview_puts_stale_paused_and_fetch_failed_side_by_side() {
+    let cases = preview_baselines("preview-gray");
+    let cells: std::collections::HashSet<_> = cases
+        .iter()
+        .map(|b| (b.settings.gray, b.size, b.theme))
+        .collect();
+    assert_eq!(
+        cells.len(),
+        3 * 4 * 2,
+        "该有灰状态的三个取值 × 4 个尺寸 × 2 种调色"
+    );
+    for b in &cases {
+        assert_eq!(
+            b.states,
+            [IconState::Stale, IconState::Paused, IconState::FetchFailed],
+            "{}",
+            b.origin
+        );
+    }
+    compare(cases.into_iter().map(|b| {
+        let preview = render_preview(b.settings, &b.states, b.percent, b.size, b.theme);
+        (b.origin, b.theme, b.grid, Drawn::preview(&preview))
+    }));
+}
+
+/// 只有一张的预览（画法、字形、满电 100、没有读数时、充电标记那几组）就是那一张图标本身，一个像素都不差。
+#[test]
+fn a_preview_of_one_state_is_that_icon() {
+    for b in baselines("default") {
+        let icon = render(b.settings, b.state, b.percent, b.size, b.theme);
+
+        let preview = render_preview(b.settings, &[b.state], b.percent, b.size, b.theme);
+
+        assert_eq!(
+            (preview.width(), preview.height()),
+            (icon.size(), icon.size()),
+            "{}",
+            b.origin
+        );
+        assert_eq!(preview.pixels(), icon.pixels(), "{}", b.origin);
+    }
+}
+
 // ---------- 基准：读、画、比 ----------
 
 /// 设计稿导出的一张图标，连同画它用的全部输入。
@@ -276,51 +324,119 @@ struct Baseline {
 }
 
 const BASELINE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/icon_baselines");
+/// 菜单基准的目录："灰状态"那一组并排预览的像素网格在那里（`preview-gray.txt`）。
+const MENU_BASELINE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/menu_baselines");
 
-/// 读一个基准文件里的每一节。节头是 `= 状态 电量 尺寸 底色 [键=取值 …]`，没写的设置取缺省值。
+/// 读一个图标基准文件里的每一节。节头是 `= 状态 电量 尺寸 底色 [键=取值 …]`，没写的设置取缺省值。
 fn baselines(group: &str) -> Vec<Baseline> {
     let path = format!("{BASELINE_DIR}/{group}.txt");
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("读不到 {path}：{e}"));
+    sections(&path)
+        .into_iter()
+        .map(|(text, grid)| {
+            let head = head(&path, &text);
+            let [state] = head.states[..] else {
+                panic!("{path}「{text}」：图标基准的一节只画一张图标");
+            };
+            Baseline {
+                origin: format!("tests/icon_baselines/{group}.txt「{text}」"),
+                settings: head.settings,
+                state,
+                percent: head.percent,
+                size: head.size,
+                theme: head.theme,
+                grid,
+            }
+        })
+        .collect()
+}
+
+/// 设计稿导出的一张菜单预览：几张并排，连同画它用的全部输入。
+struct PreviewBaseline {
+    origin: String,
+    settings: IconSettings,
+    states: Vec<IconState>,
+    percent: Option<u8>,
+    size: IconSize,
+    theme: Theme,
+    grid: Vec<String>,
+}
+
+/// 读菜单基准目录里一份预览网格的每一节。节头与图标基准一样，只是几张并排时状态用 `+` 连起来。
+fn preview_baselines(name: &str) -> Vec<PreviewBaseline> {
+    let path = format!("{MENU_BASELINE_DIR}/{name}.txt");
+    sections(&path)
+        .into_iter()
+        .map(|(text, grid)| {
+            let head = head(&path, &text);
+            PreviewBaseline {
+                origin: format!("tests/menu_baselines/{name}.txt「{text}」"),
+                settings: head.settings,
+                states: head.states,
+                percent: head.percent,
+                size: head.size,
+                theme: head.theme,
+                grid,
+            }
+        })
+        .collect()
+}
+
+/// 一个网格基准文件里的每一节：节头（`= ` 后面那段）与下面那张网格。
+fn sections(path: &str) -> Vec<(String, Vec<String>)> {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("读不到 {path}：{e}"));
     let mut out = Vec::new();
     let mut lines = text.lines().peekable();
     while let Some(line) = lines.next() {
         let Some(head) = line.strip_prefix("= ") else {
             continue;
         };
-        let tokens: Vec<&str> = head.split_whitespace().collect();
-        let [state, percent, size, theme, overrides @ ..] = tokens.as_slice() else {
-            panic!("{path}：认不出这一节的节头：{line}");
-        };
-        let mut settings = IconSettings::default();
-        for kv in overrides {
-            apply(&mut settings, kv);
-        }
         let mut grid = Vec::new();
         while let Some(row) = lines.next_if(|l| !l.is_empty()) {
             grid.push(row.to_string());
         }
-        out.push(Baseline {
-            origin: format!("tests/icon_baselines/{group}.txt「{head}」"),
-            settings,
-            state: icon_state(state),
-            percent: (*percent != "-").then(|| percent.parse().expect("电量是 0–100 的整数")),
-            size: match *size {
-                "16" => IconSize::Px16,
-                "20" => IconSize::Px20,
-                "24" => IconSize::Px24,
-                "32" => IconSize::Px32,
-                other => panic!("{path}：没有 {other} 像素这一档"),
-            },
-            theme: match *theme {
-                "dark" => Theme::Dark,
-                "light" => Theme::Light,
-                other => panic!("{path}：没有 {other} 这种调色"),
-            },
-            grid,
-        });
+        out.push((head.to_string(), grid));
     }
     assert!(!out.is_empty(), "{path} 里一张网格都没有");
     out
+}
+
+/// 一节的节头说的输入。
+struct Head {
+    settings: IconSettings,
+    /// 画几张、各是什么状态：节头里用 `+` 连起来的那几个。
+    states: Vec<IconState>,
+    percent: Option<u8>,
+    size: IconSize,
+    theme: Theme,
+}
+
+/// `状态[+状态…] 电量 尺寸 底色 [键=取值 …]`，没写的设置取缺省值。
+fn head(path: &str, text: &str) -> Head {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let [states, percent, size, theme, overrides @ ..] = tokens.as_slice() else {
+        panic!("{path}：认不出这一节的节头：{text}");
+    };
+    let mut settings = IconSettings::default();
+    for kv in overrides {
+        apply(&mut settings, kv);
+    }
+    Head {
+        settings,
+        states: states.split('+').map(icon_state).collect(),
+        percent: (*percent != "-").then(|| percent.parse().expect("电量是 0–100 的整数")),
+        size: match *size {
+            "16" => IconSize::Px16,
+            "20" => IconSize::Px20,
+            "24" => IconSize::Px24,
+            "32" => IconSize::Px32,
+            other => panic!("{path}：没有 {other} 像素这一档"),
+        },
+        theme: match *theme {
+            "dark" => Theme::Dark,
+            "light" => Theme::Light,
+            other => panic!("{path}：没有 {other} 这种调色"),
+        },
+    }
 }
 
 /// 节头里的状态名就是 `CONTEXT.md`「图标状态」那八个词（设计稿的 `STATES[].name`）。
@@ -427,14 +543,42 @@ fn palette(theme: Theme) -> Vec<(char, Rgba)> {
     out
 }
 
+/// Rust 画出来的一张位图，拿去与网格比：宽、高，逐行从上往下、每行从左往右的像素。
+struct Drawn {
+    width: u32,
+    height: u32,
+    pixels: Vec<Rgba>,
+}
+
+impl Drawn {
+    fn icon(icon: &IconBitmap) -> Self {
+        Self {
+            width: icon.size(),
+            height: icon.size(),
+            pixels: icon.pixels().to_vec(),
+        }
+    }
+
+    fn preview(preview: &PreviewBitmap) -> Self {
+        Self {
+            width: preview.width(),
+            height: preview.height(),
+            pixels: preview.pixels().to_vec(),
+        }
+    }
+
+    fn pixel(&self, x: u32, y: u32) -> Rgba {
+        self.pixels[(y * self.width + x) as usize]
+    }
+}
+
 /// 把 Rust 画的位图写成与基准同一种文本网格：全透明是 `.`，调色板里没有的颜色是 `?`。
-fn grid_of(icon: &IconBitmap, palette: &[(char, Rgba)]) -> Vec<String> {
-    let s = icon.size();
-    (0..s)
+fn grid_of(drawn: &Drawn, palette: &[(char, Rgba)]) -> Vec<String> {
+    (0..drawn.height)
         .map(|y| {
-            (0..s)
+            (0..drawn.width)
                 .map(|x| {
-                    let p = icon.pixel(x, y);
+                    let p = drawn.pixel(x, y);
                     if p.a == 0 {
                         return '.';
                     }
@@ -448,23 +592,30 @@ fn grid_of(icon: &IconBitmap, palette: &[(char, Rgba)]) -> Vec<String> {
         .collect()
 }
 
-/// 每一张都画出来和设计稿比；对不上的，印出两张网格与差异，读得出是哪几个像素。
+/// 每一张图标都画出来和设计稿比。
 fn assert_matches_design(cases: impl IntoIterator<Item = Baseline>) {
+    compare(cases.into_iter().map(|b| {
+        let icon = render(b.settings, b.state, b.percent, b.size, b.theme);
+        (b.origin, b.theme, b.grid, Drawn::icon(&icon))
+    }));
+}
+
+/// 一张张和设计稿比（出处、调色、设计稿的网格、Rust 画的那张）；对不上的，印出两张网格与差异，读得出是哪几个像素。
+fn compare(cases: impl IntoIterator<Item = (String, Theme, Vec<String>, Drawn)>) {
     const SHOWN: usize = 4;
     let dark = palette(Theme::Dark);
     let light = palette(Theme::Light);
     let mut total = 0;
     let mut failures = Vec::new();
-    for b in cases {
+    for (origin, theme, want, drawn) in cases {
         total += 1;
-        let icon = render(b.settings, b.state, b.percent, b.size, b.theme);
-        let pal = match b.theme {
+        let pal = match theme {
             Theme::Dark => &dark,
             Theme::Light => &light,
         };
-        let got = grid_of(&icon, pal);
-        if got != b.grid {
-            failures.push(describe(&b, &got, &icon));
+        let got = grid_of(&drawn, pal);
+        if got != want {
+            failures.push(describe(&origin, &want, &got, &drawn));
         }
     }
     assert!(total > 0, "没有一张基准被比到");
@@ -490,9 +641,8 @@ fn assert_matches_design(cases: impl IntoIterator<Item = Baseline>) {
 }
 
 /// 一张对不上的图标：出处、并排的两张网格加一张差异图，再逐个列出不对的像素。
-fn describe(b: &Baseline, got: &[String], icon: &IconBitmap) -> String {
+fn describe(origin: &str, want: &[String], got: &[String], drawn: &Drawn) -> String {
     const LISTED: usize = 12;
-    let want = &b.grid;
     let rows = want.len().max(got.len());
     let width = want
         .iter()
@@ -514,7 +664,7 @@ fn describe(b: &Baseline, got: &[String], icon: &IconBitmap) -> String {
     }
 
     let mut out = String::new();
-    let _ = writeln!(out, "{}：{} 个像素不对", b.origin, bad.len());
+    let _ = writeln!(out, "{origin}：{} 个像素不对", bad.len());
     let pad = |s: &str| format!("{s:<width$}");
     // “设计稿”三个字在终端里占六列，按字数补空格会歪，所以按列数补。
     let design = format!("设计稿{}", " ".repeat(width.saturating_sub(6)));
@@ -542,7 +692,7 @@ fn describe(b: &Baseline, got: &[String], icon: &IconBitmap) -> String {
             show(g)
         );
         if g == Some('?') {
-            let p = icon.pixel(x as u32, y as u32);
+            let p = drawn.pixel(x as u32, y as u32);
             let _ = write!(out, "（RGBA {} {} {} {}）", p.r, p.g, p.b, p.a);
         }
         out.push('\n');

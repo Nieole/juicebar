@@ -13,6 +13,7 @@ use juicebar::clock::Timestamp;
 use juicebar::config::{Config, draft};
 use juicebar::endpoints::EndpointKind;
 use juicebar::hid::HidInfo;
+use juicebar::icon::{Glyph, IconSettings};
 use juicebar::round::Warning;
 use juicebar::state::LastKnown;
 use juicebar::tray::notify::Notice;
@@ -264,6 +265,56 @@ fn nothing_to_fill_writes_nothing_and_says_nothing() {
     assert_eq!(screen.written, Vec::<String>::new());
     assert_eq!(screen.notices, []);
     assert_eq!(screen.logs, Vec::<String>::new());
+}
+
+/// 配置里 `[tray]` 有认不出的取值：启动时照缺省值画，把每一处认不出记进日志——不说出来，用户会以为自己选的画法就长
+/// 这样。
+#[test]
+fn an_unrecognised_tray_value_at_startup_is_drawn_as_its_default_and_logged() {
+    let config = format!("[tray]\nstyle = \"squre\"\n{MOUSE_AND_KEYBOARD}");
+
+    let (_tray, screen) = start(&config, &LastKnown::default(), NOW);
+
+    assert_eq!(screen.icon().settings, IconSettings::default());
+    assert_eq!(
+        screen.logs,
+        ["[tray] 里的 style = \"squre\" 认不出，按缺省值 \"bar\" 处理"]
+    );
+}
+
+/// 用户手改了 `[tray]`、重读读好了：图标**当场**照新的样式重画——不开新的一轮，也不等下一次取数，没有东西要存。新出现的
+/// 认不出的取值记一次日志；上一份里就在、这一份还在的不再重记（程序自己写回配置之后也会重读一遍，点一下菜单不该把
+/// 别处那句笔误再记一遍）。
+#[test]
+fn a_reloaded_tray_section_restyles_the_icon_at_once_and_logs_only_new_unrecognised_values() {
+    let before = format!("[tray]\nstyle = \"squre\"\n{MOUSE_AND_KEYBOARD}");
+    let (mut tray, mut screen) = start(&before, &LastKnown::default(), NOW);
+    feed(&mut tray, &mut screen, mouse_read(NOW));
+    let saves = screen.saves.len();
+
+    feed(
+        &mut tray,
+        &mut screen,
+        reloaded(&format!(
+            "[tray]\nstyle = \"squre\"\nglyph = \"fine\"\ncharging = \"blot\"\n{MOUSE_AND_KEYBOARD}"
+        )),
+    );
+
+    assert_eq!(
+        screen.icon().settings,
+        IconSettings {
+            glyph: Glyph::Fine,
+            ..IconSettings::default()
+        }
+    );
+    assert_eq!(
+        screen.logs,
+        [
+            "[tray] 里的 style = \"squre\" 认不出，按缺省值 \"bar\" 处理",
+            "[tray] 里的 charging = \"blot\" 认不出，按缺省值 \"color\" 处理",
+        ]
+    );
+    assert_eq!(screen.saves.len(), saves, "不是新的一轮，没有东西要存");
 }
 
 /// 与 `MOUSE_AND_KEYBOARD` 同两台，只改了一个键：厂商上位机换了个进程名。

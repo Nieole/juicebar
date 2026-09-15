@@ -14,7 +14,11 @@
 //! 什么时候问，也还是上一次取数有结果时按旧配置算定的那一刻（parking lot Q172）。**例外是菜单里换了"托盘上画
 //! 哪一台"**：那是内核自己做的改动，当场改手上那一份的 `primary`、重算这一轮（`super::menu`），写回照旧交给外壳
 //! （[`Action::WritePrimary`]），之后重读进来的是同一个选择。
+//!
+//! **`[tray]` 的图标样式不等下一次取数**：换掉配置时照新样式把画着的那一张当场重画（不是新的一轮，parking lot Q300），
+//! 认不出的取值记进日志。菜单里改的那几项同样当场生效，写回交给外壳（[`Action::WriteTray`]，`super::settings_menu`）。
 
+use crate::config::TraySetting;
 use crate::config::{Config, Fill, refresh};
 use crate::hid::HidInfo;
 use crate::primary::PrimaryRule;
@@ -65,6 +69,10 @@ pub enum Action {
     /// 把 `primary` 写成这一条（菜单"托盘上画哪一台"里点的）：外壳读此刻文件的全文、照配置那道缝格式保留地只改那一格
     /// （[`crate::config::pin_primary`]），本来就是这一条就不写。读全文而不是照内核手上那一份写，理由同 [`Scan::text`]。
     WritePrimary(PrimaryRule),
+    /// 把 `[tray]` 里这几个键写成这几个取值（菜单"图标样式""菜单显示"里点的一项；"恢复默认"是图标样式那六项）：外壳读
+    /// 此刻文件的全文、照配置那道缝格式保留地只改这几个键（[`crate::config::write_tray`]），本来就这样写着就不写。读全文
+    /// 而不是照内核手上那一份写，理由同 [`Scan::text`]。
+    WriteTray(Vec<TraySetting>),
 }
 
 /// 扫一遍本机这件事走到哪了（[`Action::Scan`]）。
@@ -109,9 +117,12 @@ impl Tray {
     pub(super) fn on_config(&mut self, event: Event, out: &mut Vec<super::Action>) {
         match event {
             Event::Reloaded(Ok(config)) => {
+                log_unrecognised(&self.config.tray.unrecognised, &config, out);
                 self.round.track_devices(&config);
                 self.config = config;
                 self.warnings.clear(Matter::ConfigFile);
+                // `[tray]` 手改了就当场照它重画：不是新的一轮，只是把画着的那一张换个样式（parking lot Q300）。
+                self.round.restyle(self.config.tray.icon, out);
             }
             Event::Reloaded(Err(reason)) => {
                 self.warnings.raise(Warning::ConfigUnreadable(reason), out);
@@ -122,6 +133,25 @@ impl Tray {
                 fill_blank_blocks(scan, out);
                 self.scans.answered(out);
             }
+        }
+    }
+}
+
+/// 启动：配置里 `[tray]` 认不出的每一处记一行日志。
+pub(super) fn on_start(config: &Config, out: &mut Vec<super::Action>) {
+    log_unrecognised(&[], config, out);
+}
+
+/// 这一份配置的 `[tray]` 里认不出的每一处（按缺省值处理了），上一份里没有的记一行日志——不说出来，用户会以为自己选的
+/// 画法就长这样。上一份里就在的不再重记：程序自己写回配置之后也会重读一遍，点一下菜单不该把别处那句笔误再记一遍。
+fn log_unrecognised(
+    before: &[crate::config::Unrecognised],
+    config: &Config,
+    out: &mut Vec<super::Action>,
+) {
+    for note in &config.tray.unrecognised {
+        if !before.contains(note) {
+            out.push(super::Action::Log(note.to_string()));
         }
     }
 }

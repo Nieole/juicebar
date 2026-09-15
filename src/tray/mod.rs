@@ -15,11 +15,11 @@
 //! |---|---|---|---|---|
 //! | 轮询节奏 | [`cadence`] | `shell/cadence.rs` | 看 [`Event::Tick`]、[`Event::Fetched`] | [`cadence::Action`] |
 //! | 一轮 | [`round`]，文字在 [`hover`] | `shell/round.rs` | 看 [`Event::Tick`]、[`Event::Fetched`] | [`round::Action`] |
-//! | 菜单 | [`menu`]，设备行的字在 `device_row` | `shell/menu.rs` | [`menu::Command`] | [`menu::Action`] |
+//! | 菜单 | [`menu`]，设备行的字在 `device_row`，图标样式与菜单显示在 `settings_menu` | `shell/menu.rs` | [`menu::Command`] | [`menu::Action`] |
 //! | 通知 | [`notify`] | `shell/notify.rs` | 看 [`Event::Fetched`] | [`notify::Notice`] |
 //! | 配置 | [`config`] | `shell/config.rs` | [`config::Event`] | [`config::Action`] |
 //! | 告警 | [`warnings`] | 没有（写状态文件的结果由 `shell/worker.rs` 交回） | 看 [`Event::Fetched`]；[`warnings::Event`] | 只写日志 |
-//! | 菜单深浅 | [`menu_theme`] | `shell/menu_theme.rs` | 没有（外壳启动时问过 Windows，随 [`Look`] 交进来） | 只写日志 |
+//! | 菜单深浅 | [`menu_theme`] | `shell/menu_theme.rs`、`shell/look.rs` | 启动时随 [`Look`] 交进来，变了是 [`Event::LookChanged`] | 只写日志 |
 //! | 启动 | [`launch`] | `shell/launch.rs` | [`launch::Event`]；[`menu::Command::EnableAutostart`]、[`menu::Command::DisableAutostart`] | [`launch::Action`]；弹通知 |
 //!
 //! 这一层（[`Event`]、[`Action`]、[`Tray::handle`]）只做路由：每个关注点在这里占一格，往自己那一格里
@@ -42,6 +42,7 @@ pub mod menu;
 pub mod menu_theme;
 pub mod notify;
 pub mod round;
+mod settings_menu;
 pub mod warnings;
 
 use crate::clock::Timestamp;
@@ -75,7 +76,7 @@ impl Tray {
     /// 上一轮的 Primary Device。之后记读数、写盘都在取数线程那一侧（`crate::shell`），内核只说什么
     /// 时候存、记下哪一台（[`round::SaveState`]）。
     ///
-    /// `look` 是启动时任务栏的深浅色与显示缩放，本票之内不变（变了之后重画归票 07），外加菜单跟不跟得上任务栏
+    /// `look` 是启动时任务栏的深浅色与显示缩放（运行中变了由 [`Event::LookChanged`] 交进来），外加菜单跟不跟得上任务栏
     /// （[`menu_theme::MenuTheming`]，取不到那两个函数时启动这一刻记一条日志）。
     pub fn new(
         config: Config,
@@ -85,6 +86,7 @@ impl Tray {
     ) -> (Self, Vec<Action>) {
         let mut out = Vec::new();
         menu_theme::on_start(look, &mut out);
+        config::on_start(&config, &mut out);
         let round = round::Rounds::new(&config, last_known, look, now, &mut out);
         let mut cadence = cadence::Cadence::default();
         cadence.on_tick(&config, now, &mut out);
@@ -127,12 +129,14 @@ impl Tray {
             Event::Config(event) => self.on_config(event, &mut out),
             Event::Warnings(event) => self.warnings.on_event(event, &mut out),
             Event::Launch(event) => self.launch.on_event(event, &mut out),
+            Event::LookChanged(look) => self.round.on_look_changed(look, &mut out),
         }
         out
     }
 }
 
-/// 启动时任务栏的样子：深浅色与显示缩放，以及菜单的深浅跟不跟得上它。外壳去问 Windows，内核只收答案。
+/// 任务栏的样子：深浅色与显示缩放，以及菜单的深浅跟不跟得上它。外壳去问 Windows，内核只收答案——启动时一次
+/// （[`Tray::new`]），之后每次变了再交一次（[`Event::LookChanged`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Look {
     /// 任务栏是深色还是浅色，图标的调色跟着它。
@@ -158,6 +162,9 @@ pub enum Event {
     Warnings(warnings::Event),
     /// 启动那一侧的事：第二个实例来敲门了；外壳弹出菜单之前问到了开机自启的计划任务在不在。
     Launch(launch::Event),
+    /// 任务栏的样子可能变了（深浅色切了、显示缩放改了）：外壳收到 Windows 的消息、或者要弹出菜单了，重新问了一遍，交进来
+    /// 的是此刻的样子。其实没变也照样交，内核看出没变就什么都不做。
+    LookChanged(Look),
 }
 
 /// 某台 Device 的一次取数有了结果：取数线程交回来的全部东西。
