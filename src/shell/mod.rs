@@ -14,12 +14,14 @@ mod cadence;
 mod config;
 mod devices;
 mod icon;
+mod launch;
 mod log;
 mod look;
 mod menu;
 mod menu_theme;
 mod notify;
 mod round;
+mod scheduled_task;
 mod worker;
 
 use std::cell::{Cell, RefCell};
@@ -47,6 +49,10 @@ use crate::tray::{Action, Event, Tray};
 const WM_TRAY: u32 = WM_APP + 1;
 /// 取数线程交回了东西（一次取数的结果，或者一次写状态文件的结果），去它的通道里取。
 const WM_REPORT: u32 = WM_APP + 2;
+/// 第二个实例来敲门了：它发现这个会话里已经有一个托盘在跑，投了这一条就退出（`launch.rs`）。
+const WM_KNOCK: u32 = WM_APP + 3;
+/// 托盘那扇窗口的窗口类名。第二个实例照它找到老实例的窗口去敲门（`launch.rs`）。
+const WINDOW_CLASS: PCWSTR = w!("juicebar-tray");
 /// 那个每秒一格的计时器。
 const TICK_TIMER: usize = 1;
 
@@ -71,6 +77,13 @@ thread_local! {
 
 /// 跑托盘，直到用户点"退出"。
 pub fn run() -> Result<()> {
+    // 这个会话里已经有一个托盘在跑：敲过它的门（它弹"已经在托盘里了"），这一个什么都不碰就退出——不写草稿、不记日志
+    // （`launch.rs`）。抢到的名分活到这个函数返回。
+    let Some(_instance) = launch::claim_or_knock()? else {
+        return Ok(());
+    };
+    // 开机自启那个计划任务走 COM，都在这个线程上（`scheduled_task.rs`）；活到这个函数返回。
+    let _com = scheduled_task::Com::init();
     // 配置与状态文件的位置照命令行那一套（`crate::cli`），票 14 收掉命令行时一起搬过来。
     let config_path = default_config_path()?;
     let mut log = log::LogFile::beside(&config_path);
@@ -164,7 +177,7 @@ fn create_window() -> Result<HWND> {
         let class = WNDCLASSW {
             lpfnWndProc: Some(window_proc),
             hInstance: instance.into(),
-            lpszClassName: w!("juicebar-tray"),
+            lpszClassName: WINDOW_CLASS,
             ..Default::default()
         };
         if RegisterClassW(&class) == 0 {
@@ -175,7 +188,7 @@ fn create_window() -> Result<HWND> {
         }
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE(0),
-            w!("juicebar-tray"),
+            WINDOW_CLASS,
             w!("juicebar"),
             WS_OVERLAPPED,
             0,
@@ -212,8 +225,12 @@ unsafe extern "system" fn window_proc(
             feed(Event::Tick(SystemClock.now()));
         }
         WM_REPORT => take_reports(),
+        // 第二个实例来敲门了（`launch.rs`）。
+        WM_KNOCK => launch::knocked(),
         // 老式回调（没有设 NOTIFYICON_VERSION_4）：鼠标消息本身就在 lParam 里。
         WM_TRAY if matches!(lparam.0 as u32, WM_RBUTTONUP | WM_CONTEXTMENU) => {
+            // "开机自启"勾不勾以系统为准：弹出之前问一次（`launch.rs`）。
+            launch::ask_autostart();
             if let Some(command) = menu::popup(hwnd) {
                 feed(Event::Menu(command));
             }
@@ -273,6 +290,7 @@ fn route(app: &mut App, action: Action) {
         Action::Notify(notice) => notify::execute(&notice, app),
         Action::Config(action) => config::execute(action, app),
         Action::Log(line) => app.log.write(&line),
+        Action::Launch(action) => launch::execute(action, app),
     }
 }
 

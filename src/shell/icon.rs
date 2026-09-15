@@ -3,6 +3,8 @@
 //!
 //! 画什么不在这里（`crate::tray::round` 定参数，`crate::icon::render` 画像素）；这里只把像素交给 Windows。
 
+use std::collections::VecDeque;
+
 use anyhow::{Context, Result};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{
@@ -27,6 +29,8 @@ pub(super) struct TrayIcon {
     tip: String,
     /// 通知区里此刻有没有它。资源管理器还没起来、或者刚重启过，就没有。
     added: bool,
+    /// 还没弹出去的通知，按先后排着：图标不在通知区时弹不出来，等它加进去再弹（[`TrayIcon::balloon`]）。
+    pending: VecDeque<Notice>,
 }
 
 impl TrayIcon {
@@ -37,6 +41,7 @@ impl TrayIcon {
             icon: None,
             tip: String::new(),
             added: false,
+            pending: VecDeque::new(),
         }
     }
 
@@ -79,27 +84,50 @@ impl TrayIcon {
     }
 
     /// 弹一条通知（从这个图标上弹出来）。
+    ///
+    /// **图标不在通知区时不丢**（parking lot Q204）：资源管理器还没起来（开机自启正是这种时候）、或者正在重启的那几秒，
+    /// 这条通知先排着，等图标加进去——下一次重画、换悬停提示，或者资源管理器起来时的那条广播——再弹。内核交出它的那一刻
+    /// 已经记下"提醒过"，这里丢了，这一次跌破就再也不会弹。
     pub(super) fn balloon(&mut self, notice: &Notice) {
-        let mut data = self.data();
-        data.uFlags |= NIF_INFO;
-        data.dwInfoFlags = NIIF_INFO;
-        copy_wide(&notice.title, &mut data.szInfoTitle);
-        copy_wide(&notice.body, &mut data.szInfo);
-        // SAFETY: 同上。
-        unsafe {
-            let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
-        }
+        self.pending.push_back(notice.clone());
+        self.show();
     }
 
-    /// 把此刻的图标与悬停提示交给通知区：已经在了就改，还没在（或者改不动了——通知区换过一个）就加。
+    /// 把此刻的图标与悬停提示交给通知区：已经在了就改，还没在（或者改不动了——通知区换过一个）就加；在了，就把排着的通知
+    /// 弹出去。
     ///
-    /// 加不进去（资源管理器还没起来）不算错：下一次重画、或者资源管理器起来时的那条广播，会再加一次。
+    /// 加不进去（资源管理器还没起来）不算错：下一次重画、或者资源管理器起来时的那条广播，会再加一次。**加说没加进去时
+    /// 再试一次改**：资源管理器正忙（开机时常见）时加可能超时、报失败，而图标其实已经加进去了；照"不在"记着，之后每一次
+    /// 都只会再加、再失败，排着的通知就一直弹不出去。
     fn show(&mut self) {
         let data = self.data();
         // SAFETY: 同上。
         unsafe {
             if !(self.added && Shell_NotifyIconW(NIM_MODIFY, &data).as_bool()) {
-                self.added = Shell_NotifyIconW(NIM_ADD, &data).as_bool();
+                self.added = Shell_NotifyIconW(NIM_ADD, &data).as_bool()
+                    || Shell_NotifyIconW(NIM_MODIFY, &data).as_bool();
+            }
+        }
+        self.pop_pending();
+    }
+
+    /// 图标在通知区里时，把排着的通知按先后弹出去。弹不动（通知区刚换过一个、还没收到那条广播）就照"不在"记着，剩下的
+    /// 接着排。弹的那一下超时报失败、而其实已经弹出去了时，这一条之后会再弹一次：宁可重一次，不丢（parking lot Q321）。
+    fn pop_pending(&mut self) {
+        while self.added {
+            let Some(notice) = self.pending.front() else {
+                return;
+            };
+            let mut data = self.data();
+            data.uFlags |= NIF_INFO;
+            data.dwInfoFlags = NIIF_INFO;
+            copy_wide(&notice.title, &mut data.szInfoTitle);
+            copy_wide(&notice.body, &mut data.szInfo);
+            // SAFETY: 同上。
+            if unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) }.as_bool() {
+                self.pending.pop_front();
+            } else {
+                self.added = false;
             }
         }
     }

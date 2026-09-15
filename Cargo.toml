@@ -42,9 +42,15 @@ test = false
 #   Win32_UI_HiDpi —— GetDpiForSystem，按显示缩放给图标选尺寸（icon::IconSize::for_dpi）
 #   Win32_System_Console —— AttachConsole：程序是窗口程序（双击不闪黑框），过渡期的 status 与
 #       config-refresh 借启动它的那个终端印字（src/main.rs）
+#   Win32_System_Com + Win32_System_TaskScheduler + Win32_System_Variant + Win32_System_Ole —— 开机自启的计划任务
+#       （src/shell/scheduled_task.rs，docs/adr/0007）：CoInitializeEx / CoCreateInstance 起 ITaskService，建、删、
+#       问那个"登录时以最高权限运行"的任务；Connect / RegisterTaskDefinition 收 VARIANT，windows crate 要 Variant
+#       与 Ole 两个 feature 都开才给出这两个方法。选 COM 而不是
+#       调 schtasks.exe：菜单每次弹出前都要问一次任务在不在，起一个进程太慢；而电池、72 小时时限这几项
+#       schtasks 的命令行设不了，得另写一份任务 XML（parking lot Q320）
 # 选 windows 而不是 windows-sys：HID 那一层要传 PHIDP_PREPARSED_DATA 这类不透明句柄并配对释放，
 # 有类型包装能少写一批 unsafe。
-windows = { version = "0.62.2", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_HiDpi", "Win32_System_Console"] }
+windows = { version = "0.62.2", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_HiDpi", "Win32_System_Console", "Win32_System_Com", "Win32_System_TaskScheduler", "Win32_System_Variant", "Win32_System_Ole"] }
 
 # 子命令 status / scan / probe / run。derive 是为了让子命令定义和帮助文本住在一处。
 clap = { version = "4.6.6", features = ["derive"] }

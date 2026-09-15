@@ -20,6 +20,7 @@
 //! | 配置 | [`config`] | `shell/config.rs` | [`config::Event`] | [`config::Action`] |
 //! | 告警 | [`warnings`] | 没有（写状态文件的结果由 `shell/worker.rs` 交回） | 看 [`Event::Fetched`]；[`warnings::Event`] | 只写日志 |
 //! | 菜单深浅 | [`menu_theme`] | `shell/menu_theme.rs` | 没有（外壳启动时问过 Windows，随 [`Look`] 交进来） | 只写日志 |
+//! | 启动 | [`launch`] | `shell/launch.rs` | [`launch::Event`]；[`menu::Command::EnableAutostart`]、[`menu::Command::DisableAutostart`] | [`launch::Action`]；弹通知 |
 //!
 //! 这一层（[`Event`]、[`Action`]、[`Tray::handle`]）只做路由：每个关注点在这里占一格，往自己那一格里
 //! 加事件、加动作、加状态，只改自己的那两个文件（内核一个、外壳一个）。三样是大家共用的，所以住在
@@ -36,6 +37,7 @@ pub mod cadence;
 pub mod config;
 mod device_row;
 pub mod hover;
+pub mod launch;
 pub mod menu;
 pub mod menu_theme;
 pub mod notify;
@@ -59,6 +61,8 @@ pub struct Tray {
     scans: config::Scans,
     /// 此刻还挂着的告警。几块共用：「一轮」合成时带上它，配置那一块往里挂"配置读不了"。
     warnings: warnings::Warnings,
+    /// 开机自启的那个计划任务，外壳上一次问系统时在不在（[`launch`]）。
+    launch: launch::Launch,
     /// 点过"退出"了：之后什么事件都不再有动作——不再轮询，也不再画。
     quit: bool,
 }
@@ -93,6 +97,7 @@ impl Tray {
             notify: notify::Notify::default(),
             scans,
             warnings: warnings::Warnings::default(),
+            launch: launch::Launch::default(),
             quit: false,
         };
         (tray, out)
@@ -121,6 +126,7 @@ impl Tray {
             Event::Menu(command) => self.on_menu(command, &mut out),
             Event::Config(event) => self.on_config(event, &mut out),
             Event::Warnings(event) => self.warnings.on_event(event, &mut out),
+            Event::Launch(event) => self.launch.on_event(event, &mut out),
         }
         out
     }
@@ -150,6 +156,8 @@ pub enum Event {
     Config(config::Event),
     /// 告警那一侧的事：一件会挂告警的事办没办成，而它不跟着一次取数来。
     Warnings(warnings::Event),
+    /// 启动那一侧的事：第二个实例来敲门了；外壳弹出菜单之前问到了开机自启的计划任务在不在。
+    Launch(launch::Event),
 }
 
 /// 某台 Device 的一次取数有了结果：取数线程交回来的全部东西。
@@ -181,4 +189,6 @@ pub enum Action {
     Config(config::Action),
     /// 写一条日志。日志写在配置文件旁边，大小与滚动由外壳管。
     Log(String),
+    /// 启动：建、删开机自启的计划任务。
+    Launch(launch::Action),
 }

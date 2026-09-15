@@ -16,6 +16,7 @@ use juicebar::round::{InHand, Warning};
 use juicebar::sources::Reading;
 use juicebar::state::{LastKnown, Provenance};
 use juicebar::tray::cadence::FetchRequest;
+use juicebar::tray::launch;
 use juicebar::tray::notify::Notice;
 use juicebar::tray::round::{IconRequest, SaveState};
 use juicebar::tray::{
@@ -79,6 +80,8 @@ pub struct Screen {
     pub scans: usize,
     /// 至今写回配置文件的每一份全文，按顺序（[`config::Action::Write`]）。
     pub written: Vec<String>,
+    /// 启动那一格至今交出的动作（建、删开机自启的计划任务），按顺序。
+    pub launch: Vec<launch::Action>,
 }
 
 impl Screen {
@@ -99,6 +102,7 @@ impl Screen {
                 Action::Config(config::Action::Write(text)) => self.written.push(text),
                 Action::Config(action) => self.config.push(action),
                 Action::Log(line) => self.logs.push(line),
+                Action::Launch(action) => self.launch.push(action),
             }
         }
     }
