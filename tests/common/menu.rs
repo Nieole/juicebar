@@ -95,11 +95,9 @@ pub fn canned_with_tray(tray: &str) -> (Tray, Screen) {
 /// 基准名与它在 `[tray]` 表里的那一行（布尔不加引号），按基准名排好。从目录里列而不是手抄名单：设计稿多导一份，
 /// 这里就多比一份。
 pub fn one_value_baselines(prefix: &str) -> Vec<(String, String)> {
-    let mut found: Vec<(String, String)> = std::fs::read_dir(DIR)
-        .unwrap_or_else(|e| panic!("读不到 {DIR}：{e}"))
-        .filter_map(|entry| {
-            let file = entry.ok()?.file_name().into_string().ok()?;
-            let name = file.strip_suffix(".txt")?;
+    exported_baselines()
+        .into_iter()
+        .filter_map(|name| {
             let (key, value) = name
                 .strip_prefix(prefix)?
                 .strip_prefix('-')?
@@ -108,11 +106,10 @@ pub fn one_value_baselines(prefix: &str) -> Vec<(String, String)> {
                 "true" | "false" => value.to_string(),
                 word => format!("\"{word}\""),
             };
-            Some((name.to_string(), format!("{key} = {value}")))
+            let line = format!("{key} = {value}");
+            Some((name, line))
         })
-        .collect();
-    found.sort();
-    found
+        .collect()
 }
 
 /// 设计稿导出到 `tests/menu_baselines/` 的每一份基准的名字（不带 `.txt`），按名字排好：各份菜单基准，外加"灰状态"并排

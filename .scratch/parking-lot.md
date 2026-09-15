@@ -1768,7 +1768,7 @@ Neon75」右列「Dongle24G」，靠右列分开（Q284 的①）。两行各点
 **From:** menu-as-designed 票 07（整张菜单与设计稿对上）
 
 **取的路**：`tests/tray_menu.rs` 的 `every_baseline_the_design_exports_is_compared_by_some_test`：列出 `tests/menu_baselines/` 里
-设计稿导出的每一份（`canned` 除外，Q351），再扫 `tests/*.rs`（Cargo 找出来的测试目标）的非注释行，认 `baseline("名字")`、
+设计稿导出的每一份（`canned` 除外，Q351），再扫 `tests/*.rs`（Cargo 找出来的测试目标）每一行 `//` 之前那一段，认 `baseline("名字")`、
 `one_value_baselines("前缀")`（照目录展开）、`preview_baselines("名字")` 三种调用，有一份没被认出就红。认不出的写法（调用折成几行、
 名字是拼出来的）照"没人比"红，宁可错红、不可错绿——本票当场撞上一回：`menu_display` 那一份原先有人比，名字却是写进元组里再拼的，
 拆成字面量调用才绿。`preview-gray` 一并算：它不是菜单，但出自同一份导出脚本，设计稿多导一张网格没人比，一样该红。
@@ -1778,9 +1778,13 @@ Neon75」右列「Dongle24G」，靠右列分开（Q284 的①）。两行各点
 `baseline("x")` 也算数。代价：登记设备那四份的起手在 `tests/tray_register.rs` 的私有帮手里，得搬进 `common::menu` 或把那四条用例
 搬过来；每份一条、各带文档注释的用例也并成一张表。
 
-**推荐**：维持。漏网只有"写了调用却不在跑"这一种，而一份 `Baseline` 除了交给 `assert_matches_design` 什么都做不了，写出调用的地方
-几乎就是在比；并行队列里 `tray_register.rs` 也不归本票动。哪天菜单比对要并成一张表，再换派发。翻案关在 `tests/tray_menu.rs` 那条
-用例与它的两个帮手、`tests/common/menu.rs` 的 `exported_baselines`。归 `/settle`（记下即可）。
+**推荐**：维持。认字会错绿的几种（review 列的）：不在跑的代码（`#[ignore]` 的用例、没人调的函数、被 `#![cfg]` 关掉的整个文件）、
+`/* */` 与原始字符串里写着的调用、别处另有一个同名的 `baseline` 帮手；`one_value_baselines`、`preview_baselines` 交出的也不是
+`Baseline`，写了调用却只数份数、不逐份比，照样算。今天测试目标里一处都没踩中（review 核过）；一份 `Baseline` 除了交给
+`assert_matches_design` 什么都做不了，两个列目录的帮手旁边各有一句数份数的断言；并行队列里 `tray_register.rs` 也不归本票动。
+合并时留意：兄弟票若把登记设备那几条改成循环里拼出来的名字，`tray_menu` 会红——那正是要它红的，拆回字面量调用即可。哪天菜单
+比对要并成一张表，再换派发。翻案关在 `tests/tray_menu.rs` 那条用例与它的两个帮手、`tests/common/menu.rs` 的 `exported_baselines`。
+归 `/settle`（记下即可）。
 
 ### Q351 —— `canned.txt` 不进"每份基准都有用例在比"：用例里的罐装照它手写，不拿它去比
 

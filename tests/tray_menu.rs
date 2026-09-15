@@ -69,8 +69,8 @@ fn rows_above_the_first_separator(menu: &Menu) -> Vec<(String, bool, Option<Comm
 /// "有用例在比"看的是测试目标（`tests/*.rs`，Cargo 自己找出来的就是这几个；`tests/common/` 不是）的源码里有没有这三种
 /// 调用：`baseline("名字")`——一份 `Baseline` 除了交给 `assert_matches_design` 什么都做不了；`one_value_baselines("前缀")`
 /// ——从目录里列出"从罐装出发只改一项"的那几份逐份比，列出来的都算；`preview_baselines("名字")`——`tests/icon.rs` 里逐像素
-/// 比并排预览的那份网格。注释行不算。调用折成了几行、名字不是字面量的，这里认不出，照"没人比"红：宁可错红，不可错绿
-/// （parking lot Q350）。
+/// 比并排预览的那份网格。`//` 之后的不算。调用折成了几行、名字不是字面量的，这里认不出，照"没人比"红：宁可错红。它认不出
+/// 的错绿有几种（不在跑的代码、块注释与原始字符串里写着的调用），记在 parking lot Q350。
 #[test]
 fn every_baseline_the_design_exports_is_compared_by_some_test() {
     let compared = compared_baselines();
@@ -97,21 +97,15 @@ fn compared_baselines() -> BTreeSet<String> {
         }
         let source = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("读不到 {}：{e}", path.display()));
-        for line in source
-            .lines()
-            .map(str::trim_start)
-            .filter(|line| !line.starts_with("//"))
-        {
-            compared.extend(
-                literal_arguments(line, "baseline")
-                    .into_iter()
-                    .map(str::to_owned),
-            );
-            compared.extend(
-                literal_arguments(line, "preview_baselines")
-                    .into_iter()
-                    .map(str::to_owned),
-            );
+        // 每一行只看 `//` 之前那一段：注释里写着的调用不算。字符串里碰巧有 `//` 时截掉的是真代码，只会错红。
+        for line in source.lines().filter_map(|line| line.split("//").next()) {
+            for function in ["baseline", "preview_baselines"] {
+                compared.extend(
+                    literal_arguments(line, function)
+                        .into_iter()
+                        .map(str::to_owned),
+                );
+            }
             for prefix in literal_arguments(line, "one_value_baselines") {
                 compared.extend(
                     one_value_baselines(prefix)
