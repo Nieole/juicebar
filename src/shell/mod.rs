@@ -23,17 +23,20 @@ mod round;
 mod worker;
 
 use std::cell::{Cell, RefCell};
+use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     ChangeWindowMessageFilterEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetMessageW, KillTimer, MB_ICONERROR, MB_OK, MSG, MSGFLT_ALLOW, MessageBoxW, PostQuitMessage,
-    RegisterClassW, RegisterWindowMessageW, SetTimer, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
-    WM_CONTEXTMENU, WM_DESTROY, WM_DEVICECHANGE, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
+    RegisterClassW, RegisterWindowMessageW, SW_SHOWNORMAL, SetTimer, TranslateMessage,
+    WINDOW_EX_STYLE, WM_APP, WM_CONTEXTMENU, WM_DESTROY, WM_DEVICECHANGE, WM_RBUTTONUP, WM_TIMER,
+    WNDCLASSW, WS_OVERLAPPED,
 };
-use windows::core::{HSTRING, w};
+use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::cli::{default_config_path, state_path_beside_config};
 use crate::clock::{Clock, SystemClock};
@@ -122,6 +125,32 @@ pub fn report_fatal(error: &anyhow::Error) {
     unsafe {
         MessageBoxW(None, &text, w!("juicebar"), MB_OK | MB_ICONERROR);
     }
+}
+
+/// 用系统默认程序打开这个文件，与在资源管理器里双击它一样：菜单上的"打开配置文件"（`config.rs`），点一条告警打开
+/// 日志（`menu.rs`）。
+fn open_in_default_program(hwnd: HWND, path: &Path) -> Result<()> {
+    let file = HSTRING::from(path.as_os_str());
+    // SAFETY: 一个以 NUL 结尾的路径，其余参数为空；缺省动词（与双击一样）。
+    let result = unsafe {
+        ShellExecuteW(
+            Some(hwnd),
+            PCWSTR::null(),
+            &file,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // 大于 32 才是打开了（ShellExecuteW 的老规矩）。
+    if result.0 as usize <= 32 {
+        return Err(anyhow!(
+            "打不开 {}：{}",
+            path.display(),
+            windows::core::Error::from_thread()
+        ));
+    }
+    Ok(())
 }
 
 /// 建那扇看不见的窗口：托盘图标的回调只投给一扇窗口。

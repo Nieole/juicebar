@@ -41,6 +41,17 @@ fn from_config_value(raw: &str) -> PrimaryRule {
     }
 }
 
+impl PrimaryRule {
+    /// 这条规则在配置里 `primary` 那一格写成什么：[`from_config_value`] 反过来。回写（`crate::config::pin_primary`）
+    /// 写的就是它，`"lowest"` 这个词因此只在这个文件里拼一次。
+    pub fn config_value(&self) -> &str {
+        match self {
+            Self::Lowest => LOWEST,
+            Self::Pinned(id) => id,
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for PrimaryRule {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Ok(from_config_value(&String::deserialize(deserializer)?))

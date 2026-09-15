@@ -11,7 +11,7 @@ use juicebar::clock::Timestamp;
 use juicebar::config::Config;
 use juicebar::endpoints::{EndpointKind, EndpointReading};
 use juicebar::icon::{IconSize, Theme};
-use juicebar::readout::{NoReading, RowReading};
+use juicebar::readout::{FailureCause, NoReading, RowReading};
 use juicebar::round::{InHand, Warning};
 use juicebar::sources::Reading;
 use juicebar::state::{LastKnown, Provenance};
@@ -187,13 +187,17 @@ pub fn failed(reason: &str) -> InHand {
     InHand::NoReading(NoReading::Failed(anyhow!("{reason}")))
 }
 
+/// 同 [`failed`]，但说得出来路（失联、读取异常、一条 Endpoint 都没配），完整原因是 `full_reason`。
+pub fn failed_because(cause: FailureCause, full_reason: &str) -> InHand {
+    InHand::NoReading(NoReading::failed(cause, full_reason))
+}
+
 /// 某台 Device 的一次取数在 `at` 那一刻有了结果，手上是 `in_hand`；没有别的要交代。
 pub fn fetched(device: &str, at: Timestamp, in_hand: InHand) -> Event {
     Event::Fetched(Box::new(Fetched {
         device_id: device.to_string(),
         at,
         in_hand,
-        fell_back_because: None,
         warning: None,
     }))
 }
@@ -209,18 +213,38 @@ pub fn fetched_with_warning(
         device_id: device.to_string(),
         at,
         in_hand,
-        fell_back_because: None,
         warning: Some(warning),
     }))
 }
 
-/// 某台 Device 的一次取数在 `at` 那一刻没读到（原因 `reason`），退到了上次已知值 `last_known`。
+/// 某台 Device 的一次取数在 `at` 那一刻没读到（原因 `reason`，按失联算），退到了上次已知值 `last_known`。
 pub fn fell_back(device: &str, at: Timestamp, last_known: InHand, reason: &str) -> Event {
+    fell_back_because(
+        device,
+        at,
+        last_known,
+        NoReading::Failed(anyhow!("{reason}")),
+    )
+}
+
+/// 同 [`fell_back`]，但这一次没读到的原因是给定的 `because`（取数失败的某一种来路，或者暂停）。`last_known` 得是
+/// 一份读数（[`last_known_value`] 造的那种）。
+pub fn fell_back_because(
+    device: &str,
+    at: Timestamp,
+    last_known: InHand,
+    because: NoReading,
+) -> Event {
+    let InHand::Reading(last_known) = last_known else {
+        panic!("退到的上次已知值得是一份读数");
+    };
     Event::Fetched(Box::new(Fetched {
         device_id: device.to_string(),
         at,
-        in_hand: last_known,
-        fell_back_because: Some(NoReading::Failed(anyhow!("{reason}"))),
+        in_hand: InHand::FellBack {
+            last_known,
+            because,
+        },
         warning: None,
     }))
 }

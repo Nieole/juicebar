@@ -246,21 +246,21 @@ fn insert_endpoint_block(
 /// 的清单可以借，所以那件事在这里是一个具名字段。
 #[derive(Debug)]
 pub struct Pinned {
-    /// 回写之后的全文。`primary` 本来就是这个 id 时与入参**逐字节相同**。
+    /// 回写之后的全文。`primary` 本来就是这一条时与入参**逐字节相同**。
     pub text: String,
-    /// 这一次真的改了 `primary` 吗。`false` = 本来就钉在这一台上，一个字节都不必写。
+    /// 这一次真的改了 `primary` 吗。`false` = 本来就是这一条，一个字节都不必写。
     pub changed: bool,
 }
 
-/// 把 `primary` 钉到这个 Device 上，文件里别的一个字节都不动。
+/// 把 `primary` 写成用户在菜单里选的那一条——钉死某一台（`"<id>"`），或者切回自动（`"lowest"`）——文件里别的
+/// 一个字节都不动。
 ///
 /// 这是 ADR-0003 那句"运行时选择回写 `config.toml`"的**能力**那一半。与 [`draft`] 和
-/// [`refresh`] 一样是纯函数：文本进、文本出，落盘另放。**落盘那一步眼下没有主，因为触发点
-/// 不存在**——触发它的是托盘菜单里的手动切换，而托盘菜单在 spec 的 Out of Scope 里
-/// （parking lot Q51）。到那一步照 `cli::config_refresh` 那几行的样子写就行：读全文、
-/// 调这个函数、[`Pinned::changed`] 为真才落盘。
+/// [`refresh`] 一样是纯函数：文本进、文本出，落盘另放。触发它的是托盘菜单里的"托盘上画哪一台"
+/// （`crate::tray::config::Action::WritePrimary`），落盘在外壳（`shell/config.rs`）：读全文、调这个函数、
+/// [`Pinned::changed`] 为真才写。
 ///
-/// **只回写用户主动选的那一个。**按 `"lowest"` 自动选出来的 id 绝不写到这里来：`primary`
+/// **只回写用户主动选的那一条。**按 `"lowest"` 自动选出来的 id 绝不写到这里来：`primary`
 /// 只有一个格子，那条规则和一个具体 id 共用它，把自动选出的 id 写回去，`primary = "lowest"`
 /// 就变成 `primary = "dragonfly3"`——规则不见了，工具从此永久钉在那一台上，而用户从没要求过
 /// （票 09 的 parking lot Q41）。自动选出来的那个 id 有自己的家，见
@@ -272,25 +272,26 @@ pub struct Pinned {
 /// `tests/config.rs::primary_writeback_touches_nothing_else_the_user_wrote` 逐行守着这句话。
 ///
 /// [`draft`]: fn@crate::config::draft
-pub fn pin_primary(text: &str, device_id: &str) -> Result<Pinned> {
+pub fn pin_primary(text: &str, wanted: &PrimaryRule) -> Result<Pinned> {
     // 读用 serde、写用 toml_edit，同一段文本解析两遍，与 [`refresh`] 同一条理由：
     // "这个 id 在册吗、现在钉的是谁"是类型化的问题，"保住注释"是文档树的问题。
     let config = Config::parse(text)?;
-    // "钉在这一台上"长什么样只说一遍：下面提前返回那一处和末尾那道自检问的是同一件事。
-    let wanted = PrimaryRule::Pinned(device_id.to_string());
 
     // 不在册的 id **一个字节都不写**。写下去的话，下一次启动 `primary::select` 交回的是
     // `Selection::PinnedNotFound`：一行都没标，命令行上多一句"配置里 primary 钉的 id 不在
     // 登记的 Device 里"。让程序自己写出那种配置，等于替用户造一个他没犯的错——而菜单只
     // 可能把在册的设备列出来，所以走到这里的一个不在册的 id 是**调用方的 bug**。
-    if !config.devices.iter().any(|device| device.id == device_id) {
+    if let PrimaryRule::Pinned(device_id) = wanted
+        && !config.devices.iter().any(|device| &device.id == device_id)
+    {
         return Err(anyhow!(
             "primary 钉不到 \"{device_id}\" 上：配置里没有这个 id 的 Device"
         ));
     }
 
-    // 本来就钉在这一台上就什么都不做，理由见 [`Pinned`]。
-    if config.general.primary == wanted {
+    // 本来就是这一条就什么都不做，理由见 [`Pinned`]。`[general]` 整节没写、缺省就是自动时也算：
+    // 切回自动不该凭空多出一节来。
+    if config.general.primary == *wanted {
         return Ok(Pinned {
             text: text.to_string(),
             changed: false,
@@ -322,14 +323,14 @@ pub fn pin_primary(text: &str, device_id: &str) -> Result<Pinned> {
     // 在旧值的 decor 里；键上方那句住在**键**的 decor 里、不受影响——于是两句注释里只有
     // 一句会消失，而那种半条命的错最难在肉眼下发现。
     let slot = &mut doc["general"]["primary"];
-    let mut chosen = toml_edit::Value::from(device_id);
+    let mut chosen = toml_edit::Value::from(wanted.config_value());
     if let Some(previous) = slot.as_value() {
         *chosen.decor_mut() = previous.decor().clone();
     }
     *slot = toml_edit::Item::Value(chosen);
     let text = doc.to_string();
 
-    // **自检**：这份写完的文本，拿启动时那条读法读回来必须真的是这一台。它守的是这次回写
+    // **自检**：这份写完的文本，拿启动时那条读法读回来必须真的是这一条。它守的是这次回写
     // 唯一的承诺——"重启之后生效的就是用户刚点的那一个"——而它用的正是重启时会走的那段
     // 代码，不是把那条规则在这里抄第二遍。
     //
@@ -339,9 +340,10 @@ pub fn pin_primary(text: &str, device_id: &str) -> Result<Pinned> {
     // `config.example.toml` 早就写着这件事："id 恰好叫 lowest 的 Device 钉不住，换个 id"。
     let written =
         Config::parse(&text).context("回写之后的配置自己解析不动了，这是程序的错，不是配置的错")?;
-    if written.general.primary != wanted {
+    if written.general.primary != *wanted {
         return Err(anyhow!(
-            "primary 钉不到 \"{device_id}\" 上：写进去再读回来不是这一台（lowest 是规则的写法）"
+            "primary 写不成 \"{}\"：写进去再读回来不是这一个选择（lowest 是规则的写法）",
+            wanted.config_value()
         ));
     }
 

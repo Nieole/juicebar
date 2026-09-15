@@ -13,16 +13,14 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION, HWND};
-use windows::Win32::UI::Shell::ShellExecuteW;
-use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-use windows::core::{HSTRING, PCWSTR};
 
 // 草稿怎么落盘照命令行那一套（`config-refresh`），票 14 收掉命令行时一起搬过来。
 use crate::cli::config_refresh::write_draft;
-use crate::config::Config;
+use crate::config::{Config, pin_primary};
 use crate::hid::HidInfo;
+use crate::primary::PrimaryRule;
 use crate::tray::config::{Action, Event, Scan};
 
 use super::App;
@@ -114,29 +112,21 @@ impl ConfigFile {
             .with_context(|| format!("写不进配置 {}", self.path.display()))
     }
 
-    /// 用系统默认程序打开配置文件，与在资源管理器里双击它一样。
-    fn open_in_default_program(&self, hwnd: HWND) -> Result<()> {
-        let file = HSTRING::from(self.path.as_os_str());
-        // SAFETY: 一个以 NUL 结尾的路径，其余参数为空；缺省动词（与双击一样）。
-        let result = unsafe {
-            ShellExecuteW(
-                Some(hwnd),
-                PCWSTR::null(),
-                &file,
-                PCWSTR::null(),
-                PCWSTR::null(),
-                SW_SHOWNORMAL,
-            )
-        };
-        // 大于 32 才是打开了（ShellExecuteW 的老规矩）。
-        if result.0 as usize <= 32 {
-            return Err(anyhow!(
-                "打不开 {}：{}",
-                self.path.display(),
-                windows::core::Error::from_thread()
-            ));
+    /// 把 `primary` 写成菜单里选的那一条：读此刻文件的全文，照配置那道缝格式保留地只改那一格（[`pin_primary`]），真改了
+    /// 才写。不改记下的样子，理由见模块文档：下一格看得出文件变了，照常重读。
+    fn write_primary(&self, rule: &PrimaryRule) -> Result<()> {
+        let text = std::fs::read_to_string(&self.path)
+            .with_context(|| format!("读不到配置 {}", self.path.display()))?;
+        let written = pin_primary(&text, rule)?;
+        if written.changed {
+            self.write(&written.text)?;
         }
         Ok(())
+    }
+
+    /// 用系统默认程序打开配置文件，与在资源管理器里双击它一样。
+    fn open_in_default_program(&self, hwnd: HWND) -> Result<()> {
+        super::open_in_default_program(hwnd, &self.path)
     }
 }
 
@@ -167,6 +157,12 @@ pub(super) fn execute(action: Action, app: &mut App) {
         Action::Write(text) => {
             if let Err(e) = app.config.write(&text) {
                 app.log.write(&format!("{e:#}"));
+            }
+        }
+        Action::WritePrimary(rule) => {
+            if let Err(e) = app.config.write_primary(&rule) {
+                app.log
+                    .write(&format!("没能把托盘上画哪一台写回配置 —— {e:#}"));
             }
         }
     }

@@ -185,8 +185,7 @@ fn fetch(request: &FetchRequest, last_known: &mut LastKnown) -> Fetched {
     Fetched {
         device_id: request.device.id.clone(),
         at,
-        in_hand: InHand::from(outcome.row),
-        fell_back_because: outcome.fell_back_because,
+        in_hand: InHand::from(outcome),
         warning: pause.warning(),
     }
 }

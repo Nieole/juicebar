@@ -90,7 +90,10 @@ impl Cadence {
 fn interval(config: &Config, fetched: &Fetched) -> u64 {
     let general = &config.general;
     let endpoint = match &fetched.in_hand {
-        InHand::Reading(row) => Some(row.reading.endpoint),
+        InHand::Reading(row)
+        | InHand::FellBack {
+            last_known: row, ..
+        } => Some(row.reading.endpoint),
         InHand::NoReading(_) | InHand::NoKnownValue => config
             .devices
             .iter()
