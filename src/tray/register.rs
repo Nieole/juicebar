@@ -72,8 +72,8 @@ pub enum Command {
 pub(super) struct Register {
     /// 上一遍扫到的本机蓝牙设备；还没扫回来过是空的。
     found: Vec<BleBattery>,
-    /// 上一遍扫到的本机 HID collection（自动补空块那一遍，[`Register::hid_scanned`]）；还没扫回来过是空的。
-    present: Vec<HidInfo>,
+    /// 上一遍扫到的本机 HID collection（自动补空块那一遍，[`Register::hid_scanned`]）；还没扫回来过、上一遍扫不了，都是空的。
+    collections: Vec<HidInfo>,
     /// 上一次要扫一遍的那一刻；还没要过是 `None`。
     asked_at: Option<Timestamp>,
     /// 要了的那一遍还没交回来。
@@ -124,10 +124,11 @@ impl Register {
         }
     }
 
-    /// 外壳扫了一遍本机的 HID 设备、扫成了（启动时与插拔时那一遍，自动补空块借的也是它）：换上这一遍。扫不了的那一遍不交到这里，
-    /// "认得但没登记的"那一组照上一遍扫到的列；完整原因自动补空块那一侧已经记进日志。
+    /// 外壳扫了一遍本机的 HID 设备（启动时与插拔时那一遍，自动补空块借的也是它）：换上这一遍。扫不了时交进来的是空的——此刻在场
+    /// 的是什么不知道，"认得但没登记的"那一组就不列：照上一遍列，拔掉了的那一台还挂着（parking lot Q335）。完整原因自动补空块
+    /// 那一侧已经记进日志。
     pub(super) fn hid_scanned(&mut self, collections: &[HidInfo]) {
-        self.present = collections.to_vec();
+        self.collections = collections.to_vec();
     }
 }
 
@@ -177,7 +178,7 @@ impl Tray {
         if !unregistered.is_empty() {
             groups.push(unregistered);
         }
-        let known = known_group(&self.config, &self.register.present);
+        let known = known_group(&self.config, &self.register.collections);
         if !known.is_empty() {
             groups.push(known);
         }
@@ -195,8 +196,8 @@ impl Tray {
 }
 
 /// 未登记的蓝牙设备那一组：本机扫到、带电量属性、地址不在任何 Device 里的，每一台一个子菜单，右列写扫到它的那条通路
-/// （Ble），里面是"登记到 ›"——**只列还没有蓝牙地址的 Device**，已经有地址的不列：换地址是先解除、再登记，一点不会悄悄
-/// 覆盖旧地址——与"新建一台 Device"（只走蓝牙的耳机也能出现在托盘里）。
+/// （Ble），里面是"登记到 ›"与"新建一台 Device"（只走蓝牙的耳机也能出现在托盘里）。"登记到"**只列还没有蓝牙地址的
+/// Device**，已经有地址的不列：换地址是先解除、再登记，一点不会悄悄覆盖旧地址。
 fn unregistered_group(config: &Config, found: &[BleBattery]) -> Vec<Item> {
     found
         .iter()
@@ -246,9 +247,9 @@ fn unregistered_group(config: &Config, found: &[BleBattery]) -> Vec<Item> {
 /// 认得但没登记的 HID 设备那一组：身份表认得、本机在场、配置里没有的（[`Config::unregistered_known_devices`]，新建时写不写问的
 /// 也是它），每一台一个子菜单，名字取身份表里的；右列写扫到它的那条通路——在场的不止一条时写优先级最高的那条，取数时先走的
 /// 就是它（parking lot Q331）；里面是"新建一台 Device"。
-fn known_group(config: &Config, present: &[HidInfo]) -> Vec<Item> {
+fn known_group(config: &Config, collections: &[HidInfo]) -> Vec<Item> {
     config
-        .unregistered_known_devices(present)
+        .unregistered_known_devices(collections)
         .into_iter()
         .map(|unregistered| {
             let right = unregistered.present.first().map(ToString::to_string);

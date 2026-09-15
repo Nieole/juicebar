@@ -212,8 +212,8 @@ const OPTIONAL_ADDRESS: &str = "\
 ///
 /// **这里叫用户插好之后到托盘菜单"登记设备"里点"新建一台 Device"，而不是"插上之后程序会自动补上"**，因为后者在这里是
 /// 假话：[`refresh`] 只往已有的 `[[device]]` 里补空着的块，它不新增 Device（那条边界见 `.scratch/parking-lot.md` 的 Q49）；
-/// 新增只能由用户在菜单里点（resident-tray 票 12）。菜单还没有"新建一台 Device"的时候，这里叫人删掉文件、重新启动 juicebar
-/// （parking lot Q272）。
+/// 新增只能由用户在菜单里点（resident-tray 票 12）。票 12 之前菜单里没有"新建一台 Device"，这一段叫人删掉文件、重新启动
+/// juicebar；怎么改成今天这样的记在 parking lot Q272。
 ///
 /// [`refresh`]: crate::config::refresh
 const NOTHING_RECOGNISED: &str = "\

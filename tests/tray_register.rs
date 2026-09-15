@@ -166,9 +166,10 @@ fn a_known_hid_device_is_listed_only_while_it_is_present_and_not_in_the_config()
     );
 }
 
-/// 扫一遍本机扫不了（枚举不了、配置文件读不到）："登记设备 ›"照上一遍扫到的列，不因为一次扫不了就变空——与蓝牙那一遍同一个处置。
+/// 扫一遍本机扫不了（枚举不了、配置文件读不到）：此刻在场的是什么不知道，认得但没登记的那一组就不列——照上一遍列，拔掉了的
+/// 那一台还挂着，点下去写进配置的是一条不在场的 Endpoint（parking lot Q335）。下一次插拔扫成了再列。
 #[test]
-fn a_hid_scan_that_failed_keeps_the_last_list() {
+fn a_hid_scan_that_failed_lists_no_known_hid_device() {
     let (mut tray, mut screen) = canned("primary = \"lowest\"");
     feed(&mut tray, &mut screen, reloaded(ONLY_DRAGONFLY3));
     feed(
@@ -185,7 +186,10 @@ fn a_hid_scan_that_failed_keeps_the_last_list() {
         ))),
     );
 
-    assert_eq!(texts(register_entry(&tray.menu(NOW))), ["VGN Neon75"]);
+    assert_eq!(
+        texts(register_entry(&tray.menu(NOW))),
+        [NOTHING_TO_REGISTER]
+    );
 }
 
 /// "登记设备"子菜单里一组都没有时的那一行灰字（设计稿写死的字，`tests/menu_baselines/register.txt`）。

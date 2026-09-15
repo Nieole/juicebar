@@ -93,9 +93,11 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
 
     for (index, device) in config.devices.iter().enumerate() {
         let recognised = recognise(device);
+        // 没写 `driver` 的 Device 只走蓝牙（[`Device::driver`]）：两条 HID Endpoint 对它不是"空着"，是本来就没有——不补，也不提醒。
         let missing: Vec<EndpointKind> = EndpointKind::PRIORITY
             .into_iter()
             .filter(|kind| !kind.is_configured_in(device))
+            .filter(|kind| device.driver.is_some() || *kind == EndpointKind::Ble)
             .collect();
 
         // ADR-0003 那半句："扫描结果与用户所写不一致时只在命令行提醒"。

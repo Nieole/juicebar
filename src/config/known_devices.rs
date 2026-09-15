@@ -172,6 +172,9 @@ pub(super) fn same_scanned_identity(a: &HidEndpoint, b: &HidEndpoint) -> bool {
 /// 某一块想让程序重新补上，都会落到这里，而"看已配好的身份"这条路那时问不出任何东西。
 /// `id` 只能是兜底，因为它是用户随手可改的自由文本，不是证据——而即便认错了也写不出错
 /// 配置：填进去的身份必须此刻真的在本机枚举得到。
+///
+/// **没写 `driver` 的那台不退到 `id`**：它说的是"我只走蓝牙"（[`Device::driver`]），不是表里哪一台 HID 设备，id 恰好
+/// 对得上也不是。认成了，补空块就往一台没有驱动的 Device 里补 HID 块，写出一份读不动的配置。
 pub(super) fn recognise(device: &Device) -> Option<&'static KnownDevice> {
     let by_identity = KNOWN_DEVICES.iter().find(|known| {
         EndpointKind::PRIORITY.into_iter().any(|kind| {
@@ -184,7 +187,10 @@ pub(super) fn recognise(device: &Device) -> Option<&'static KnownDevice> {
             }
         })
     });
-    by_identity.or_else(|| KNOWN_DEVICES.iter().find(|known| known.id == device.id))
+    by_identity.or_else(|| {
+        device.driver.as_ref()?;
+        KNOWN_DEVICES.iter().find(|known| known.id == device.id)
+    })
 }
 
 /// 身份表认得、本机此刻在场、配置里却没有的一台 HID 设备（[`Config::unregistered_known_devices`]）：菜单"登记设备"里点得到

@@ -147,10 +147,11 @@ impl Tray {
             Event::DraftWritten => out.push(super::Action::Notify(draft_notice())),
             Event::DevicesChanged => self.scans.request(out),
             Event::Scanned(scan) => {
-                // 登记设备借这一遍扫描看本机在场的 HID 设备（"认得但没登记的"那一组，`super::register`）；扫不了就照上一遍的列。
-                if let Ok(scan) = &scan {
-                    self.register.hid_scanned(&scan.collections);
-                }
+                // 登记设备借这一遍扫描看本机在场的 HID 设备（"认得但没登记的"那一组，`super::register`）；扫不了就当什么都不在场。
+                let collections = scan
+                    .as_ref()
+                    .map_or(&[][..], |scan| scan.collections.as_slice());
+                self.register.hid_scanned(collections);
                 fill_blank_blocks(scan, out);
                 self.scans.answered(out);
             }

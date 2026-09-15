@@ -735,6 +735,35 @@ fn config_refresh_never_adds_a_device() {
     assert!(refreshed.filled.is_empty());
 }
 
+/// 没写 `driver` 的 Device 说的是"我只走蓝牙"：它不是身份表里哪一台 HID 设备，id 恰好叫 `neon75` 也不是。键盘的接收器插着，
+/// 补空块也不往它里面补 HID 块（补了就是一份缺 `driver` 的配置，读不动），一句提醒都不说；菜单"登记设备"照样把 VGN Neon75
+/// 列成认得但没登记的那一台。
+#[test]
+fn config_refresh_leaves_a_bluetooth_only_device_alone() {
+    let bluetooth_only = r#"[[device]]
+id = "neon75"
+name = "我的蓝牙键盘"
+
+  [device.bluetooth]
+  address = "f4ee2553b27e"
+"#;
+
+    let refreshed =
+        config::refresh(bluetooth_only, &[keyboard_dongle(), keyboard_wired()]).unwrap();
+
+    assert_eq!(refreshed.text, bluetooth_only, "一个字节都不补");
+    assert!(
+        refreshed.notes.is_empty(),
+        "只走蓝牙的没有缺什么：{:?}",
+        refreshed.notes
+    );
+    let unregistered = Config::parse(bluetooth_only)
+        .unwrap()
+        .unregistered_known_devices(&[keyboard_dongle()]);
+    let ids: Vec<&str> = unregistered.iter().map(|hid| hid.known.id).collect();
+    assert_eq!(ids, ["neon75"], "VGN Neon75 还不在配置里");
+}
+
 /// `after` 比 `before` 多出来的那一段连续的行（每行带着自己的换行），以及它插在第几行（从 0 数）。
 ///
 /// **`before` 的每一行都得原样、按原次序留在 `after` 里**，否则当场失败：它守的正是"只多了这几行，别的
