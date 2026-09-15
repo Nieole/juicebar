@@ -1,8 +1,7 @@
 //! 托盘内核里「登记设备」这一块（`juicebar::tray::register`）：本机扫到、还没登记的蓝牙设备，"登记到"列谁不列谁，
-//! "解除蓝牙登记"，点了之后交给外壳写回什么，以及什么时候扫一遍本机的蓝牙设备。
+//! "新建一台 Device"，认得但没登记的 HID 设备，"解除蓝牙登记"，点了之后交给外壳写回什么，以及什么时候扫一遍本机的蓝牙设备。
 //!
-//! 子菜单的结构与设计稿导出的基准逐项比对（`tests/menu_baselines/register*.txt`，帮手在 `common::menu`）；"新建一台
-//! Device"那几行归票 12，比对时略去。
+//! 子菜单的结构与设计稿导出的基准整份比对（`tests/menu_baselines/register*.txt` 四份，帮手在 `common::menu`）。
 
 mod common;
 
@@ -12,7 +11,9 @@ use common::menu::{
 };
 use common::tray::{feed, later, start};
 use juicebar::bluetooth::BleBattery;
-use juicebar::config::Config;
+use juicebar::config::{Config, NewDevice};
+use juicebar::endpoints::EndpointKind;
+use juicebar::hid::HidInfo;
 use juicebar::state::LastKnown;
 use juicebar::tray::menu::{Entry, Item, Kind, Menu};
 use juicebar::tray::{Event, config, register};
@@ -63,11 +64,8 @@ fn reloaded(text: &str) -> Event {
     Event::Config(config::Event::Reloaded(Ok(config)))
 }
 
-/// "登记设备 ›"里归票 12、还没做出来的那几行：比对时略去。
-const NEW_DEVICE: &[&str] = &["    普通 「新建一台 Device」"];
-
 /// 罐装，外加本机扫到一台没登记、带电量属性的蓝牙设备 WH-1000XM5：它一个子菜单，右列写扫到它的通路（Ble），里面是
-/// "登记到 ›"，列出还没有蓝牙地址的罐装那两台。
+/// "登记到 ›"（列出还没有蓝牙地址的罐装那两台）与"新建一台 Device"。
 #[test]
 fn an_unregistered_ble_device_can_be_registered_to_each_device_without_an_address() {
     let (mut tray, mut screen) = canned("primary = \"lowest\"");
@@ -80,10 +78,157 @@ fn an_unregistered_ble_device_can_be_registered_to_each_device_without_an_addres
     let menu = tray.menu(NOW);
 
     assert_matches_design(
-        baseline("register-unregistered_ble").without(NEW_DEVICE),
+        baseline("register-unregistered_ble"),
         submenu(&menu, "登记设备"),
         Depth::Whole,
     );
+}
+
+/// 罐装去掉 neon75：配置里只有 dragonfly3（设计稿"认得但没登记的 HID 设备"那一份基准的罐装，parking lot Q284）。
+const ONLY_DRAGONFLY3: &str = r#"[general]
+primary = "lowest"
+
+[[device]]
+id = "dragonfly3"
+name = "Dragonfly 3 Master+"
+driver = "vgn_mouse"
+
+  [device.wireless_24g]
+  vid = 0x391D
+  pid = 0x1A05
+  usage_page = 0xFF02
+  usage = 0x0002
+  report_id = 8
+"#;
+
+/// 配置里只有 dragonfly3（没有 neon75），本机插着身份表认得的 VGN Neon75 的接收器：它一个子菜单，右列写扫到它的通路
+/// （Dongle24G），里面是"新建一台 Device"。
+#[test]
+fn a_known_hid_device_that_is_present_but_not_in_the_config_is_listed() {
+    let (mut tray, mut screen) = canned("primary = \"lowest\"");
+    feed(&mut tray, &mut screen, reloaded(ONLY_DRAGONFLY3));
+
+    feed(
+        &mut tray,
+        &mut screen,
+        hid_scanned(ONLY_DRAGONFLY3, vec![mouse_dongle(), keyboard_dongle()]),
+    );
+    let menu = tray.menu(NOW);
+
+    assert_matches_design(
+        baseline("register-unregistered_hid"),
+        submenu(&menu, "登记设备"),
+        Depth::Whole,
+    );
+}
+
+/// 认得但没登记的 HID 设备，只在本机在场时列出：拔掉接收器之后（插拔再扫一遍，扫到的里面没有它）就不列了。配置里已经有
+/// 认得出是它的那一台也不列——它已经是一级里的一行设备行了。
+#[test]
+fn a_known_hid_device_is_listed_only_while_it_is_present_and_not_in_the_config() {
+    let (mut tray, mut screen) = canned("primary = \"lowest\"");
+    feed(&mut tray, &mut screen, reloaded(ONLY_DRAGONFLY3));
+    feed(
+        &mut tray,
+        &mut screen,
+        hid_scanned(ONLY_DRAGONFLY3, vec![mouse_dongle(), keyboard_dongle()]),
+    );
+    assert_eq!(
+        texts(register_entry(&tray.menu(NOW))),
+        ["VGN Neon75"],
+        "插着、配置里没有：列"
+    );
+
+    feed(
+        &mut tray,
+        &mut screen,
+        hid_scanned(ONLY_DRAGONFLY3, vec![mouse_dongle()]),
+    );
+    assert_eq!(
+        texts(register_entry(&tray.menu(NOW))),
+        [NOTHING_TO_REGISTER],
+        "拔掉了：不列"
+    );
+
+    let (mut tray, mut screen) = canned("primary = \"lowest\"");
+    feed(
+        &mut tray,
+        &mut screen,
+        hid_scanned(
+            &format!("[general]\nprimary = \"lowest\"\n{CANNED_DEVICES}"),
+            vec![mouse_dongle(), keyboard_dongle()],
+        ),
+    );
+    assert_eq!(
+        texts(register_entry(&tray.menu(NOW))),
+        [NOTHING_TO_REGISTER],
+        "配置里已经有 neon75：不列"
+    );
+}
+
+/// 扫一遍本机扫不了（枚举不了、配置文件读不到）：此刻在场的是什么不知道，认得但没登记的那一组就不列——照上一遍列，拔掉了的
+/// 那一台还挂着，点下去写进配置的是一条不在场的 Endpoint（parking lot Q335）。下一次插拔扫成了再列。
+#[test]
+fn a_hid_scan_that_failed_lists_no_known_hid_device() {
+    let (mut tray, mut screen) = canned("primary = \"lowest\"");
+    feed(&mut tray, &mut screen, reloaded(ONLY_DRAGONFLY3));
+    feed(
+        &mut tray,
+        &mut screen,
+        hid_scanned(ONLY_DRAGONFLY3, vec![mouse_dongle(), keyboard_dongle()]),
+    );
+
+    feed(
+        &mut tray,
+        &mut screen,
+        Event::Config(config::Event::Scanned(Err(
+            "枚举不了本机的设备：用例里的原因".to_string(),
+        ))),
+    );
+
+    assert_eq!(
+        texts(register_entry(&tray.menu(NOW))),
+        [NOTHING_TO_REGISTER]
+    );
+}
+
+/// "登记设备"子菜单里一组都没有时的那一行灰字（设计稿写死的字，`tests/menu_baselines/register.txt`）。
+const NOTHING_TO_REGISTER: &str = "没有可登记的设备（蓝牙设备要先在 Windows 里配对）";
+
+/// 本机插着的一条 HID collection：身份表只比 VID、PID、usage page 与 usage，其余填得像真的即可。
+fn collection(vid: u16, pid: u16, usage_page: u16) -> HidInfo {
+    HidInfo {
+        path: format!("用例里的 collection {vid:04X}:{pid:04X}"),
+        vid,
+        pid,
+        version: 0x0303,
+        usage_page,
+        usage: 0x0002,
+        input_len: 0,
+        output_len: 0,
+        feature_len: 65,
+        product: String::new(),
+        manufacturer: String::new(),
+    }
+}
+
+/// 鼠标的 2.4G 接收器，实测身份 `391D:1A05`。
+fn mouse_dongle() -> HidInfo {
+    collection(0x391D, 0x1A05, 0xFF02)
+}
+
+/// 键盘的 2.4G 接收器，实测身份 `3151:5038`。
+fn keyboard_dongle() -> HidInfo {
+    collection(0x3151, 0x5038, 0xFFFF)
+}
+
+/// 外壳照内核的吩咐扫了一遍本机（启动时、插拔时那一遍，自动补空块也借它）：此刻在场的是 `collections`，配置文件此刻写着
+/// `text`。
+fn hid_scanned(text: &str, collections: Vec<HidInfo>) -> Event {
+    Event::Config(config::Event::Scanned(Ok(config::Scan {
+        collections,
+        text: text.to_string(),
+    })))
 }
 
 /// 本机扫到的一台蓝牙设备：名字 `name`、地址 `address`，电量属性 `level`（`None` 是没有电量属性）。
@@ -322,6 +467,75 @@ fn clicking_a_device_under_unregister_asks_the_shell_to_remove_its_address() {
     assert_eq!(
         screen.logs.last().map(String::as_str),
         Some("登记设备 —— 解除 neon75 的蓝牙登记（它登记的是 f4ee2553b27e）")
+    );
+}
+
+/// 点"登记设备 › WH-1000XM5 › 新建一台 Device"：外壳收到"把这台蓝牙设备新建成一台 Device"（它读此刻文件的全文、照配置
+/// 那道缝追加在末尾），日志里记下点了什么。写回之后靠重读生效（parking lot Q312）。
+#[test]
+fn clicking_new_device_under_an_unregistered_ble_device_asks_the_shell_to_add_it() {
+    let (mut tray, mut screen) = canned("primary = \"lowest\"");
+    feed(
+        &mut tray,
+        &mut screen,
+        scanned(vec![found("WH-1000XM5", "38184c8f1a2b", Some(80))]),
+    );
+    let menu = tray.menu(NOW);
+    let command = child(
+        child(register_entry(&menu), "WH-1000XM5"),
+        "新建一台 Device",
+    )
+    .command
+    .clone()
+    .expect("新建一台 Device 点得到");
+
+    feed(&mut tray, &mut screen, Event::Menu(command));
+
+    assert_eq!(
+        screen.config,
+        [config::Action::NewDevice(NewDevice::Ble {
+            name: "WH-1000XM5".to_string(),
+            address: "38184c8f1a2b".to_string(),
+        })]
+    );
+    assert_eq!(
+        screen.logs.last().map(String::as_str),
+        Some("登记设备 —— 把蓝牙设备 WH-1000XM5（38184c8f1a2b）新建成一台 Device")
+    );
+}
+
+/// 点"登记设备 › VGN Neon75 › 新建一台 Device"：外壳收到"把身份表里的 neon75 新建成一台 Device"，连同点的那一刻本机在场的
+/// 那几条 Endpoint（写回时只写它们的块），日志里记下点了什么。
+#[test]
+fn clicking_new_device_under_a_known_hid_device_asks_the_shell_to_add_it_with_what_is_present() {
+    let (mut tray, mut screen) = canned("primary = \"lowest\"");
+    feed(&mut tray, &mut screen, reloaded(ONLY_DRAGONFLY3));
+    feed(
+        &mut tray,
+        &mut screen,
+        hid_scanned(ONLY_DRAGONFLY3, vec![mouse_dongle(), keyboard_dongle()]),
+    );
+    let menu = tray.menu(NOW);
+    let command = child(
+        child(register_entry(&menu), "VGN Neon75"),
+        "新建一台 Device",
+    )
+    .command
+    .clone()
+    .expect("新建一台 Device 点得到");
+
+    feed(&mut tray, &mut screen, Event::Menu(command));
+
+    assert_eq!(
+        screen.config,
+        [config::Action::NewDevice(NewDevice::Hid {
+            known_id: "neon75".to_string(),
+            present: vec![EndpointKind::Dongle24G],
+        })]
+    );
+    assert_eq!(
+        screen.logs.last().map(String::as_str),
+        Some("登记设备 —— 把身份表里的 neon75（本机在场的是 Dongle24G）新建成一台 Device")
     );
 }
 

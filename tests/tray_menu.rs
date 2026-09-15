@@ -166,15 +166,19 @@ fn the_top_level_matches_the_design_when_only_the_radio_marks_the_primary_device
     );
 }
 
-/// 一台 Device 都没有时那一句说明：与悬停提示同一句（命令行里"配置 … 里一个 Device 都没有。"那一行在托盘里的样子）；
-/// 普通项、不变灰（一台都没有正是现状，parking lot Q285），点了什么都不做。
+/// 一台 Device 都没有时那一句说明：悬停提示那一句，接着指向"登记设备"里的"新建一台 Device"——首次运行一台设备都没插，
+/// 插上之后从那里加进来（resident-tray 票 12）；普通项、不变灰（一台都没有正是现状，parking lot Q285），点了什么都不做。
 #[test]
 fn with_no_device_the_device_rows_are_one_sentence_saying_so() {
     let (tray, _screen) = start(NO_DEVICE, &LastKnown::default(), NOW);
 
     assert_eq!(
         rows_above_the_first_separator(&tray.menu(NOW)),
-        [("配置里一个 Device 都没有".to_string(), false, None)]
+        [(
+            "配置里一个 Device 都没有：插上设备或配对蓝牙之后，到\"登记设备\"里点\"新建一台 Device\"".to_string(),
+            false,
+            None
+        )]
     );
 }
 

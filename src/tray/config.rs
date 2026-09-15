@@ -1,6 +1,6 @@
 //! 配置：配置文件读到了、读坏了，首次运行，打开配置文件（spec「配置的读与写」「首次运行」），以及自动补空块
-//! （spec「自动补空块」）。往配置里写一处改动的动作（钉死 Primary Device、`[tray]` 的一个键、登记一台设备，票 06、
-//! 10、11 起）也住这里（[`Action`]），外壳那一段在 `shell/config.rs`。
+//! （spec「自动补空块」）。往配置里写一处改动的动作（钉死 Primary Device、`[tray]` 的一个键、登记与新建一台设备，票 06、
+//! 10、11、12 起）也住这里（[`Action`]），外壳那一段在 `shell/config.rs`。
 //!
 //! **配置归内核**：启动时外壳读好一份交给 [`Tray::new`]；之后外壳每一格时钟之前看一眼配置文件变没变，变了
 //! 就重读，把读的结果交进来（[`Event::Reloaded`]）。读好了就换掉手上那一份，下一次取数带的就是它（轮询节奏
@@ -19,7 +19,7 @@
 //! 认不出的取值记进日志。菜单里改的那几项同样当场生效，写回交给外壳（[`Action::WriteTray`]，`super::settings_menu`）。
 
 use crate::config::TraySetting;
-use crate::config::{Config, Fill, refresh};
+use crate::config::{Config, Fill, NewDevice, refresh};
 use crate::hid::HidInfo;
 use crate::primary::PrimaryRule;
 use crate::round::Warning;
@@ -87,6 +87,9 @@ pub enum Action {
         /// 解除哪一台：它的 id。
         device_id: String,
     },
+    /// 把这一台新建成一条 `[[device]]`（菜单"登记设备"里点的"新建一台 Device"）：外壳读此刻文件的全文、照配置那道缝追加在
+    /// 末尾（[`crate::config::add_device`]），它已经在配置里了就不写。读全文的理由同 [`Scan::text`]。
+    NewDevice(NewDevice),
 }
 
 /// 扫一遍本机这件事走到哪了（[`Action::Scan`]）。
@@ -144,6 +147,11 @@ impl Tray {
             Event::DraftWritten => out.push(super::Action::Notify(draft_notice())),
             Event::DevicesChanged => self.scans.request(out),
             Event::Scanned(scan) => {
+                // 登记设备借这一遍扫描看本机在场的 HID 设备（"认得但没登记的"那一组，`super::register`）；扫不了就当什么都不在场。
+                let collections = scan
+                    .as_ref()
+                    .map_or(&[][..], |scan| scan.collections.as_slice());
+                self.register.hid_scanned(collections);
                 fill_blank_blocks(scan, out);
                 self.scans.answered(out);
             }

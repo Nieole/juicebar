@@ -4,6 +4,7 @@
 
 use juicebar::config::{self, Config};
 use juicebar::config::{PrimaryMark, TraySetting, TraySettings};
+use juicebar::endpoints::EndpointKind;
 use juicebar::hid::HidInfo;
 use juicebar::icon::{Charging, Full, Glyph, Gray, IconSettings, NoLastKnown, Style};
 use juicebar::primary::PrimaryRule;
@@ -73,7 +74,7 @@ fn reads_a_device_and_its_dongle_24g_endpoint() {
     let device = config.devices.first().expect("配置里应当有一个 Device");
     assert_eq!(device.id, "dragonfly3");
     assert_eq!(device.name, "Dragonfly 3 Master+");
-    assert_eq!(device.driver, "vgn_mouse");
+    assert_eq!(device.driver.as_deref(), Some("vgn_mouse"));
 
     let endpoint = device.dongle_24g.as_ref().expect("应当有 Dongle24G");
     assert_eq!(endpoint.vid, 0x391D);
@@ -100,6 +101,43 @@ fn a_device_may_have_no_endpoint_at_all() {
     assert!(config.devices[0].dongle_24g.is_none());
 }
 
+/// 只走蓝牙的 Device 不写 `driver`：驱动只作用于 HID Endpoint，给它编一个驱动名等于在配置里说假话（spec「Device 的
+/// schema」）。
+#[test]
+fn a_bluetooth_only_device_needs_no_driver() {
+    let config = Config::parse(
+        r#"
+        [[device]]
+        id = "wh-1000xm5"
+        name = "WH-1000XM5"
+
+          [device.bluetooth]
+          address = "38184c8f1a2b"
+        "#,
+    )
+    .expect("只走蓝牙的 Device 不写 driver 也读得动");
+
+    assert_eq!(config.devices[0].driver, None);
+}
+
+/// 配了 Wired 或 Dongle24G 却没写 `driver`，照旧是配置错误：那两条要靠驱动才读得出电量，读不动的配置当场说，不留到取数时。
+#[test]
+fn a_device_with_a_hid_endpoint_still_needs_a_driver() {
+    for block in ["wired", "wireless_24g"] {
+        let text = format!(
+            "[[device]]\nid = \"dragonfly3\"\nname = \"Dragonfly 3 Master+\"\n\n  [device.{block}]\n  vid = 0x391D\n  pid = 0x1A05\n  usage_page = 0xFF02\n  usage = 0x0002\n  report_id = 8\n"
+        );
+
+        let error = Config::parse(&text).expect_err("配了 HID Endpoint 却没写 driver，读不动");
+
+        let reason = format!("{error:#}");
+        assert!(
+            reason.contains("dragonfly3") && reason.contains("driver"),
+            "要说出是哪一台缺了 driver：{reason}"
+        );
+    }
+}
+
 /// 仓库里那份样例配置是给用户抄的，它必须真的能被解析。
 /// 这条用例守的是文档与代码之间的漂移：schema 改了而样例没跟上，这里就会红。
 #[test]
@@ -111,7 +149,7 @@ fn the_shipped_example_config_parses() {
 
     let ids: Vec<&str> = config.devices.iter().map(|d| d.id.as_str()).collect();
     assert_eq!(ids, ["dragonfly3", "neon75"]);
-    assert_eq!(config.devices[1].driver, "vgn_keyboard");
+    assert_eq!(config.devices[1].driver.as_deref(), Some("vgn_keyboard"));
 }
 
 /// 样例配置写着 `[tray]` 整张表：八个键一个不少、次序照 ADR-0005，每一个都认得，写的正是缺省值（设计稿页底按缺省值
@@ -354,7 +392,7 @@ fn the_draft_writes_a_recognised_device_ready_to_use() {
         .expect("扫到的鼠标应当写成一个 Device");
     assert_eq!(device.id, "dragonfly3");
     assert_eq!(device.name, "Dragonfly 3 Master+");
-    assert_eq!(device.driver, "vgn_mouse");
+    assert_eq!(device.driver.as_deref(), Some("vgn_mouse"));
 
     let dongle = device.dongle_24g.as_ref().expect("应当有 Dongle24G");
     assert_eq!(dongle.vid, 0x391D);
@@ -607,13 +645,14 @@ fn the_draft_says_so_when_nothing_was_found() {
     let config = Config::parse(&text).expect("空草稿也必须解析得动");
     assert!(config.devices.is_empty());
     assert!(text.contains("都没扫到"), "要说清楚为什么一台设备都没有");
-    // 插上之后程序只补已有 Device 里的空块，救不了这份文件；办法是删掉它、重新启动，生成一份新草稿。
+    // 插上之后到托盘菜单"登记设备"里点"新建一台 Device"就加得进来（resident-tray 票 12）：不必删掉文件、重新启动。
     assert!(
-        text.contains("删掉") && text.contains("重新启动 juicebar"),
+        text.contains("登记设备") && text.contains("新建一台 Device"),
         "要说清楚一台都没有时怎么办：{text}"
     );
+    assert!(!text.contains("重新启动"), "不再叫人删掉文件重来：{text}");
     assert!(
-        !text.contains("config-refresh"),
+        !text.contains("config-refresh") && !text.contains("juicebar scan"),
         "不再叫人去跑命令行：{text}"
     );
 }
@@ -694,6 +733,35 @@ fn config_refresh_never_adds_a_device() {
 
     assert_eq!(refreshed.text, ONE_DEVICE);
     assert!(refreshed.filled.is_empty());
+}
+
+/// 没写 `driver` 的 Device 说的是"我只走蓝牙"：它不是身份表里哪一台 HID 设备，id 恰好叫 `neon75` 也不是。键盘的接收器插着，
+/// 补空块也不往它里面补 HID 块（补了就是一份缺 `driver` 的配置，读不动），一句提醒都不说；菜单"登记设备"照样把 VGN Neon75
+/// 列成认得但没登记的那一台。
+#[test]
+fn config_refresh_leaves_a_bluetooth_only_device_alone() {
+    let bluetooth_only = r#"[[device]]
+id = "neon75"
+name = "我的蓝牙键盘"
+
+  [device.bluetooth]
+  address = "f4ee2553b27e"
+"#;
+
+    let refreshed =
+        config::refresh(bluetooth_only, &[keyboard_dongle(), keyboard_wired()]).unwrap();
+
+    assert_eq!(refreshed.text, bluetooth_only, "一个字节都不补");
+    assert!(
+        refreshed.notes.is_empty(),
+        "只走蓝牙的没有缺什么：{:?}",
+        refreshed.notes
+    );
+    let unregistered = Config::parse(bluetooth_only)
+        .unwrap()
+        .unregistered_known_devices(&[keyboard_dongle()]);
+    let ids: Vec<&str> = unregistered.iter().map(|hid| hid.known.id).collect();
+    assert_eq!(ids, ["neon75"], "VGN Neon75 还不在配置里");
 }
 
 /// `after` 比 `before` 多出来的那一段连续的行（每行带着自己的换行），以及它插在第几行（从 0 数）。
@@ -2080,4 +2148,193 @@ bluetooth = { address = "f4ee2553b27e" }
         .to_string();
 
     assert!(error.contains("手动"), "得说清要用户自己去删：{error}");
+}
+
+// ---------------------------------------------------------------
+// 新建一台 Device：菜单"登记设备"里点的"新建一台 Device"，追加在末尾
+// ---------------------------------------------------------------
+
+/// 本机扫到、还没登记的蓝牙设备 WH-1000XM5，新建成一台 Device：追加在文件末尾，名字取蓝牙名、id 由名字派生，只写蓝牙块、
+/// 不写 `driver`；原有的每一行原样、按原次序都在（ADR-0003）。
+#[test]
+fn a_new_ble_device_is_appended_at_the_end_with_only_its_bluetooth_block() {
+    let written = add(HANDWRITTEN_CONFIG, &new_ble("WH-1000XM5", "38184c8f1a2b"));
+
+    let (at, added) = inserted_lines(HANDWRITTEN_CONFIG, &written);
+    assert_eq!(
+        at,
+        HANDWRITTEN_CONFIG.split_inclusive('\n').count(),
+        "追加在末尾：\n{written}"
+    );
+    assert_eq!(
+        added,
+        [
+            "\n",
+            "[[device]]\n",
+            "id = \"wh-1000xm5\"\n",
+            "name = \"WH-1000XM5\"\n",
+            "\n",
+            "  [device.bluetooth]\n",
+            "  address = \"38184c8f1a2b\"\n",
+        ],
+        "只多出这一台：\n{written}"
+    );
+    let device = Config::parse(&written)
+        .unwrap()
+        .devices
+        .pop()
+        .expect("多了一台");
+    assert_eq!(device.driver, None, "只走蓝牙的不写驱动");
+}
+
+/// 身份表认得、本机插着接收器、配置里却没有的 VGN Neon75，新建成一台 Device：追加在末尾，名字、id、`driver` 照身份表写，
+/// Endpoint 块只写此刻在场的 Dongle24G——没插的 Wired 不写（插上之后自动补空块照样补得上它）。
+#[test]
+fn a_new_hid_device_is_appended_with_its_driver_and_the_endpoints_present() {
+    let written = add(ONE_DEVICE, &new_hid("neon75", &[EndpointKind::Dongle24G]));
+
+    let (at, added) = inserted_lines(ONE_DEVICE, &written);
+    assert_eq!(
+        at,
+        ONE_DEVICE.split_inclusive('\n').count(),
+        "追加在末尾：\n{written}"
+    );
+    assert_eq!(
+        added,
+        [
+            "\n",
+            "[[device]]\n",
+            "id = \"neon75\"\n",
+            "name = \"VGN Neon75\"\n",
+            "driver = \"vgn_keyboard\"\n",
+            "\n",
+            "  [device.wireless_24g]\n",
+            "  vid = 0x3151\n",
+            "  pid = 0x5038\n",
+            "  usage_page = 0xFFFF\n",
+            "  usage = 0x0002\n",
+            "  report_id = 0\n",
+        ],
+        "只多出这一台：\n{written}"
+    );
+    let config = Config::parse(&written).unwrap();
+    assert!(config.devices[1].wired.is_none(), "没插的 Wired 不写");
+}
+
+/// 新建的蓝牙 Device 的 id 由名字派生：小写，字母数字以外的连成一个 `-`。撞了已有的 id 就加后缀 `-2`、`-3`……；`lowest`
+/// 也算撞——那是 `primary` 里规则的写法，id 叫它的 Device 钉不住。
+#[test]
+fn a_new_device_id_is_derived_from_its_name_and_suffixed_when_taken() {
+    let first = add(
+        HANDWRITTEN_CONFIG,
+        &new_ble("Galaxy Buds2 Pro", "a1b2c3d4e5f6"),
+    );
+    let second = add(&first, &new_ble("Galaxy Buds2 Pro", "a1b2c3d4e5f7"));
+    let third = add(&second, &new_ble("galaxy  buds2_pro", "a1b2c3d4e5f8"));
+    let last = add(&third, &new_ble("Lowest", "a1b2c3d4e5f9"));
+
+    let ids: Vec<String> = Config::parse(&last)
+        .unwrap()
+        .devices
+        .into_iter()
+        .map(|device| device.id)
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "dragonfly3",
+            "neon75",
+            "galaxy-buds2-pro",
+            "galaxy-buds2-pro-2",
+            "galaxy-buds2-pro-3",
+            "lowest-2",
+        ]
+    );
+}
+
+/// 新建的 HID Device 的 id 取身份表里的那一个（与草稿写的一样，删掉一台再从菜单加回来，还是原来那个 id），撞了照样加后缀：
+/// 这里 id 叫 neon75 的那台配的是鼠标的身份，它不是 VGN Neon75。
+#[test]
+fn a_new_hid_device_takes_its_id_from_the_identity_table_and_is_suffixed_when_taken() {
+    let taken = r#"[[device]]
+id = "neon75"
+name = "其实是一只鼠标"
+driver = "vgn_mouse"
+
+  [device.wireless_24g]
+  vid = 0x391D
+  pid = 0x1A05
+  usage_page = 0xFF02
+  usage = 0x0002
+  report_id = 8
+"#;
+
+    let written = add(taken, &new_hid("neon75", &[EndpointKind::Dongle24G]));
+
+    let config = Config::parse(&written).unwrap();
+    assert_eq!(config.devices[1].id, "neon75-2");
+    assert_eq!(config.devices[1].name, "VGN Neon75");
+}
+
+/// 要新建的那一台已经在配置里了（托盘还没重读到上一次新建时又点了一下）：一个字节都不必写，也不是错。蓝牙设备看地址，换个
+/// 写法也算；HID 设备看配置里有没有哪一台认得出是它。
+#[test]
+fn a_new_device_writes_nothing_when_it_is_already_in_the_config() {
+    let added = add(HANDWRITTEN_CONFIG, &new_ble("WH-1000XM5", "38184c8f1a2b"));
+
+    assert_eq!(
+        config::add_device(&added, &new_ble("WH-1000XM5", "38:18:4C:8F:1A:2B")).unwrap(),
+        None,
+        "这个地址已经登记着"
+    );
+    assert_eq!(
+        config::add_device(
+            HANDWRITTEN_CONFIG,
+            &new_hid("neon75", &[EndpointKind::Dongle24G])
+        )
+        .unwrap(),
+        None,
+        "配置里已经有 neon75"
+    );
+}
+
+/// 死角收掉了（`docs/gaps.md`）：首次运行时一台设备都没插，草稿里一台 Device 都没有；插上接收器之后在菜单里新建一台，文件读得
+/// 动、有了这一台；之后插上它的线，自动补空块照样补得上它的 Wired。
+#[test]
+fn the_empty_draft_gets_its_first_device_from_the_menu_and_refresh_fills_the_rest() {
+    let empty = config::draft(&[]);
+
+    let added = add(&empty, &new_hid("dragonfly3", &[EndpointKind::Dongle24G]));
+    let refreshed = config::refresh(&added, &[mouse_dongle(), mouse_wired()]).unwrap();
+
+    let config = Config::parse(&refreshed.text).unwrap();
+    let [device] = config.devices.as_slice() else {
+        panic!("该有且只有新建的那一台：\n{}", refreshed.text);
+    };
+    assert_eq!(device.id, "dragonfly3");
+    assert!(device.dongle_24g.is_some(), "新建时在场的 Dongle24G");
+    assert!(device.wired.is_some(), "插上线之后补上的 Wired");
+}
+
+/// 菜单里点的"新建一台 Device"：本机扫到的一台蓝牙设备，名字 `name`、地址 `address`。
+fn new_ble(name: &str, address: &str) -> config::NewDevice {
+    config::NewDevice::Ble {
+        name: name.to_string(),
+        address: address.to_string(),
+    }
+}
+
+/// 菜单里点的"新建一台 Device"：身份表里 id 是 `known_id` 的那一台，本机在场的是 `present` 那几条。
+fn new_hid(known_id: &str, present: &[EndpointKind]) -> config::NewDevice {
+    config::NewDevice::Hid {
+        known_id: known_id.to_string(),
+        present: present.to_vec(),
+    }
+}
+
+/// 把 `new` 新建进 `text`，交回写好的全文；它还不在配置里，该写。
+fn add(text: &str, new: &config::NewDevice) -> String {
+    config::add_device(text, new)
+        .unwrap()
+        .expect("还不在配置里，该写")
 }

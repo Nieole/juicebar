@@ -12,12 +12,12 @@
 
 use std::fmt;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 use crate::clock::Timestamp;
 use crate::config::{Device, General};
 use crate::endpoints::{EndpointKind, EndpointReading, Endpoints};
-use crate::sources::{BadFrame, Reading, Transport, driver_for};
+use crate::sources::{BadFrame, Reading, Transport};
 use crate::state::{LastKnown, Provenance};
 use crate::vendor_hub::VendorHub;
 
@@ -550,7 +550,5 @@ fn read_with_driver(
     transport: &dyn Transport,
 ) -> Result<Reading> {
     // 配置里可以出现本次编译还没实现的驱动名，那该是这一行写着"尚未实现"。
-    let driver =
-        driver_for(&device.driver).ok_or_else(|| anyhow!("驱动 {} 尚未实现", device.driver))?;
-    driver.read_battery(transport)
+    device.protocol_driver()?.read_battery(transport)
 }

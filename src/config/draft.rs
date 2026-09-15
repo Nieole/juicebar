@@ -210,25 +210,21 @@ const OPTIONAL_ADDRESS: &str = "\
 /// 这一段不能省：一份只有 `[general]` 的文件看起来像"程序坏了"，而实际原因通常是设备
 /// 没插或者它不在 [`KNOWN_DEVICES`] 里，两者要用户做的事完全不同。
 ///
-/// **这里让用户删掉文件、重新启动，而不是"插上之后程序会自动补上"**，因为后者在这里是假话：
-/// [`refresh`] 只往已有的 `[[device]]` 里补空着的块，它不新增 Device（那条边界见
-/// `.scratch/parking-lot.md` 的 Q49；托盘里新增 Device 只能由用户在菜单里点，resident-tray 票 12）。
-/// 而这份文件此刻没有任何 Device，删掉它不损失任何东西——里面只有用户还没动过的默认值。
-///
-/// **光删掉不够，要重新启动**：托盘运行中配置文件没了，当作读不了、沿用上一份，不重新生成草稿（parking lot
-/// Q253）；草稿只在启动时没有配置文件才写。这句话怎么改的记在 parking lot Q272。
+/// **这里叫用户插好之后到托盘菜单"登记设备"里点"新建一台 Device"，而不是"插上之后程序会自动补上"**，因为后者在这里是
+/// 假话：[`refresh`] 只往已有的 `[[device]]` 里补空着的块，它不新增 Device（那条边界见 `.scratch/parking-lot.md` 的 Q49）；
+/// 新增只能由用户在菜单里点（resident-tray 票 12）。票 12 之前菜单里没有"新建一台 Device"，这一段叫人删掉文件、重新启动
+/// juicebar；怎么改成今天这样的记在 parking lot Q272。
 ///
 /// [`refresh`]: crate::config::refresh
 const NOTHING_RECOGNISED: &str = "\
 \n# 本机一台认得出来的设备都没扫到，所以这份草稿里没有任何 [[device]]，它还派不上用场。
 #
 # 可能是设备或接收器没插，也可能它根本不在程序认得的那张表里（表在
-# src/config/known_devices.rs 的 KNOWN_DEVICES）。跑 `juicebar scan` 看本机到底有哪些
-# HID collection。
+# src/config/known_devices.rs 的 KNOWN_DEVICES）。
 #
-# 插好之后**把这个文件删掉，再重新启动 juicebar**（右键托盘图标点\"退出\"，再打开它），程序会
-# 重新扫一遍、生成一份带 Device 的新草稿。（光插上不够：插上之后程序只往已有的 [[device]]
-# 里补空着的块，不会替你新增一台设备。这个文件现在没有你动过的东西，删掉不损失什么。）
+# 插好之后不必动这个文件：右键托盘图标，在\"登记设备\"里找到它，点\"新建一台 Device\"，程序会把它
+# 追加到这个文件末尾。只走蓝牙的设备（耳机之类）先在 Windows 里配对，也在那里新建。
+# （光插上不够：插上之后程序只往已有的 [[device]] 里补空着的块，不会替你新增一台设备。）
 ";
 
 /// 扫到了、但 [`KNOWN_DEVICES`] 里没有的 vendor collection，写成注释掉的骨架。
