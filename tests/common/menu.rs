@@ -172,6 +172,17 @@ pub fn submenu<'a>(menu: &'a Menu, text: &str) -> &'a [Item] {
     std::slice::from_ref(&menu.items[at])
 }
 
+/// 一级菜单里"托盘上画哪一台"那一项，连同它子菜单里的几项。
+pub fn which_device(menu: &Menu) -> (&Entry, &[Item]) {
+    let [Item::Entry(which)] = submenu(menu, "托盘上画哪一台") else {
+        panic!("「托盘上画哪一台」是一个 Entry");
+    };
+    let Kind::Submenu(choices) = &which.kind else {
+        panic!("「托盘上画哪一台」带着子菜单");
+    };
+    (which, choices)
+}
+
 /// 一级菜单里名字是 `name` 的那一行设备行（左边那段字就是名字，或者名字隔两个空格接着中段）。
 pub fn device_row<'a>(menu: &'a Menu, name: &str) -> &'a Entry {
     let with_middle = format!("{name}  ");
@@ -252,12 +263,12 @@ fn preview_text(preview: &Preview) -> String {
         preview.percent,
         preview.size.px()
     );
-    let (set, default) = (preview.settings, IconSettings::default());
+    let (settings, default) = (preview.settings, IconSettings::default());
     let overrides = [
         (
-            set.style != default.style,
+            settings.style != default.style,
             "style",
-            match set.style {
+            match settings.style {
                 Style::Number => "number",
                 Style::Battery => "battery",
                 Style::Ring => "ring",
@@ -265,36 +276,36 @@ fn preview_text(preview: &Preview) -> String {
             },
         ),
         (
-            set.glyph != default.glyph,
+            settings.glyph != default.glyph,
             "glyph",
-            match set.glyph {
+            match settings.glyph {
                 Glyph::Block => "block",
                 Glyph::Fine => "fine",
                 Glyph::System => "system",
             },
         ),
         (
-            set.full != default.full,
+            settings.full != default.full,
             "full",
-            match set.full {
+            match settings.full {
                 Full::Digits => "digits",
                 Full::Cap99 => "cap_99",
                 Full::Block => "block",
             },
         ),
         (
-            set.gray != default.gray,
+            settings.gray != default.gray,
             "gray",
-            match set.gray {
+            match settings.gray {
                 Gray::One => "one",
                 Gray::Split => "split",
                 Gray::SplitPause => "split_pause",
             },
         ),
         (
-            set.no_last_known != default.no_last_known,
+            settings.no_last_known != default.no_last_known,
             "no_last_known",
-            match set.no_last_known {
+            match settings.no_last_known {
                 NoLastKnown::Dash => "dash",
                 NoLastKnown::Question => "question",
                 NoLastKnown::Outline => "outline",
@@ -302,9 +313,9 @@ fn preview_text(preview: &Preview) -> String {
             },
         ),
         (
-            set.charging != default.charging,
+            settings.charging != default.charging,
             "charging",
-            match set.charging {
+            match settings.charging {
                 Charging::Color => "color",
                 Charging::BoltLarge => "bolt_large",
                 Charging::Bolt => "bolt",

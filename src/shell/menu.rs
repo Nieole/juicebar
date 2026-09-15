@@ -62,16 +62,19 @@ fn fill(
     commands: &mut Vec<Option<Command>>,
 ) -> windows::core::Result<()> {
     for (position, item) in (0u32..).zip(items) {
-        let Item::Entry(entry) = item else {
-            let info = MENUITEMINFOW {
-                cbSize: size_of::<MENUITEMINFOW>() as u32,
-                fMask: MIIM_FTYPE,
-                fType: MFT_SEPARATOR,
-                ..Default::default()
-            };
-            // SAFETY: 一张自己刚建的菜单，一个只有类型的分隔线。
-            unsafe { InsertMenuItemW(menu, position, true, &info)? };
-            continue;
+        let entry = match item {
+            Item::Separator => {
+                let info = MENUITEMINFOW {
+                    cbSize: size_of::<MENUITEMINFOW>() as u32,
+                    fMask: MIIM_FTYPE,
+                    fType: MFT_SEPARATOR,
+                    ..Default::default()
+                };
+                // SAFETY: 一张自己刚建的菜单，一个只有类型的分隔线。
+                unsafe { InsertMenuItemW(menu, position, true, &info)? };
+                continue;
+            }
+            Item::Entry(entry) => entry,
         };
         commands.push(entry.command.clone());
         let mut text: Vec<u16> = label(entry).encode_utf16().chain(once(0)).collect();

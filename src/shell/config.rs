@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
-use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION, HWND};
+use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION};
 
 // 草稿怎么落盘照命令行那一套（`config-refresh`），票 14 收掉命令行时一起搬过来。
 use crate::cli::config_refresh::write_draft;
@@ -123,11 +123,6 @@ impl ConfigFile {
         }
         Ok(())
     }
-
-    /// 用系统默认程序打开配置文件，与在资源管理器里双击它一样。
-    fn open_in_default_program(&self, hwnd: HWND) -> Result<()> {
-        super::open_in_default_program(hwnd, &self.path)
-    }
 }
 
 /// 文件此刻的样子；读不到它的属性（文件不在）就是 `None`。
@@ -149,7 +144,8 @@ fn is_busy(error: &anyhow::Error) -> bool {
 pub(super) fn execute(action: Action, app: &mut App) {
     match action {
         Action::OpenFile => {
-            if let Err(e) = app.config.open_in_default_program(app.hwnd) {
+            // 用系统默认程序打开，与在资源管理器里双击它一样。
+            if let Err(e) = super::open_in_default_program(app.hwnd, &app.config.path) {
                 app.log.write(&format!("{e:#}"));
             }
         }

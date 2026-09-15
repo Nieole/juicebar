@@ -109,6 +109,7 @@ impl Tray {
     pub(super) fn on_config(&mut self, event: Event, out: &mut Vec<super::Action>) {
         match event {
             Event::Reloaded(Ok(config)) => {
+                self.round.track_devices(&config);
                 self.config = config;
                 self.warnings.clear(Matter::ConfigFile);
             }

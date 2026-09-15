@@ -275,6 +275,17 @@ impl Rounds {
     pub(super) fn primary(&self) -> Option<&str> {
         self.primary.as_deref()
     }
+
+    /// 配置换了一份（重读读好了）：新登记的 Device 手上先是无已知值——状态文件只在启动时读，之后没有它可以问——好让它
+    /// 在第一次取数回来之前就在这一轮里，菜单上照样有它那一行（本票 Spec review 指出：不然从一台都没有变成有一台时，
+    /// 设备行那一块整块是空的）。已经记着的一样不动；配置里删掉的留着也无妨，合成这一轮只照配置里的名单取。
+    pub(super) fn track_devices(&mut self, config: &Config) {
+        for device in &config.devices {
+            self.in_hand
+                .entry(device.id.clone())
+                .or_insert(InHand::NoKnownValue);
+        }
+    }
 }
 
 /// 状态文件里这台 Device 的上次已知值，交成这一轮手上的东西；没有（或者已经过了 `very_stale_after`）

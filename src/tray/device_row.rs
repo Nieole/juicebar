@@ -49,12 +49,12 @@ enum Middle {
 pub(super) fn entry(state: &DeviceState<'_>, is_primary: bool, display: RowDisplay) -> Entry {
     let name = &state.device.name;
     let (text, text_placeholder) = match middle(state, display) {
-        Middle::SourceAndAge(middle) => (
-            format!("{name}  {middle}"),
+        Middle::SourceAndAge(words) => (
+            format!("{name}  {words}"),
             format!("〔设备行：{name} · 来源和多久前〕"),
         ),
-        Middle::ShortReason(middle) => (
-            format!("{name}  {middle}"),
+        Middle::ShortReason(words) => (
+            format!("{name}  {words}"),
             format!("〔设备行：{name} · 短原因〕"),
         ),
         Middle::Empty => (name.clone(), format!("〔设备行：{name}〕")),

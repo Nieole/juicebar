@@ -6,16 +6,17 @@
 mod common;
 
 use common::NOW;
-use common::menu::{Depth, assert_matches_design, baseline, canned, submenu};
+use common::menu::{Depth, assert_matches_design, baseline, canned, submenu, which_device};
 use common::tray::{
     MOUSE_AND_KEYBOARD, Screen, feed, fetched, fetched_with_warning, just_read, later, start,
     state_not_saved, state_saved,
 };
+use juicebar::config::Config;
 use juicebar::endpoints::EndpointKind;
 use juicebar::primary::PrimaryRule;
 use juicebar::round::Warning;
 use juicebar::state::LastKnown;
-use juicebar::tray::menu::{self, Command, Item, Kind, Menu};
+use juicebar::tray::menu::{self, Command, Item, Menu};
 use juicebar::tray::{Event, Tray, config};
 
 /// 一台 Device 都没登记的配置。
@@ -153,6 +154,30 @@ fn with_no_device_the_device_rows_are_one_sentence_saying_so() {
     );
 }
 
+/// 运行中往配置里加了 Device（重读读好了）：它第一次取数回来之前，一级照样有它那一行——无已知值、变灰。从一台都
+/// 没有变成有两台时，说明句换成这两行，而不是整块空着（本票 Spec review 指出）。
+#[test]
+fn a_device_added_by_reloading_the_config_has_its_row_before_its_first_fetch() {
+    let (mut tray, mut screen) = start(NO_DEVICE, &LastKnown::default(), NOW);
+
+    feed(
+        &mut tray,
+        &mut screen,
+        Event::Config(config::Event::Reloaded(Ok(Config::parse(
+            MOUSE_AND_KEYBOARD,
+        )
+        .expect("用例里的配置应当解析得动")))),
+    );
+
+    assert_eq!(
+        rows_above_the_first_separator(&tray.menu(NOW)),
+        [
+            ("Dragonfly 3 Master+".to_string(), true, None),
+            ("VGN Neon75".to_string(), true, None),
+        ]
+    );
+}
+
 /// 告警行：一条一行，写的是哪件事没办成（不带完整原因——那在日志里）；普通项、不变灰，点了交出"打开日志"。
 #[test]
 fn a_warning_row_says_what_did_not_get_done_and_opens_the_log() {
@@ -271,12 +296,7 @@ fn a_pinned_id_that_is_not_registered_is_written_as_is_and_no_choice_is_selected
     let (tray, _screen) = canned("primary = \"retired\"");
 
     let menu = tray.menu(NOW);
-    let [Item::Entry(which)] = submenu(&menu, "托盘上画哪一台") else {
-        panic!("子菜单那一项是一个 Entry");
-    };
-    let Kind::Submenu(choices) = &which.kind else {
-        panic!("「托盘上画哪一台」带着子菜单");
-    };
+    let (which, choices) = which_device(&menu);
 
     assert_eq!(which.right.as_deref(), Some("retired"));
     assert!(
@@ -293,12 +313,7 @@ fn each_which_device_choice_hands_the_kernel_the_rule_it_stands_for() {
     let (tray, _screen) = canned("primary = \"lowest\"");
 
     let menu = tray.menu(NOW);
-    let [Item::Entry(which)] = submenu(&menu, "托盘上画哪一台") else {
-        panic!("子菜单那一项是一个 Entry");
-    };
-    let Kind::Submenu(choices) = &which.kind else {
-        panic!("「托盘上画哪一台」带着子菜单");
-    };
+    let (_, choices) = which_device(&menu);
     let commands: Vec<(String, Option<Command>)> = choices
         .iter()
         .map(|item| match item {
@@ -345,9 +360,7 @@ fn pinning_a_device_redraws_the_icon_at_once_and_writes_it_back() {
         [config::Action::WritePrimary(pin_to("dragonfly3"))]
     );
     let menu = tray.menu(NOW);
-    let [Item::Entry(which)] = submenu(&menu, "托盘上画哪一台") else {
-        panic!("子菜单那一项是一个 Entry");
-    };
+    let (which, _) = which_device(&menu);
     assert_eq!(which.right.as_deref(), Some("Dragonfly 3 Master+"));
 }
 

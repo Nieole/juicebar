@@ -1357,7 +1357,9 @@ spec「画法」"不设那个菜单样式，好让圆点与预览并排（原型
 **取的路**：右列有数时写 `Level` 的 `Display`（"57%（Reported Level）"或"（Derived Level）"），与悬停提示同一句（spec 用户故事 16；
 `Level` 文档里"两个来源必须一路带到界面上"）。"有没有数可写"与图标上画不画数是同一个判断（`tray::round::level_to_show`，
 `percent_to_draw` 也走它）：电量 Unknown、陈旧到不显示百分比、没有读数，右列都写图标状态的名字（"Unknown""Stale""取数失败"
-"暂停""无已知值"，`IconState` 新加的 `Display`，`CONTEXT.md` 原词）。
+"暂停""无已知值"，`IconState` 新加的 `Display`，`CONTEXT.md` 原词）。陈旧到不显示百分比那一档手上其实有一个数，右列照样
+写"Stale"：这偏离了 spec「设备行」"手上有数（这一次的读数或上次已知值）→ 电量"的字面，与图标不画、悬停提示不写那个数一致
+（本票 Spec review 指出）。
 
 **另一条路**：右列只写"57%"，照设计稿与原型截图里的示意。站得住：右列是一列，短了一眼扫得完（spec 用户故事 11），菜单也窄；
 Reported 还是 Derived 留给悬停提示与日志。代价是不是 Primary Device 的那几台，托盘上再看不出这个数取自哪里——命令行退场
