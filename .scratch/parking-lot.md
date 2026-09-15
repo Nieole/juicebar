@@ -1441,6 +1441,21 @@ Reported 还是 Derived 留给悬停提示与日志。代价是不是 Primary De
 
 **推荐**：维持。翻案关在 `tests/tray_menu.rs`。归 `menu-as-designed` 07（名单拿空时删掉它）。
 
+### Q296 —— 退到上次已知值的那台是 Primary Device 时，悬停提示不说这一次为什么没读到
+
+**From:** resident-tray 票 06（右键菜单：设备行，切换 Primary Device）
+
+**取的路**：没动悬停提示。设备行的中段现在写这一次的短原因（Q234，`InHand::FellBack`），日志照旧记完整原因（`log_failure`）；而
+悬停提示对这一行仍只写"来自 Dongle24G（10 分钟前），已陈旧，上次已知值"，不写原因——那是 ADR-0004 当初"只显示历史值、不说
+原因"的样子。`menu-as-designed` spec「设备行」写着"完整原因照旧是今天那一句，悬停提示与日志里用它"，本票票面没有这一格。
+
+**另一条路**：悬停提示在上次已知值那一行下面再加一行完整原因（`DeviceState::reason()` 现在问得到）。站得住：spec 那句话就兑现了，
+菜单上看到短原因、停到图标上看到完整原因，是同一件事的两种长短。代价是悬停提示常被截在 127 个 UTF-16 单元（`hover::MAX_UTF16`），
+完整原因多半只剩半句；`tests/tray_hover.rs` 要加用例。
+
+**推荐**：补上，写短原因而不是完整原因（放得下，与设备行同一句），完整原因留给日志。翻案关在 `src/tray/hover.rs` 的 `device_lines`
+与 `tests/tray_hover.rs`。归 `/settle`。
+
 ## Settled
 
 <!-- 一条记录一行：编号、它本来的那一句话、分到哪一道、去了哪儿。正文在 git 里，每一趟的收口 commit 写在那一趟的小节里。 -->
