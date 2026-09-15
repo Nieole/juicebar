@@ -36,8 +36,7 @@
   （ADR-0007）。
 - 两样东西只有命令行那一行印过，成品里不再看得到：**电压**与**"未充电"**——菜单行与悬停提示不写它们
   （`src/tray/hover.rs`）。`Ble` 那一级的"多久前"从取得时刻算到此刻，不再照印 Windows 当时报的缓存年龄（托盘常驻，
-  那个数过一分钟就不对了）。"Primary Device 保持上次的选择"那句交代也随命令行走了，托盘上只剩图标照旧画上次那一台、
-  菜单那一行照旧打勾。
+  那个数过一分钟就不对了）。"Primary Device 保持上次的选择"那句交代搬进了悬停提示的末尾（parking lot Q342）。
 - 用户看得见的文字与文档不再叫人跑 `juicebar` 的子命令：`git grep -nE 'juicebar (scan|caps|probe|status|config-refresh)'`
   排掉 `docs/protocol.md` 的实测记录与 `.scratch/` 之后为零。
 - 翻案面：要一个命令行出口，得另立一个 bin（或者子命令加 `AttachConsole` 那一套），并重新决定它不提权时读不了 2.4G

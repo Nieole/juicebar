@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use crate::clock::Timestamp;
 use crate::config::{Config, Device};
 use crate::icon::{IconSettings, IconSize, IconState, Theme};
+use crate::primary::Selection;
 use crate::readout::{NoReading, RowReading};
 use crate::round::{DeviceState, InHand, Round, Warning};
 use crate::sources::level::Level;
@@ -66,6 +67,8 @@ pub struct Rounds {
     remembered: Option<String>,
     /// 这一轮的 Primary Device，选不出来是 `None`。两轮之间时钟走一格，悬停提示照这一台重排。
     primary: Option<String>,
+    /// 这一轮的 Primary Device 是保持上次的选择选出来的：两轮之间重排悬停提示时，末尾那句交代照旧写（`hover::device_text`）。
+    held_over: bool,
     /// 此刻托盘上画着的图标与悬停提示：一样的就不再发一遍（时钟每秒一格，"5 分钟前"要一分钟才变）。
     shown_icon: Option<IconRequest>,
     shown_tooltip: Option<String>,
@@ -98,6 +101,7 @@ impl Rounds {
             in_hand,
             remembered: last_known.last_primary().map(str::to_owned),
             primary: None,
+            held_over: false,
             shown_icon: None,
             shown_tooltip: None,
         };
@@ -183,7 +187,7 @@ impl Rounds {
             return;
         };
         let state = DeviceState::assess(device, in_hand, &config.general, now);
-        self.show_tooltip(hover::device_text(&state), out);
+        self.show_tooltip(hover::device_text(&state, self.held_over), out);
     }
 
     /// 合成这一轮、画出来，交出这一轮选出的 Primary Device。
@@ -214,12 +218,14 @@ impl Rounds {
         let icon = self.icon_for(config.tray.icon, round.primary_state());
         let tooltip = hover::text(&round);
         let selected = round.primary.primary_id().map(str::to_owned);
+        let held_over = matches!(round.primary, Selection::HeldOver(_));
         if self.shown_icon != Some(icon) {
             self.shown_icon = Some(icon);
             out.push(super::Action::Round(Action::DrawIcon(icon)));
         }
         self.show_tooltip(tooltip, out);
         self.primary.clone_from(&selected);
+        self.held_over = held_over;
         selected
     }
 

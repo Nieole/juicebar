@@ -19,7 +19,7 @@
 //! 认不出的取值记进日志。菜单里改的那几项同样当场生效，写回交给外壳（[`Action::WriteTray`]，`super::settings_menu`）。
 
 use crate::config::TraySetting;
-use crate::config::{Config, Fill, NewDevice, Note, refresh};
+use crate::config::{Config, Fill, NewDevice, RefreshNote, refresh};
 use crate::hid::HidInfo;
 use crate::primary::PrimaryRule;
 use crate::round::Warning;
@@ -191,7 +191,7 @@ fn draft_notice() -> Notice {
 ///
 /// 没有要补的，一声不响：不写文件（没改动却重写一遍，会白白改掉修改时间、再招来一次重读），不弹通知，不记日志
 /// ——插一次线就说一句"什么都没补"，是噪音。唯一的例外是扫描到的身份与配置里写的对不上：不改，只记一行日志
-/// （[`Note::Disagrees`]，parking lot Q273）。
+/// （[`RefreshNote::Disagrees`]，parking lot Q273）。
 ///
 /// 补不了（扫不了、读不到配置文件、配置此刻写坏了）就把完整原因记进日志，一个字节都不写：用户插上了线、却没见到
 /// 那条通知，查"为什么没补上"的人要的是这一行。
@@ -207,13 +207,11 @@ fn fill_blank_blocks(scan: Result<Scan, String>, out: &mut Vec<super::Action>) {
             return;
         }
     };
-    // 扫描到的与用户写下的对不上：一个字都不改（ADR-0003），但记一行——插上线读不到时，查"为什么"的人要的就是这一句。
-    // 不弹通知、不挂告警：插着线时每一遍扫描都成立，挂上就摘不掉（parking lot Q273）。没补上的那几句一声不响：鼠标没插线时
-    // Wired 当然不在场，每插拔一次都记一句是噪音。
+    // 只有"不一致"那一种记日志，理由在上面的文档与 `RefreshNote` 上。
     for note in refreshed
         .notes
         .iter()
-        .filter(|note| matches!(note, Note::Disagrees(_)))
+        .filter(|note| matches!(note, RefreshNote::Disagrees(_)))
     {
         out.push(super::Action::Log(format!(
             "扫描到的与配置里写的不一致 —— {note}"

@@ -18,7 +18,8 @@
 //! `dongle_24g`，因为它描述的正是 Dongle24G 这条 Endpoint。
 //!
 //! **五个文件，一个公开面。**上面那句"住在一处"说的是这个模块，不是一个文件：schema、
-//! 解析、以及全部公开面的 re-export 在这里，那张写死的实测身份表与"这台设备对上表里
+//! 解析、配置文件在哪与首次运行把草稿落盘（`default_path`、`write_draft`，碰环境与磁盘的只有这几个），
+//! 以及全部公开面的 re-export 在这里，那张写死的实测身份表与"这台设备对上表里
 //! 哪一条"的判定在 `known_devices`，草稿的生成与那批用户可见的文案在 `draft`，
 //! `toml_edit` 那套格式保留的原地编辑（自动补空块、`primary` 与 `[tray]` 的回写、登记与新建 Device）
 //! 在 `edit`，`[tray]` 表的键、取值与认不出时的处置在 `tray`。
@@ -32,7 +33,7 @@ mod known_devices;
 mod tray;
 
 pub use draft::draft;
-pub use edit::{Fill, Note, Pinned, Refreshed, pin_primary, refresh};
+pub use edit::{Fill, Pinned, RefreshNote, Refreshed, pin_primary, refresh};
 pub use edit::{NewDevice, add_device, register_ble, unregister_ble};
 pub use edit::{TrayWritten, write_tray};
 pub use known_devices::{KNOWN_DEVICES, KnownDevice, UnregisteredHid};

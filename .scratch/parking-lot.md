@@ -1763,11 +1763,11 @@ Neon75」右列「Dongle24G」，靠右列分开（Q284 的①）。两行各点
 扫不了之后可能很久不再扫，照上一遍列就挂着一份很久的旧样子。翻案关在 `src/tray/config.rs` 的 `Event::Scanned` 一支与
 `tests/tray_register.rs` 的 `a_hid_scan_that_failed_lists_no_known_hid_device`。归 `/settle`（记下即可）。
 
-### Q340 —— `refresh` 的提醒分成两种（`Note::Disagrees` / `Note::NotFilled`），不是给 `Refreshed` 多开一个字段
+### Q340 —— `refresh` 的提醒分成两种（`RefreshNote::Disagrees` / `RefreshNote::NotFilled`），不是给 `Refreshed` 多开一个字段
 
 **From:** resident-tray 票 14（命令行退场）
 
-**取的路**：Q273 照推荐做。`Refreshed::notes` 从 `Vec<String>` 变成 `Vec<Note>`，两种：扫描到的身份与所写不一致（`Disagrees`），
+**取的路**：Q273 照推荐做。`Refreshed::notes` 从 `Vec<String>` 变成 `Vec<RefreshNote>`，两种：扫描到的身份与所写不一致（`Disagrees`），
 与一块空着这一次没补上（`NotFilled`，认不出设备、地址猜不出、此刻不在场三种都是它）。托盘只把 `Disagrees` 记进日志，`NotFilled`
 一声不响；不弹通知、不挂告警。`tests/config.rs` 四条看 `notes` 的用例改成按种类断言。动到那三句用续行符折着的提醒，照编码标准展开成
 一行（输出逐字节相同）。
@@ -1792,20 +1792,22 @@ Neon75」右列「Dongle24G」，靠右列分开（Q284 的①）。两行各点
 而重复本身是线索："每插一次都说一遍"正说明那块配置一直没改对。翻案关在 `src/tray/config.rs` 的 `fill_blank_blocks` 与
 `tests/tray_config.rs` 一条用例。归 `/settle`（记下即可）。
 
-### Q342 —— `Selection::label` / `Selection::note` 随命令行删掉；"保持上次的选择"那句交代在成品里没了出口
+### Q342 —— `Selection::label` / `Selection::note` 随命令行删掉；"保持上次的选择"那句交代搬进悬停提示末尾
 
 **From:** resident-tray 票 14（命令行退场）
 
 **取的路**：两个方法只有命令行 `status` 在用（名字后面接"（Primary Device）"、末尾补一句交代），随命令行删掉，`tests/primary.rs` 里守
-它们的六条用例一起删（对照写在票 14 的 Comments 里）。托盘上"钉的 id 不在册"与"选不出来"两种由悬停提示说；**"这一轮没有一个新鲜
-且可信的读数，Primary Device 保持上次的选择"这一句托盘里没有**：图标照旧画上次那一台、菜单那一行照旧打勾，但不说为什么画的是一个
-陈旧的、读不到的它。
+它们的六条用例一起删（对照写在票 14 的 Comments 里）。三句交代里"钉的 id 不在册"与"选不出来"两句悬停提示本来就说；"保持上次的选择"
+那一句第一稿没有出口，review（Spec 轴）指出它违背票面"一条行为都不丢"，跟进时补进悬停提示：Primary Device 那几行末尾接"保持上次的
+选择：这一轮没有一个新鲜且可信的读数"，时钟走一格重排时照旧（`tests/tray_hover.rs`、`tests/tray_round.rs` 各一条）。放在末尾：悬停提示
+太长被截时，截掉的是这一句而不是那一台的读数。
 
-**另一条路**：留着 `note()`，悬停提示在 `HeldOver` 时多写一行这句交代。站得住：用户看见托盘上画着一台灰的、读不到的设备而不是另一台，
-会以为选错了；这句话原先就是为"标注落在一行陈旧的上面看着像 bug"写的。代价是悬停提示 127 个单元里再挤一行。
+**另一条路**：这一句不进悬停提示，图标照旧画上次那一台、菜单那一行照旧打勾，不说为什么。站得住：悬停提示 127 个单元里不再挤一行；
+菜单"托盘上画哪一台"的右列仍写着"自动（电量最低）"，看得出不是钉死的。
 
-**推荐**：删掉这两个方法；要不要在悬停提示里交代"保持上次的选择"是悬停提示该写什么的问题，与 Q296（悬停提示不说 fell-back 的原因）
-同形，一起交 `/settle` 或下一次审悬停提示时拍板。翻案关在 `src/tray/hover.rs` 的 `text` 与 `tests/tray_hover.rs` 一条用例。
+**推荐**：维持补上。托盘上画着一台灰的、读不到的设备而不是另一台，不说一句看着像选错了——这句话原先就是为这个写的。它与 Q296（悬停
+提示不说 fell-back 的原因）同形，审悬停提示时可以一起看。翻案关在 `src/tray/hover.rs` 的 `primary_lines`、`src/tray/round.rs` 的
+`held_over` 与那两条用例。归 `/settle`（记下即可）。
 
 ### Q343 —— 电压与"未充电"随命令行从成品里消失
 

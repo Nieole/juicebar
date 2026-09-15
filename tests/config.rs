@@ -849,7 +849,7 @@ fn config_refresh_fills_nothing_when_the_endpoint_is_absent() {
     assert!(
         refreshed.notes.iter().any(|note| matches!(
             note,
-            config::Note::NotFilled(text) if text.contains("Wired") && text.contains("不在场")
+            config::RefreshNote::NotFilled(text) if text.contains("Wired") && text.contains("不在场")
         )),
         "要说明为什么没填"
     );
@@ -971,10 +971,9 @@ driver = \"vgn_mouse\"
 
     assert_eq!(refreshed.text, before, "认不出来就什么都别写");
     assert!(
-        refreshed
-            .notes
-            .iter()
-            .any(|note| matches!(note, config::Note::NotFilled(text) if text.contains("认不出"))),
+        refreshed.notes.iter().any(
+            |note| matches!(note, config::RefreshNote::NotFilled(text) if text.contains("认不出"))
+        ),
         "但要说出来自己认不出，而不是一声不吭"
     );
 }
@@ -1098,7 +1097,7 @@ driver = \"vgn_mouse\"
     assert!(
         refreshed.notes.iter().any(|note| matches!(
             note,
-            config::Note::Disagrees(text) if text.contains("1A05") && text.contains("1005")
+            config::RefreshNote::Disagrees(text) if text.contains("1A05") && text.contains("1005")
         )),
         "提醒里要把两条身份都摆出来，否则看不出说的是哪一条：{:?}",
         refreshed.notes
@@ -1115,10 +1114,9 @@ fn config_refresh_says_nothing_about_a_configured_endpoint_that_is_merely_unplug
     assert_eq!(refreshed.text, ONE_DEVICE);
     assert!(refreshed.filled.is_empty());
     assert!(
-        refreshed
-            .notes
-            .iter()
-            .any(|note| matches!(note, config::Note::NotFilled(text) if text.contains("Wired"))),
+        refreshed.notes.iter().any(
+            |note| matches!(note, config::RefreshNote::NotFilled(text) if text.contains("Wired"))
+        ),
         "Wired 空着又不在场，这一句要有 —— 用户正等着它被补上"
     );
     assert!(

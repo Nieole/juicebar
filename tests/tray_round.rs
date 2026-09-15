@@ -139,6 +139,27 @@ fn at_startup_the_icon_shows_the_last_known_value_of_the_primary_device_on_recor
     assert_eq!(screen.icon().percent, Some(62));
 }
 
+/// 保持上次的选择时，悬停提示末尾那句交代不因为时钟走了一格就掉：两轮之间重排悬停提示（"多久前"跟着走）时照样写着它。
+#[test]
+fn a_held_over_primary_device_keeps_saying_so_as_the_clock_ticks() {
+    let taken_at = NOW.minus_secs(600);
+    let mut last_known = LastKnown::default();
+    last_known.record(
+        "dragonfly3",
+        &reading(EndpointKind::Dongle24G, 62, taken_at),
+        taken_at,
+    );
+    last_known.remember_primary("dragonfly3");
+    let (mut tray, mut screen) = start(MOUSE_AND_KEYBOARD, &last_known, NOW);
+
+    feed(&mut tray, &mut screen, Event::Tick(later(NOW, 60)));
+
+    assert_eq!(
+        screen.tooltip(),
+        "Dragonfly 3 Master+\n62%（Reported Level）\n来自 Dongle24G（11 分钟前），已陈旧，上次已知值\n保持上次的选择：这一轮没有一个新鲜且可信的读数"
+    );
+}
+
 /// 这一轮选出了 Primary Device，就记进状态文件——下次启动时"保持上次的选择"靠的就是这一格
 /// （`CONTEXT.md`「保持上次的选择」）。读到的那一份也跟着这一次写盘落下去。
 #[test]

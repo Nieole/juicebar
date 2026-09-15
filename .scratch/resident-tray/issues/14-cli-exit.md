@@ -56,7 +56,7 @@
 22. `marks_a_pinned_device_that_could_not_be_read` → `tray_device_row::the_row_of_a_pinned_device_that_could_not_be_read_is_checked`
 23. `adds_a_closing_note_when_no_device_got_the_marker` → `tray_hover::with_no_primary_device_it_says_why` + `tray_hover::a_pinned_id_that_is_not_registered_says_so`（一行都没标时，悬停提示说为什么）
 24. `adds_no_closing_note_when_the_marker_speaks_for_itself` → `tray_hover::a_fresh_reading_names_the_device_its_level_and_where_and_when_it_came_from`（选出来时只写那一台，确切字符串里没有多一句）
-25. `holds_over_the_previous_choice_when_nothing_is_trustworthy_this_round` → `tray_device_row::the_row_of_a_primary_device_held_over_is_checked` + `tray_round::once_selected_the_primary_device_is_held_over_when_nothing_can_be_trusted`
+25. `holds_over_the_previous_choice_when_nothing_is_trustworthy_this_round` → `tray_device_row::the_row_of_a_primary_device_held_over_is_checked` + `tray_round::once_selected_the_primary_device_is_held_over_when_nothing_can_be_trusted`；"交出那个 id 好记回状态文件"那一半不单独守：保持的是同一个 id，记回去等于不写（托盘只在换了人时存），而它算不算这一轮选出的，由打勾那一条守着
 26. `reports_which_device_it_chose_so_the_caller_can_remember_it` → `tray_round::a_round_that_selects_a_primary_device_remembers_it_in_the_state_file`
 27. `chooses_nothing_when_there_is_no_candidate_and_no_previous` → `tray_round::a_round_that_selects_no_primary_device_leaves_that_cell_of_the_state_file_alone` + `tray_round::a_failed_fetch_that_selects_no_primary_device_writes_nothing`
 28. `stays_silent_when_no_device_is_configured` → `tray_hover::with_no_device_registered_it_says_so_and_where_to_add_one`（一台都没有时只说这一句，不说"选不出 Primary Device"）
@@ -66,7 +66,7 @@
 
 - `primary::marks_the_primary_device_by_name`、`primary::leaves_the_other_device_names_alone` → 随 `Selection::label` 删：名字后面接"（Primary Device）"是命令行那一行的排版；托盘上是设备行打勾（`tray_device_row::the_row_of_the_primary_device_is_checked`）
 - `primary::explains_a_pinned_id_that_names_no_device`、`primary::explains_why_no_device_got_the_marker`、`primary::says_nothing_extra_when_the_marker_speaks_for_itself` → 随 `Selection::note` 删：托盘里由悬停提示说（`tray_hover::a_pinned_id_that_is_not_registered_says_so`、`tray_hover::with_no_primary_device_it_says_why`、`tray_hover::a_fresh_reading_names_the_device_its_level_and_where_and_when_it_came_from`）
-- `primary::explains_a_marker_that_comes_from_the_last_round` → 随 `Selection::note` 删；"保持上次的选择"那句交代在托盘里没有出口（parking lot Q342）
+- `primary::explains_a_marker_that_comes_from_the_last_round` → `tray_hover::a_primary_device_held_over_says_so_at_the_end` + `tray_round::a_held_over_primary_device_keeps_saying_so_as_the_clock_ticks`：那句交代搬进悬停提示末尾（review 跟进补上，parking lot Q342）
 - `config::show_unknown_ble_is_off_unless_the_config_asks_for_it` → 开关删掉；`config::a_config_that_still_has_the_removed_show_unknown_ble_key_reads_as_before` 守"写着它的旧配置照读"
 
 ### 改写的用例

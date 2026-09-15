@@ -43,7 +43,9 @@ pub fn text(round: &Round<'_>) -> String {
         return no_device();
     }
     fit(match (round.primary_state(), round.primary) {
-        (Some(state), _) => device_lines(state).join("\n"),
+        (Some(state), selection) => {
+            primary_lines(state, matches!(selection, Selection::HeldOver(_)))
+        }
         // 一次笔误，得说出来：用户以为钉住了。
         (None, Selection::PinnedNotFound(id)) => {
             format!("配置里 primary 钉的 id \"{id}\" 不在登记的 Device 里")
@@ -54,11 +56,24 @@ pub fn text(round: &Round<'_>) -> String {
     })
 }
 
-/// Primary Device 那一台的悬停提示，在它自己的"当下"判过的样子。
+/// Primary Device 那一台的悬停提示，在它自己的"当下"判过的样子。`held_over`：这一轮是保持上次的选择选出它的。
 ///
-/// 两轮之间时钟每走一格，内核拿这一台重判一次、重排一次：Primary Device 不换人，"多久前"跟着走。
-pub fn device_text(state: &DeviceState<'_>) -> String {
-    fit(device_lines(state).join("\n"))
+/// 两轮之间时钟每走一格，内核拿这一台重判一次、重排一次：Primary Device 不换人，"多久前"跟着走，末尾那句交代也照旧。
+pub fn device_text(state: &DeviceState<'_>, held_over: bool) -> String {
+    fit(primary_lines(state, held_over))
+}
+
+/// 保持上次的选择时末尾补的那一句：托盘上画着一台灰的、读不到的设备，不说为什么，看着像选错了（parking lot Q342）。
+const HELD_OVER: &str = "保持上次的选择：这一轮没有一个新鲜且可信的读数";
+
+/// Primary Device 那一台的几行；是保持上次的选择选出它的，末尾再交代一句（[`HELD_OVER`]）。放在末尾：名字、电量、来源先说，
+/// 为什么是它后说——悬停提示太长被截时，截掉的是这一句而不是那一台的读数。
+fn primary_lines(state: &DeviceState<'_>, held_over: bool) -> String {
+    let mut lines = device_lines(state);
+    if held_over {
+        lines.push(HELD_OVER.to_string());
+    }
+    lines.join("\n")
 }
 
 /// 放得进托盘的悬停提示：超出 [`MAX_UTF16`] 就截断，末尾一个省略号。按字符截，不会把一个字劈成两半。

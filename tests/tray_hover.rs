@@ -214,6 +214,21 @@ fn with_no_primary_device_it_says_why() {
     );
 }
 
+/// 这一轮没有一个新鲜且可信的读数，保持上次的选择：写上次那一台，末尾交代一句——托盘上画着一台灰的、读不到的设备，不说
+/// 为什么，看着像选错了（命令行那一行末尾原先补的就是这一句，resident-tray 票 14 迁来，parking lot Q342）。
+#[test]
+fn a_primary_device_held_over_says_so_at_the_end() {
+    let config = Config::parse(MOUSE_AND_KEYBOARD).expect("用例里的配置应当解析得动");
+    let nothing = InHand::NoKnownValue;
+    let devices = config.devices.iter().map(|device| (device, &nothing));
+    let round = Round::assess(&config.general, devices, Some("neon75"), Vec::new(), NOW);
+
+    assert_eq!(
+        hover::text(&round),
+        "VGN Neon75\n无已知值 —— 还没读到过，也没有上次已知值\n保持上次的选择：这一轮没有一个新鲜且可信的读数"
+    );
+}
+
 /// 配置钉死的那个 id 不在登记的 Device 里：一次笔误，得说出来——用户以为钉住了。
 #[test]
 fn a_pinned_id_that_is_not_registered_says_so() {

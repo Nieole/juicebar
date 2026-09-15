@@ -27,14 +27,14 @@ use crate::primary::PrimaryRule;
 ///
 /// 文本、做过的事、没做的事分成三样交出去：托盘拿做过的事弹通知、记日志，没做的事里"扫描与所写不一致"那一种也记日志。
 /// ADR-0003 划死的边界是"只补空缺，扫描结果与用户所写不一致时只提醒"——那句提醒就住在 [`Self::notes`] 里
-/// （[`Note::Disagrees`]），它是这条边界唯一的出口。
+/// （[`RefreshNote::Disagrees`]），它是这条边界唯一的出口。
 pub struct Refreshed {
     /// 补全之后的全文。什么都没补时与入参**逐字节相同**。
     pub text: String,
     /// 这一次补上了哪些块。
     pub filled: Vec<Fill>,
     /// 没补的地方、只提醒不改的地方，和为什么，一条一句人话。它不改文件，只解释。
-    pub notes: Vec<Note>,
+    pub notes: Vec<RefreshNote>,
 }
 
 /// [`refresh`] 没补、或者只提醒不改的一处：一句人话，连同它是哪一种。
@@ -42,14 +42,14 @@ pub struct Refreshed {
 /// 分种类是因为两种的去处不同（parking lot Q273）：托盘把"不一致"记进日志——配置里 Wired 写成了接收器的 pid、插上线读不到时，
 /// 查"为什么"的人要的就是这一句；"没补上"的那几句一声不响——鼠标没插线时 Wired 当然不在场，每插拔一次都记一句是噪音。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Note {
+pub enum RefreshNote {
     /// 本机此刻在场的身份与用户写下的那一条对不上。没有动它：用户写过的值一概不改。
     Disagrees(String),
     /// 一块空着、这一次没补上：认不出这是哪台设备、它的地址猜不出来，或者它此刻不在场。
     NotFilled(String),
 }
 
-impl std::fmt::Display for Note {
+impl std::fmt::Display for RefreshNote {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Disagrees(text) | Self::NotFilled(text) => f.write_str(text),
@@ -136,7 +136,7 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
                 };
                 if !same_scanned_identity(configured, identity) && is_present(identity, collections)
                 {
-                    notes.push(Note::Disagrees(format!(
+                    notes.push(RefreshNote::Disagrees(format!(
                         "{}：{kind} 你写的是 {}，而本机此刻在场的是 {}（我记下的这台设备的 {kind} 身份）。没有动它——你写过的值一概不改。",
                         device.id,
                         describe(configured),
@@ -150,7 +150,7 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
             continue;
         }
         let Some(known) = recognised else {
-            notes.push(Note::NotFilled(format!(
+            notes.push(RefreshNote::NotFilled(format!(
                 "{}：认不出这是哪台设备（它已配好的 Endpoint 身份不在程序认得的那张表里），所以猜不出它缺的 {} 该填什么，得手填。",
                 device.id,
                 missing
@@ -166,7 +166,7 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
             // Ble 的地址不在身份表里、也猜不出来，但**空着不能不声不响**——那正是这张票
             // 一直在守的"用户不该在不知情的情况下缺一整条 Endpoint"。
             let Some(identity) = known.identity(kind) else {
-                notes.push(Note::NotFilled(format!(
+                notes.push(RefreshNote::NotFilled(format!(
                     "{}：{kind} 空着，而它的地址程序猜不出来（BLE 射频是另一颗芯片，与 dongle 之间没有能缝合的字段）。{}",
                     device.id,
                     known.absent_hint(kind)
@@ -174,7 +174,7 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
                 continue;
             };
             if !is_present(identity, collections) {
-                notes.push(Note::NotFilled(format!(
+                notes.push(RefreshNote::NotFilled(format!(
                     "{}：{kind} 现在不在场（本机枚举不到 {}），没有填。{}",
                     device.id,
                     describe(identity),

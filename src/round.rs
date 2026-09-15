@@ -368,20 +368,14 @@ impl<'a> DeviceState<'a> {
     /// 就不参与 `lowest` 比较——那与一份 Unknown 的读数是两回事（`CONTEXT.md`：Unknown 也不等于
     /// 设备离线）。
     ///
-    /// **"还算不算现状"看陈旧阈值，也看来路**：上次已知值一律不算，哪怕它的取得时刻还在阈值以内——与图标状态说它
-    /// Stale 是同一个判断（[`is_stale`]）。一台刚失联的设备因此不会拿几十秒前的数去抢 `lowest`，全都不可信时"保持上次
-    /// 的选择"也才走得到（parking lot Q154、Q166）。当场读到的照陈旧阈值判。
+    /// **"还算不算现状"看陈旧阈值，也看来路**（[`effective_freshness`]）：上次已知值一律不算，哪怕它的取得时刻还在阈值以内
+    /// ——与图标状态说它 Stale 是同一张表。一台刚失联的设备因此不会拿几十秒前的数去抢 `lowest`，全都不可信时"保持上次的
+    /// 选择"也才走得到（parking lot Q154、Q166）。
     pub fn candidate(&self) -> Option<CandidateReading> {
         let (row, staleness) = self.reading()?;
-        // 对两维都穷举：加一档陈旧或者加一种来路时，编译器会把人指到这里来问一句"它参与 lowest 吗"。
-        let freshness = match (row.provenance, staleness.freshness) {
-            (Provenance::JustRead, freshness) => freshness,
-            (Provenance::LastKnown, Freshness::Fresh | Freshness::Stale) => Freshness::Stale,
-            (Provenance::LastKnown, Freshness::VeryStale) => Freshness::VeryStale,
-        };
         Some(CandidateReading {
             level: self.level()?,
-            freshness,
+            freshness: effective_freshness(row.provenance, staleness.freshness),
         })
     }
 }
@@ -412,16 +406,24 @@ fn icon_state(shown: &Shown<'_>, level_source: LevelSource, low_battery: u8) -> 
     }
 }
 
-/// 手上那份读数不能当现状了吗。
+/// 一份读数连同它的来路，在"能不能当现状"上算哪一档：当场读到的照陈旧阈值判；上次已知值一律不算新鲜，哪怕它十秒前才取
+/// 的——它有多新，和设备此刻在不在，是两件事（`CONTEXT.md`「上次已知值」）。图标状态说它 Stale（[`is_stale`]）与它不参与
+/// `lowest`（[`DeviceState::candidate`]，parking lot Q154）问的都是这一张表，只守一处。
 ///
 /// 对两维都穷举、不写通配分支，理由与悬停提示里那张陈旧标注的表（`crate::tray::hover`）相同：加一档陈旧
-/// 或者加一种来路时，编译器会把人指到这里来。那一处要把五格排成四句不同的话，这里只要一个
-/// 是非，所以两边各写一张穷举的表，不合成一个。
-fn is_stale(provenance: Provenance, freshness: Freshness) -> bool {
+/// 或者加一种来路时，编译器会把人指到这里来。那一处要把五格排成四句不同的话，这里只要一档，所以两边各写一张穷举的表，
+/// 不合成一个。
+fn effective_freshness(provenance: Provenance, freshness: Freshness) -> Freshness {
     match (provenance, freshness) {
-        (Provenance::JustRead, Freshness::Fresh) => false,
-        (Provenance::JustRead, Freshness::Stale | Freshness::VeryStale) => true,
-        // 上次已知值一律 Stale：它有多新，和设备此刻在不在，是两件事。
-        (Provenance::LastKnown, Freshness::Fresh | Freshness::Stale | Freshness::VeryStale) => true,
+        (Provenance::JustRead, Freshness::Fresh) => Freshness::Fresh,
+        (Provenance::JustRead, Freshness::Stale) => Freshness::Stale,
+        (Provenance::JustRead, Freshness::VeryStale) => Freshness::VeryStale,
+        (Provenance::LastKnown, Freshness::Fresh | Freshness::Stale) => Freshness::Stale,
+        (Provenance::LastKnown, Freshness::VeryStale) => Freshness::VeryStale,
     }
+}
+
+/// 手上那份读数不能当现状了吗（[`effective_freshness`] 不是新鲜那一档）。
+fn is_stale(provenance: Provenance, freshness: Freshness) -> bool {
+    !matches!(effective_freshness(provenance, freshness), Freshness::Fresh)
 }
