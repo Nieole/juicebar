@@ -109,6 +109,8 @@ pub enum Command {
     Primary(PrimaryRule),
     /// 退出。
     Quit,
+    /// "开机自启"：点完之后该开（`true`）还是该关（`false`），照点的那一刻勾没勾排出来（`super::launch`）。
+    Autostart(bool),
 }
 
 /// 菜单这一块的动作。
@@ -172,6 +174,7 @@ impl Tray {
         items.push(Item::Separator);
         items.push(which_device(&self.config));
         // "图标样式 ›""菜单显示 ›"（票 07）、"登记设备 ›"（票 11、12）、"开机自启"（票 13）依次排在这里。
+        items.push(self.launch.autostart_entry());
         items.push(Item::Separator);
         items.push(Item::Entry(Entry {
             command: Some(Command::OpenConfigFile),
@@ -209,6 +212,8 @@ impl Tray {
                 self.quit = true;
                 out.push(super::Action::Menu(Action::Quit));
             }
+            // 建、删计划任务是外壳的事；勾不勾以系统为准，外壳下一次弹出菜单之前再问（`super::launch`）。
+            Command::Autostart(on) => super::launch::on_autostart_clicked(on, out),
         }
     }
 }
