@@ -5,7 +5,7 @@
 （票 02）。命令行那一层的排版用例迁到内核那一层：断言对象从命令行那几行字，换成菜单行与悬停提示，
 **一条行为都不丢**。README 的"用法"整节重写。
 
-**Blocked by:** 02、06、09、10
+**Blocked by:** 02、06、09、10、11（抄 MAC 那几句提示由 11 改成指向"登记设备"，本票的 grep 才归得了零）
 
 **Status:** ready-for-agent
 
@@ -16,6 +16,9 @@
 - [ ] README："用法"重写（双击就是托盘；手动启动弹 UAC；开机自启在菜单里；诊断工具的示例程序跑法）；
       "支持的设备"与"状态"跟着改
 - [ ] `docs/gaps.md` 里凡是说"`status` 那一行"的，改成说菜单那一行
+- [ ] 仓库里用户看得见的文字与文档不再叫人跑命令行：`git grep -nE 'juicebar (scan|caps|probe|status|config-refresh)'`
+      排掉 `docs/protocol.md` 那几条实测记录与 `.scratch/` 之后归零（parking lot Q131、Q275，队列提出、用户未
+      反对的默认安排）
 - [ ] 删掉配置项 `show_unknown_ble`（用户 2026-09-15 定，parking lot Q286）：它只剩命令行 `status` 在用，随命令行
       一起走；`config.example.toml`、草稿与相关用例跟着改
 - [ ] **写一条 ADR**：成品不带命令行，诊断工具只留在示例程序里；备选"两个 exe"被否的理由照 spec

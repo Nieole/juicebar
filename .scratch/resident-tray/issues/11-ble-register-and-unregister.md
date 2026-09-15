@@ -17,5 +17,9 @@
       本票落地时，这个子菜单还缺"新建一台 Device"
 - [ ] 一级菜单不列未登记的蓝牙设备：它们的去处就是"登记设备 ›"（`show_unknown_ble` 去掉，用户 2026-09-15 定，
       parking lot Q286；配置项本身随票 14 删）
+- [ ] 叫用户去"跑 `juicebar scan` 抄地址"的那几句提示，改成指向"登记设备 ›"（parking lot Q131，队列 2026-09-10
+      提出、用户未反对的默认安排）：出处是 `src/config/draft.rs` 里 Ble 占位那几句、`src/config/known_devices.rs`
+      里 Ble 的补救说明、`src/endpoints.rs` 里"跑 `juicebar scan` 看本机有哪些"；`tests/config.rs` 里断言
+      "juicebar scan" 的那两条跟着改成断言新说法
 - [ ] 手工验收：把 Neon75 的蓝牙地址登记到键盘那台，托盘菜单里它开始有来自 Ble 的读数（带"多久前"）
 - [ ] gate 三条全绿
