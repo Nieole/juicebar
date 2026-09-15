@@ -8,9 +8,9 @@
 //! 要真去枚举本机的 HID collection 和 BLE 设备，那正是这条接缝存在的理由，不测。
 //!
 //! **这个文件断言的是取数交出来的那份原料**：读到了哪一条 Endpoint、失败那个枚举说的是
-//! 哪一句、历史值退不退得到、以及那几条 Endpoint 到底有没有被打开。原料再往后怎么排成
-//! 一行在 `tests/status.rs`——凡是要看排好版的那一行的用例都留在那边，暂停那几条里断言
-//! 末尾标注的也一样。
+//! 哪一句、历史值退不退得到、以及那几条 Endpoint 到底有没有被打开。原料再往后怎么写成
+//! 悬停提示与菜单那一行在 `tests/tray_hover.rs` 与 `tests/tray_device_row.rs`——凡是要看写好的那一行的用例都在那边，
+//! 暂停那几条里断言末尾标注的也一样。
 
 mod common;
 
@@ -361,6 +361,9 @@ fn reads_the_ble_cache_even_when_the_driver_is_not_implemented() {
 ///
 /// 这一种的标记**照旧是"读不到"，一个字没改**（它被打磨过两轮）：一条通路都没枚举到，
 /// 我们确实什么都没读到，这句话在这里是实话。
+///
+/// 它把人指到托盘菜单"登记设备"里去看本机扫到了什么——那是成品里唯一看得到本机有哪些设备的地方；命令行退场之后，
+/// 这句话不再叫人跑一条已经没有的子命令（resident-tray 票 14）。它是悬停提示与日志里的完整原因，用户看得见。
 #[test]
 fn says_no_endpoint_is_present_rather_than_that_reading_failed() {
     let endpoints = FakeEndpoints::new(MOUSE_REPORT_ID, []);
@@ -375,6 +378,10 @@ fn says_no_endpoint_is_present_rather_than_that_reading_failed() {
     );
     assert!(error.contains("不在场"), "一条都没枚举到时的说法：{error}");
     assert!(error.contains("Wired") && error.contains("Dongle24G"));
+    assert!(
+        error.ends_with("（设备没插？蓝牙没配对？到\"登记设备\"里看看本机扫到了什么）"),
+        "指到菜单里看得到本机设备的那一处：{error}"
+    );
 }
 
 /// 一条 Endpoint 都没配的那个 Device：话说到"你什么都没配"为止，**不去替它猜设备没插**。
@@ -429,7 +436,7 @@ fn lists_the_ble_endpoint_among_the_ones_this_device_configured() {
 /// 失联的 Device **仍然拿得出上次已知值**，重启不等于失忆。
 ///
 /// 票面第 2 条的前一半（后一半"标注成陈旧"在下面那条）。这是这张票的由来：鼠标收进抽屉、
-/// 键盘关了机，这一次取数一条 Endpoint 都读不到，而 `status` 刚启动内存里什么都没有——那个
+/// 键盘关了机，这一次取数一条 Endpoint 都读不到，而托盘刚启动内存里什么都没有——那个
 /// "上次是多少电"只可能来自状态文件。
 #[test]
 fn a_lost_device_still_shows_its_last_known_value() {
@@ -650,7 +657,7 @@ fn falling_back_to_the_last_known_value_does_not_extend_its_life() {
 /// 合理性校验不过时，那一行说"读取异常"，**一个百分比都不给**。
 ///
 /// 帧完整、cmd 回显也对，只是里头的电压物理上不可能——固件漂移就是这个形状。这时
-/// 拿那串字节按老下标算出来的任何数字都是编的，所以 `status` 交出去的是原因而不是数。
+/// 拿那串字节按老下标算出来的任何数字都是编的，所以取数交出去的是原因而不是数。
 ///
 /// **守的就是最终印在屏幕上那一行**：`NoReading` 的 `Display` 印出去的正是 Device 名字
 /// 之后的全部内容，`run()` 那一头只剩一句 `println!`。所以"这一行不再声称都没读到"在这里

@@ -80,11 +80,11 @@ impl EndpointKind {
     /// 这条 Endpoint 在 TOML 里的块名，即 `[device.<这个>]`。
     ///
     /// 与 [`Self::hid_config_in`] / [`Self::is_configured_in`] 是同一份知识的两面——一个
-    /// 按名字取出来，一个把名字写回去（自举草稿和 `config-refresh` 要写），所以住在一起。
+    /// 按名字取出来，一个把名字写回去（自举草稿和自动补空块要写），所以住在一起。
     /// `Display` 印的是 `CONTEXT.md` 的词（`Dongle24G`），给人看；这里印的是配置里的键
     /// （`wireless_24g`），给文件看，两者不可混用。
     ///
-    /// `Ble` 也有块名，尽管 `config-refresh` 从不写它（地址猜不出来）：块名是这条
+    /// `Ble` 也有块名，尽管自动补空块从不写它（地址猜不出来）：块名是这条
     /// Endpoint 的固有属性，不因为谁写不写它而改变。
     pub fn config_key(self) -> &'static str {
         match self {
@@ -110,7 +110,7 @@ impl EndpointKind {
 }
 
 impl std::fmt::Display for EndpointKind {
-    /// 用 `CONTEXT.md` 的词，原样。这几个字会出现在 `status` 的每一行上。
+    /// 用 `CONTEXT.md` 的词，原样。这几个字会出现在菜单那一行与悬停提示上。
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Wired => "Wired",
@@ -271,18 +271,9 @@ impl SystemEndpoints {
         Ok(Self {
             collections: hid::enumerate()?,
             // 蓝牙枚举失败**不该拖累两条 HID**：那时该表现为"Ble 这一级不在场"，
-            // 而不是整个 status 一行都印不出来。没有蓝牙硬件的机器是常态。
+            // 而不是连两条 HID 也一起取不了数。没有蓝牙硬件的机器是常态。
             ble: bluetooth::enumerate().unwrap_or_default(),
         })
-    }
-
-    /// 这一次枚举扫到的全部带电量的 BLE 设备。
-    ///
-    /// `status` 要用它列出**未登记**的那些（`show_unknown_ble`）。给出快照而不是让它
-    /// 自己再扫一遍：同一次输出里的两处说法该来自同一次枚举，否则"未登记"那一段和
-    /// 上面每一行可能在讲两个不同时刻的本机。
-    pub fn scanned_ble(&self) -> &[BleBattery] {
-        &self.ble
     }
 
     /// 本机扫到的设备里地址对得上的那一台。

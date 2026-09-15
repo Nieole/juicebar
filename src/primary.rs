@@ -115,51 +115,6 @@ impl<'a> Selection<'a> {
             Self::PinnedNotFound(_) | Self::Undecided => None,
         }
     }
-
-    /// 一个 Device 那一行开头印的名字：Primary Device 后面多一句它的名分，别的原样。
-    ///
-    /// 标注**印在 Device 名字这一格、不进 `cli::status::render`**：那个函数排版的是一份
-    /// Reading，而**一台失联的 Device 照样可以是 Primary Device**（钉死的那一种，或者
-    /// 保持上次的选择），那一行根本没有 Reading 可排（见 parking lot Q44）。
-    ///
-    /// 措辞是 `CONTEXT.md` 的 **Primary Device**，原样——那一条的 _Avoid_ 正是
-    /// 「主设备、默认设备、当前设备混用」。它与产生它的规则住在同一个文件里，
-    /// 理由与 [`Level`] 的 `Display` 同一条。
-    ///
-    /// 收 `id` 与 `name` 两个 `&str` 而不是一个 `&Device`：这一步只用得到这两样，
-    /// 收整个结构会让这个模块反过来依赖 `crate::config`（而 `config` 已经为了 `primary`
-    /// 那个字段依赖了这里）。
-    pub fn label(&self, id: &str, name: &str) -> String {
-        if self.primary_id() == Some(id) {
-            format!("{name}（Primary Device）")
-        } else {
-            name.to_string()
-        }
-    }
-
-    /// 这一轮还要额外对用户说的一句话，没有就是 `None`。
-    ///
-    /// 三种情形要说话，它们都有一个共同点：**光看那几行看不出发生了什么**。
-    /// 正常选出来的两种（[`Self::Lowest`]、[`Self::Pinned`]）不说——那一行上的标注
-    /// 已经把话说完了，再补一句只是噪音。
-    pub fn note(&self) -> Option<String> {
-        match self {
-            Self::Pinned(_) | Self::Lowest(_) => None,
-            // 标注这时落在一行"已陈旧"、Unknown 或者"读不到"上。不说一句，它看着像 bug。
-            Self::HeldOver(_) => Some(
-                "（这一轮没有一个新鲜且可信的读数，Primary Device 保持上次的选择）".to_string(),
-            ),
-            // 一行都没标，而原因是配置写错了——这是最要紧的一句：用户以为钉住了。
-            Self::PinnedNotFound(id) => Some(format!(
-                "（配置里 primary 钉的 id \"{id}\" 不在登记的 Device 里，所以一行都没标）"
-            )),
-            // 一行都没标，而原因是这一轮真的没有可信的读数。
-            Self::Undecided => Some(
-                "（这一轮选不出 Primary Device：没有一个新鲜且可信的读数，也没有上次的选择）"
-                    .to_string(),
-            ),
-        }
-    }
 }
 
 /// 这一轮的 Primary Device。纯函数。
@@ -175,8 +130,8 @@ impl<'a> Selection<'a> {
 /// [`Freshness::Fresh`]（`crate::staleness`），可信是 [`Level`] 不是
 /// [`Unknown`](Level::Unknown)（`crate::sources::level`）。
 ///
-/// `previous` 是**上次选出来的是谁**，`None` = 没有上次。`status` 传的恒是 `None`：它是
-/// 一次性命令，手上没有"上次"。那份记忆的家见 parking lot Q41。
+/// `previous` 是**上次选出来的是谁**，`None` = 没有上次。托盘启动时它来自状态文件，之后是上一轮选出的那一台
+/// （`crate::tray::round`）；那份记忆的家见 parking lot Q41。
 pub fn select<'a>(
     rule: &'a PrimaryRule,
     candidates: &[Candidate<'a>],

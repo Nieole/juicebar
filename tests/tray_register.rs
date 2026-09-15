@@ -631,3 +631,25 @@ fn register_entry(menu: &Menu) -> &Entry {
     };
     register
 }
+
+/// 配置里一台 Device 都没有：本机扫到的每一台带电量的蓝牙设备都是未登记的，都列出来——接新设备、首次运行一台都没插，正是
+/// 最需要这份名单的时候。
+#[test]
+fn with_no_device_registered_every_scanned_ble_device_is_listed() {
+    let (mut tray, mut screen) = start("", &LastKnown::default(), NOW);
+    feed(
+        &mut tray,
+        &mut screen,
+        scanned(vec![
+            found("Dragonfly 3 Master+", "e452430072a9", Some(62)),
+            found("某个耳机", "aabbccddeeff", Some(80)),
+        ]),
+    );
+
+    let menu = tray.menu(NOW);
+
+    assert_eq!(
+        texts(register_entry(&menu)),
+        ["Dragonfly 3 Master+", "某个耳机"]
+    );
+}

@@ -16,9 +16,7 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION};
 
-// 草稿怎么落盘照命令行那一套（`config-refresh`），票 14 收掉命令行时一起搬过来。
-use crate::cli::config_refresh::write_draft;
-use crate::config::{Config, TraySetting, pin_primary, write_tray};
+use crate::config::{Config, TraySetting, pin_primary, write_draft, write_tray};
 use crate::config::{NewDevice, add_device, register_ble, unregister_ble};
 use crate::hid::HidInfo;
 use crate::primary::PrimaryRule;

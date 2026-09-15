@@ -19,7 +19,7 @@
 //! 认不出的取值记进日志。菜单里改的那几项同样当场生效，写回交给外壳（[`Action::WriteTray`]，`super::settings_menu`）。
 
 use crate::config::TraySetting;
-use crate::config::{Config, Fill, NewDevice, refresh};
+use crate::config::{Config, Fill, NewDevice, RefreshNote, refresh};
 use crate::hid::HidInfo;
 use crate::primary::PrimaryRule;
 use crate::round::Warning;
@@ -190,7 +190,8 @@ fn draft_notice() -> Notice {
 /// 通知说补了哪台的哪条。
 ///
 /// 没有要补的，一声不响：不写文件（没改动却重写一遍，会白白改掉修改时间、再招来一次重读），不弹通知，不记日志
-/// ——插一次线就说一句"什么都没补"，是噪音。
+/// ——插一次线就说一句"什么都没补"，是噪音。唯一的例外是扫描到的身份与配置里写的对不上：不改，只记一行日志
+/// （[`RefreshNote::Disagrees`]，parking lot Q273）。
 ///
 /// 补不了（扫不了、读不到配置文件、配置此刻写坏了）就把完整原因记进日志，一个字节都不写：用户插上了线、却没见到
 /// 那条通知，查"为什么没补上"的人要的是这一行。
@@ -206,6 +207,16 @@ fn fill_blank_blocks(scan: Result<Scan, String>, out: &mut Vec<super::Action>) {
             return;
         }
     };
+    // 只有"不一致"那一种记日志，理由在上面的文档与 `RefreshNote` 上。
+    for note in refreshed
+        .notes
+        .iter()
+        .filter(|note| matches!(note, RefreshNote::Disagrees(_)))
+    {
+        out.push(super::Action::Log(format!(
+            "扫描到的与配置里写的不一致 —— {note}"
+        )));
+    }
     if refreshed.filled.is_empty() {
         return;
     }

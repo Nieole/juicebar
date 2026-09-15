@@ -115,15 +115,20 @@ fn a_look_that_did_not_change_redraws_nothing() {
 /// —— Stale（上次已知值一律如此），数字照画。那不是无已知值：`CONTEXT.md` 的无已知值是"也没有上次
 /// 已知值"。
 ///
-/// 十分钟前的读数过了 Dongle24G 的陈旧阈值（3 × 60 秒），参与不了 `lowest`；于是这一轮保持上次的选择，
-/// 而"上次"只能来自状态文件。
+/// 两台的上次已知值都才半分钟，另一台的还更低：上次已知值不参与 `lowest`（parking lot Q154），哪怕它还在陈旧阈值以内；
+/// 于是这一轮保持上次的选择，而"上次"只能来自状态文件。
 #[test]
 fn at_startup_the_icon_shows_the_last_known_value_of_the_primary_device_on_record() {
-    let taken_at = NOW.minus_secs(600);
+    let taken_at = NOW.minus_secs(30);
     let mut last_known = LastKnown::default();
     last_known.record(
         "dragonfly3",
         &reading(EndpointKind::Dongle24G, 62, taken_at),
+        taken_at,
+    );
+    last_known.record(
+        "neon75",
+        &reading(EndpointKind::Ble, 40, taken_at),
         taken_at,
     );
     last_known.remember_primary("dragonfly3");
@@ -132,6 +137,27 @@ fn at_startup_the_icon_shows_the_last_known_value_of_the_primary_device_on_recor
 
     assert_eq!(screen.icon().state, IconState::Stale);
     assert_eq!(screen.icon().percent, Some(62));
+}
+
+/// 保持上次的选择时，悬停提示末尾那句交代不因为时钟走了一格就掉：两轮之间重排悬停提示（"多久前"跟着走）时照样写着它。
+#[test]
+fn a_held_over_primary_device_keeps_saying_so_as_the_clock_ticks() {
+    let taken_at = NOW.minus_secs(600);
+    let mut last_known = LastKnown::default();
+    last_known.record(
+        "dragonfly3",
+        &reading(EndpointKind::Dongle24G, 62, taken_at),
+        taken_at,
+    );
+    last_known.remember_primary("dragonfly3");
+    let (mut tray, mut screen) = start(MOUSE_AND_KEYBOARD, &last_known, NOW);
+
+    feed(&mut tray, &mut screen, Event::Tick(later(NOW, 60)));
+
+    assert_eq!(
+        screen.tooltip(),
+        "Dragonfly 3 Master+\n62%（Reported Level）\n来自 Dongle24G（11 分钟前），已陈旧，上次已知值\n保持上次的选择：这一轮没有一个新鲜且可信的读数"
+    );
 }
 
 /// 这一轮选出了 Primary Device，就记进状态文件——下次启动时"保持上次的选择"靠的就是这一格
@@ -197,8 +223,10 @@ fn a_failed_fetch_that_selects_no_primary_device_writes_nothing() {
     assert_eq!(screen.saves, []);
 }
 
-/// 选出过一台之后，这一轮什么可信的都没有，就保持上次的选择：图标照旧画那一台——此刻它取数失败。
-/// 要是"选出了谁"没被记下来，这一轮就选不出来，图标会掉成无已知值。
+/// 选出过一台之后，这一轮什么可信的都没有，就保持上次的选择：图标照旧画那一台的上次已知值。
+///
+/// 真实的形状（parking lot Q166）：两台都刚失联，各自退到半分钟前的上次已知值，另一台的还更低。上次已知值不参与 `lowest`
+/// （Q154），所以抢不走；要是"选出了谁"没被记下来，这一轮就选不出来，图标会掉成无已知值。
 #[test]
 fn once_selected_the_primary_device_is_held_over_when_nothing_can_be_trusted() {
     let (mut tray, mut screen) = start(MOUSE_AND_KEYBOARD, &LastKnown::default(), NOW);
@@ -212,13 +240,34 @@ fn once_selected_the_primary_device_is_held_over_when_nothing_can_be_trusted() {
         ),
     );
 
+    let lost = later(NOW, 30);
     feed(
         &mut tray,
         &mut screen,
-        fetched("dragonfly3", NOW, failed("读不到 —— 用例里的原因")),
+        fell_back(
+            "dragonfly3",
+            lost,
+            last_known_value(EndpointKind::Dongle24G, 62, NOW),
+            "读不到 —— 用例里的原因",
+        ),
+    );
+    feed(
+        &mut tray,
+        &mut screen,
+        fell_back(
+            "neon75",
+            lost,
+            last_known_value(EndpointKind::Ble, 40, NOW),
+            "读不到 —— 用例里的原因",
+        ),
     );
 
-    assert_eq!(screen.icon().state, IconState::FetchFailed);
+    assert_eq!(screen.icon().state, IconState::Stale);
+    assert_eq!(
+        screen.icon().percent,
+        Some(62),
+        "上次选的那一台，不是更低的那一台"
+    );
 }
 
 /// 每一次取数失败都把完整原因写进日志：图标上只有一个"!"，悬停提示也放不下整句，而查"为什么读不到"
@@ -269,8 +318,8 @@ fn a_fetch_that_falls_back_to_the_last_known_value_still_logs_why_it_did_not_rea
 }
 
 /// 陈旧到只该说日期的那一档（只有 `Ble` 到得了：Windows 那份缓存超过了 `very_stale_after`）：图标
-/// 照样按 Stale 画，但不画数字——十天前的一个 62 画在托盘上，就是一句假话（命令行那一行在这一档
-/// 同样只印日期）。键盘钉成了 Primary Device，好让这一份一定画在图标上。
+/// 照样按 Stale 画，但不画数字——十天前的一个 62 画在托盘上，就是一句假话（悬停提示与菜单那一行在这一档
+/// 同样只写日期）。键盘钉成了 Primary Device，好让这一份一定画在图标上。
 #[test]
 fn a_reading_too_stale_to_show_its_percentage_draws_no_digits() {
     let config = format!("[general]\nprimary = \"neon75\"\n{MOUSE_AND_KEYBOARD}");

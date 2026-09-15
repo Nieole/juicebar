@@ -1,4 +1,4 @@
-//! 配置文件这一头：解析（连同 `[tray]` 表）、自举草稿、`config-refresh` 的补全、`primary` 与 `[tray]` 的回写。
+//! 配置文件这一头：解析（连同 `[tray]` 表）、自举草稿、自动补空块、`primary` 与 `[tray]` 的回写。
 //!
 //! 这几样东西各住一个文件（`src/config/`），而公开面仍然是一处，所以用例也在同一个文件里。
 
@@ -258,7 +258,7 @@ fn reads_the_level_source_of_each_device_and_defaults_to_auto() {
 #[test]
 fn refuses_a_level_source_it_does_not_recognise() {
     // `{:#}` 而不是 `to_string()`：外层那句 context 只说"配置解析失败"，真正指出哪一项
-    // 不认得的是错误链里面那一截，而 `status` 印给用户的也正是 `{e:#}`。
+    // 不认得的是错误链里面那一截，而托盘起不来时说给用户的也正是 `{e:#}`。
     let error = format!(
         "{:#}",
         Config::parse(
@@ -358,21 +358,24 @@ fn recognizes_a_bluetooth_address_written_with_separators_or_capitals() {
     assert!(!bluetooth.matches("f4ee2553b27e"));
 }
 
-/// `show_unknown_ble` 缺省是关的：本机扫得到的 BLE 设备里，多数跟键鼠无关
-/// （耳机、手机、手环），默认全列出来只会把两行有用的埋掉。
+/// 删掉的 `show_unknown_ble`（未登记的蓝牙设备的去处是菜单"登记设备"，用户 2026-09-15 定，parking lot Q286）还写在用户
+/// 真在用的配置里：那份配置照样读得动，同一节里别的键照读——`[general]` 里认不出的键静默忽略，不让整份配置读不动。
 #[test]
-fn show_unknown_ble_is_off_unless_the_config_asks_for_it() {
-    let without_general = Config::parse(ONE_DEVICE).unwrap();
-    assert!(!without_general.general.show_unknown_ble);
+fn a_config_that_still_has_the_removed_show_unknown_ble_key_reads_as_before() {
+    for written in ["false", "true"] {
+        let config = Config::parse(&format!(
+            "[general]\nprimary = \"lowest\"\nshow_unknown_ble = {written}\nlow_battery = 15\n\n\
+             [[device]]\nid = \"dragonfly3\"\nname = \"Dragonfly 3 Master+\"\ndriver = \"vgn_mouse\"\n"
+        ))
+        .unwrap_or_else(|e| panic!("写着 show_unknown_ble = {written} 的旧配置该照样读得动：{e:#}"));
 
-    let asked_for = Config::parse(
-        r#"
-        [general]
-        show_unknown_ble = true
-        "#,
-    )
-    .unwrap();
-    assert!(asked_for.general.show_unknown_ble);
+        assert_eq!(config.general.low_battery, 15, "同一节里别的键照读");
+        assert_eq!(
+            config.general.poll_interval_wired, 30,
+            "没写的键照旧取缺省值"
+        );
+        assert_eq!(config.devices.len(), 1);
+    }
 }
 
 // ---------------------------------------------------------------
@@ -652,13 +655,19 @@ fn the_draft_says_so_when_nothing_was_found() {
     );
     assert!(!text.contains("重新启动"), "不再叫人删掉文件重来：{text}");
     assert!(
-        !text.contains("config-refresh") && !text.contains("juicebar scan"),
+        !text.contains("config-refresh"),
         "不再叫人去跑命令行：{text}"
+    );
+    assert!(
+        !["status", "config-refresh", "scan", "caps", "probe"]
+            .iter()
+            .any(|command| text.contains(&format!("juicebar {command}"))),
+        "成品没有命令行，不叫人跑 juicebar 的任何一条子命令：{text}"
     );
 }
 
 // ---------------------------------------------------------------
-// config-refresh：只填空缺
+// 自动补空块：只填空缺（`config::refresh`）
 // ---------------------------------------------------------------
 
 /// 插好线之后跑一次，空着的 `[device.wired]` 就被填上真身份——用户不必手抄 VID/PID。
@@ -838,24 +847,24 @@ fn config_refresh_fills_nothing_when_the_endpoint_is_absent() {
     );
     assert!(refreshed.filled.is_empty());
     assert!(
-        refreshed
-            .notes
-            .iter()
-            .any(|note| note.contains("Wired") && note.contains("不在场")),
+        refreshed.notes.iter().any(|note| matches!(
+            note,
+            config::RefreshNote::NotFilled(text) if text.contains("Wired") && text.contains("不在场")
+        )),
         "要说明为什么没填"
     );
     assert!(
         refreshed
             .notes
             .iter()
-            .any(|note| note.contains("插上 USB 线")),
+            .any(|note| note.to_string().contains("插上 USB 线")),
         "还要说清楚怎么才能让它出现"
     );
 }
 
 /// 键盘那条最麻烦的 Endpoint 也要补得上：它的 vendor collection 实测是 `in:0 out:0 feat:65`
 /// ——一条**发不出输出报文**的通路。取数那一步按"能发输出报文"筛通路，而往配置里写一条身份
-/// 不该受那道筛子约束，否则最需要 `config-refresh` 的那一条永远补不上。
+/// 不该受那道筛子约束，否则最需要自动补空块的那一条永远补不上。
 #[test]
 fn config_refresh_fills_a_feature_only_endpoint_too() {
     let before = "\
@@ -962,7 +971,9 @@ driver = \"vgn_mouse\"
 
     assert_eq!(refreshed.text, before, "认不出来就什么都别写");
     assert!(
-        refreshed.notes.iter().any(|note| note.contains("认不出")),
+        refreshed.notes.iter().any(
+            |note| matches!(note, config::RefreshNote::NotFilled(text) if text.contains("认不出"))
+        ),
         "但要说出来自己认不出，而不是一声不吭"
     );
 }
@@ -1052,11 +1063,11 @@ fn general_settings(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// ADR-0003 的另外半句："扫描结果与用户所写不一致时只在命令行提醒"。
+/// ADR-0003 的另外半句："扫描结果与用户所写不一致时只提醒"（托盘把这一种记进日志，parking lot Q273）。
 ///
 /// 不一致长这个样子：用户把 dongle 的 `0x1A05` 写进了 `[device.wired]`，而本机此刻在场的
 /// 有线本体是 `0x1005`——两个 pid 只差一个字符，正是最容易写混的那一处。程序提醒，
-/// 但一个字都不改。
+/// 但一个字都不改。提醒是"不一致"那一种，不与"没补上"的几句混在一起。
 #[test]
 fn config_refresh_only_warns_when_the_scan_disagrees_with_what_the_user_wrote() {
     let before = "\
@@ -1084,10 +1095,10 @@ driver = \"vgn_mouse\"
     assert_eq!(refreshed.text, before, "不一致只提醒，不动文件");
     assert!(refreshed.filled.is_empty(), "两块都写过了，没有空缺可补");
     assert!(
-        refreshed
-            .notes
-            .iter()
-            .any(|note| note.contains("1A05") && note.contains("1005")),
+        refreshed.notes.iter().any(|note| matches!(
+            note,
+            config::RefreshNote::Disagrees(text) if text.contains("1A05") && text.contains("1005")
+        )),
         "提醒里要把两条身份都摆出来，否则看不出说的是哪一条：{:?}",
         refreshed.notes
     );
@@ -1103,14 +1114,16 @@ fn config_refresh_says_nothing_about_a_configured_endpoint_that_is_merely_unplug
     assert_eq!(refreshed.text, ONE_DEVICE);
     assert!(refreshed.filled.is_empty());
     assert!(
-        refreshed.notes.iter().any(|note| note.contains("Wired")),
+        refreshed.notes.iter().any(
+            |note| matches!(note, config::RefreshNote::NotFilled(text) if text.contains("Wired"))
+        ),
         "Wired 空着又不在场，这一句要有 —— 用户正等着它被补上"
     );
     assert!(
         !refreshed
             .notes
             .iter()
-            .any(|note| note.contains("Dongle24G")),
+            .any(|note| note.to_string().contains("Dongle24G")),
         "写过的块只是没插着，没什么可说的：{:?}",
         refreshed.notes
     );
@@ -1193,7 +1206,7 @@ fn falls_back_to_the_documented_intervals_when_general_is_absent() {
 
 /// `[general]` 里只写了一项的时候，其余各项仍取各自的缺省值。
 ///
-/// 逐字段的缺省而不是整节的缺省：用户为了打开 `show_unknown_ble` 写一行
+/// 逐字段的缺省而不是整节的缺省：用户为了调一个 `stale_after` 写一行
 /// `[general]`，不该因此把三个轮询间隔全归零。
 #[test]
 fn a_partial_general_section_keeps_the_other_defaults() {
@@ -1321,7 +1334,7 @@ fn primary_writeback_pins_the_device_the_user_chose() {
 }
 
 /// 已经钉在这一台上时**一个字节都不写**。原地编辑本身是保格式的，但"没改动却重写一遍文件"
-/// 会白白改掉文件的修改时间，也让人以为程序动过它——`config-refresh` 守的是同一条。
+/// 会白白改掉文件的修改时间，也让人以为程序动过它——自动补空块守的是同一条。
 #[test]
 fn primary_writeback_writes_nothing_when_it_is_already_that_device() {
     let once = config::pin_primary(HANDWRITTEN_CONFIG, &pin_to("neon75")).unwrap();
@@ -1427,7 +1440,7 @@ fn primary_writeback_creates_the_general_section_when_the_config_has_none() {
 }
 
 /// 不在册的 id **一个字节都不写**。写下去的话，下一次启动 `primary::select` 交回的是
-/// `PinnedNotFound`：一行都没标，命令行上多一句"配置里 primary 钉的 id 不在登记的 Device
+/// `PinnedNotFound`：托盘上一台都不画，悬停提示说"配置里 primary 钉的 id 不在登记的 Device
 /// 里"。让程序自己写出那种配置，等于替用户造一个他没犯的错——而菜单只可能把在册的设备列出来，
 /// 所以这里收到一个不在册的 id 是**调用方的 bug**，该当场说出来。
 #[test]

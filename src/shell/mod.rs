@@ -41,9 +41,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
-use crate::cli::{default_config_path, state_path_beside_config};
 use crate::clock::{Clock, SystemClock};
-use crate::state::LastKnown;
+use crate::state::{LastKnown, path_beside_config};
 use crate::tray::{Action, Event, Tray};
 
 /// 托盘图标的回调消息：鼠标在图标上做了什么，在 `lParam` 里。
@@ -85,10 +84,9 @@ pub fn run() -> Result<()> {
     };
     // 开机自启那个计划任务走 COM，都在这个线程上（`scheduled_task.rs`）；活到这个函数返回。
     let _com = scheduled_task::Com::init();
-    // 配置与状态文件的位置照命令行那一套（`crate::cli`），票 14 收掉命令行时一起搬过来。
-    let config_path = default_config_path()?;
+    let config_path = crate::config::default_path()?;
     let mut log = log::LogFile::beside(&config_path);
-    let state_path = state_path_beside_config(&config_path);
+    let state_path = path_beside_config(&config_path);
     let (config_file, config, first_run) = config::ConfigFile::open(config_path)?;
     let last_known = LastKnown::load(&state_path);
     let (uxtheme, menu_theming) = menu_theme::UxTheme::load();

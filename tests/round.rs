@@ -79,7 +79,8 @@ fn paused(in_hand: InHand, hub: &VendorHub) -> InHand {
 
 /// 真去取一次数：经假枚举，状态文件里什么都没有。
 ///
-/// 手上那一份就是命令行今天交给这一轮的东西——`read_or_last_known` 交出来的那个 `Result`。
+/// 手上那一份是 `read_or_last_known` 交出来的那个 `Result`：托盘那一份（`Outcome`）只多一句退到上次已知值时的原因，
+/// 这里用不上。
 fn fetched(device: &Device, endpoints: &FakeEndpoints, paused_by: Option<&VendorHub>) -> InHand {
     InHand::from(readout::read_or_last_known(
         device,
@@ -168,7 +169,7 @@ fn a_low_last_known_value_is_low_even_though_it_is_stale() {
 /// 陈旧到不该再显示数字的那一档——只有 `Ble` 到得了：Windows 那份缓存超过了 `very_stale_after`
 /// ——照 Stale 一类判，照样参与低电判定，电量也照样交出去（parking lot Q151）。
 ///
-/// 命令行那一行这时只印日期，那是它自己的排版决定；而图标上，一台十天没更新过、上次还剩 12% 的
+/// 悬停提示与菜单那一行这时只写日期，那是它们自己的排版决定；而图标上，一台十天没更新过、上次还剩 12% 的
 /// 蓝牙设备，最可能的下场正是没电关了机——低电压过 Stale 的那条理由在这一档上一样成立。
 #[test]
 fn a_very_stale_reading_is_judged_like_any_stale_one() {
@@ -216,7 +217,7 @@ fn a_charging_device_is_charging_even_when_its_level_is_low() {
 }
 
 /// 上次已知值里记着的"充电中"**不让它成为充电中**：那是当时的状态，不是现在的——设备被收进抽屉、
-/// 或者刚拔了线，变的恰恰是它。命令行那一行不印它是同一条理由（`cli::status::render` 那一格）。
+/// 或者刚拔了线，变的恰恰是它。悬停提示与菜单那一行不写它是同一条理由（`juicebar::tray::hover`）。
 ///
 /// 于是那份历史值照常走下面几档：低于阈值就是低电，否则 Stale。
 #[test]
@@ -495,6 +496,28 @@ fn the_primary_device_is_held_over_when_nothing_is_trustworthy_this_round() {
     );
 
     assert_eq!(round.primary, Selection::HeldOver("dragonfly3"));
+}
+
+/// 退到上次已知值的那一台不参与 `lowest`，哪怕那份上次已知值是十秒前取的（parking lot Q154）：设备此刻不在，图标状态说它
+/// Stale，它就不该拿这个数去抢"电量最低"。另一台这一轮当场读到、电量比它高，照样是它。
+///
+/// 只看陈旧阈值的话，十秒前的 Wired 读数还在阈值（3 × 30 秒）以内，会以新鲜的身份被选中——常驻之后这不是边角：一台设备一次
+/// 取数失败，接下来那一段里的每一轮它都在抢。
+#[test]
+fn a_last_known_value_taken_seconds_ago_does_not_take_the_lowest_spot() {
+    let general = default_general();
+    let (mouse, keyboard) = (mouse_with_both_endpoints(), keyboard_with_dongle_endpoint());
+    let (for_mouse, for_keyboard) = (last_known(28, false, 10), just_read(62, false));
+
+    let round = Round::assess(
+        &general,
+        [(&mouse, &for_mouse), (&keyboard, &for_keyboard)],
+        None,
+        Vec::new(),
+        NOW,
+    );
+
+    assert_eq!(round.primary, Selection::Lowest("neon75"));
 }
 
 // ---------------------------------------------------------------

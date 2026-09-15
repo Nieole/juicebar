@@ -1,4 +1,4 @@
-//! 格式保留的原地编辑：`config-refresh` 的补全，`primary` 的回写，与 `[tray]` 的回写。
+//! 格式保留的原地编辑：自动补空块，`primary` 与 `[tray]` 的回写，登记设备的几处写入。
 //!
 //! 几样都走 `toml_edit` 而不是 serde 的序列化——后者会把整份文件重写一遍、洗掉全部
 //! 注释，而这份配置的价值有一半在注释里（见 `docs/adr/0003`）。几样也都是纯函数：
@@ -20,27 +20,47 @@ use crate::hid::HidInfo;
 use crate::primary::PrimaryRule;
 
 // ---------------------------------------------------------------
-// config-refresh：把当时在场、而配置里空着的 Endpoint 块补上
+// 自动补空块：把当时在场、而配置里空着的 Endpoint 块补上
 // ---------------------------------------------------------------
 
 /// 一次 [`refresh`] 的结果。
 ///
-/// 文本、做过的事、没做的事分成三样交出去：命令行把后两样印出来，托盘拿做过的事弹通知、记日志。ADR-0003
-/// 划死的边界是"只补空缺，扫描结果与用户所写不一致时只提醒"——那句提醒就住在 [`Self::notes`] 里，
-/// 它是这条边界唯一的出口。
+/// 文本、做过的事、没做的事分成三样交出去：托盘拿做过的事弹通知、记日志，没做的事里"扫描与所写不一致"那一种也记日志。
+/// ADR-0003 划死的边界是"只补空缺，扫描结果与用户所写不一致时只提醒"——那句提醒就住在 [`Self::notes`] 里
+/// （[`RefreshNote::Disagrees`]），它是这条边界唯一的出口。
 pub struct Refreshed {
     /// 补全之后的全文。什么都没补时与入参**逐字节相同**。
     pub text: String,
     /// 这一次补上了哪些块。
     pub filled: Vec<Fill>,
-    /// 没补的地方和为什么，一条一句人话。它不改文件，只解释。
-    pub notes: Vec<String>,
+    /// 没补的地方、只提醒不改的地方，和为什么，一条一句人话。它不改文件，只解释。
+    pub notes: Vec<RefreshNote>,
+}
+
+/// [`refresh`] 没补、或者只提醒不改的一处：一句人话，连同它是哪一种。
+///
+/// 分种类是因为两种的去处不同（parking lot Q273）：托盘把"不一致"记进日志——配置里 Wired 写成了接收器的 pid、插上线读不到时，
+/// 查"为什么"的人要的就是这一句；"没补上"的那几句一声不响——鼠标没插线时 Wired 当然不在场，每插拔一次都记一句是噪音。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefreshNote {
+    /// 本机此刻在场的身份与用户写下的那一条对不上。没有动它：用户写过的值一概不改。
+    Disagrees(String),
+    /// 一块空着、这一次没补上：认不出这是哪台设备、它的地址猜不出来，或者它此刻不在场。
+    NotFilled(String),
+}
+
+impl std::fmt::Display for RefreshNote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disagrees(text) | Self::NotFilled(text) => f.write_str(text),
+        }
+    }
 }
 
 /// [`refresh`] 补上的一块：哪台 Device 的哪条 Endpoint，补的是哪组身份。
 ///
-/// 交的是结构而不只是一句话：托盘的通知说"补了哪台的哪条"，用的是 Device 的名字与 Endpoint 的种类；日志与命令行
-/// 要的是那一整句（`Display`），身份的四个字段、没实测过的那一项都在里面。
+/// 交的是结构而不只是一句话：托盘的通知说"补了哪台的哪条"，用的是 Device 的名字与 Endpoint 的种类；日志要的是
+/// 那一整句（`Display`），身份的四个字段、没实测过的那一项都在里面。
 #[derive(Debug, Clone)]
 pub struct Fill {
     /// 补在哪一台 Device 上：它的 id。
@@ -77,8 +97,8 @@ impl std::fmt::Display for Fill {
 /// 已有的几块之后，而不是紧挨着草稿留下的那段注释掉的占位——占位于是变成一段历史记录，
 /// 草稿里那句"留着或删掉都行"说的就是这件事。
 ///
-/// 与 [`draft`] 一样是纯函数：入参是文本和一次枚举的结果，出参是文本。真正落盘的那一步
-/// 在 `cli::config_refresh` 里。
+/// 与 [`draft`] 一样是纯函数：入参是文本和一次枚举的结果，出参是文本。托盘内核照它交出写回的动作
+/// （`crate::tray::config`），真正落盘的那一步在外壳里。
 ///
 /// [`draft`]: fn@crate::config::draft
 pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
@@ -100,10 +120,10 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
             .filter(|kind| device.driver.is_some() || *kind == EndpointKind::Ble)
             .collect();
 
-        // ADR-0003 那半句："扫描结果与用户所写不一致时只在命令行提醒"。
+        // ADR-0003 那半句："扫描结果与用户所写不一致时只提醒"。
         //
         // 不一致指的是**本机此刻在场的身份**和用户写下的那一条对不上——不是"用户写的那条
-        // 现在不在场"：鼠标没插线时 Wired 当然不在场，那是常态，每次都印一句就成了噪音，
+        // 现在不在场"：鼠标没插线时 Wired 当然不在场，那是常态，每次都记一句就成了噪音，
         // 而噪音会把真正该看的这一句一起淹掉。`report_id` 不参与比较，因为枚举问不出它，
         // 拿它说"扫描结果不一致"是没有依据的。
         if let Some(known) = recognised {
@@ -116,13 +136,12 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
                 };
                 if !same_scanned_identity(configured, identity) && is_present(identity, collections)
                 {
-                    notes.push(format!(
-                        "{}：{kind} 你写的是 {}，而本机此刻在场的是 {}（我记下的这台设备的 \
-                         {kind} 身份）。没有动它——你写过的值一概不改。",
+                    notes.push(RefreshNote::Disagrees(format!(
+                        "{}：{kind} 你写的是 {}，而本机此刻在场的是 {}（我记下的这台设备的 {kind} 身份）。没有动它——你写过的值一概不改。",
                         device.id,
                         describe(configured),
                         describe(identity)
-                    ));
+                    )));
                 }
             }
         }
@@ -131,16 +150,15 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
             continue;
         }
         let Some(known) = recognised else {
-            notes.push(format!(
-                "{}：认不出这是哪台设备（它已配好的 Endpoint 身份不在程序认得的那张表里），\
-                 所以猜不出它缺的 {} 该填什么，得手填。",
+            notes.push(RefreshNote::NotFilled(format!(
+                "{}：认不出这是哪台设备（它已配好的 Endpoint 身份不在程序认得的那张表里），所以猜不出它缺的 {} 该填什么，得手填。",
                 device.id,
                 missing
                     .iter()
                     .map(EndpointKind::to_string)
                     .collect::<Vec<_>>()
                     .join("、")
-            ));
+            )));
             continue;
         };
 
@@ -148,21 +166,20 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
             // Ble 的地址不在身份表里、也猜不出来，但**空着不能不声不响**——那正是这张票
             // 一直在守的"用户不该在不知情的情况下缺一整条 Endpoint"。
             let Some(identity) = known.identity(kind) else {
-                notes.push(format!(
-                    "{}：{kind} 空着，而它的地址程序猜不出来（BLE 射频是另一颗芯片，\
-                     与 dongle 之间没有能缝合的字段）。{}",
+                notes.push(RefreshNote::NotFilled(format!(
+                    "{}：{kind} 空着，而它的地址程序猜不出来（BLE 射频是另一颗芯片，与 dongle 之间没有能缝合的字段）。{}",
                     device.id,
                     known.absent_hint(kind)
-                ));
+                )));
                 continue;
             };
             if !is_present(identity, collections) {
-                notes.push(format!(
+                notes.push(RefreshNote::NotFilled(format!(
                     "{}：{kind} 现在不在场（本机枚举不到 {}），没有填。{}",
                     device.id,
                     describe(identity),
                     known.absent_hint(kind)
-                ));
+                )));
                 continue;
             }
             insert_block(&mut doc, index, kind, &endpoint_block(kind, identity))?;
@@ -186,7 +203,7 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
     })
 }
 
-/// 一条 Endpoint 身份的人话写法，用在命令行的提醒里。
+/// 一条 Endpoint 身份的人话写法，用在补空块的提醒与日志里。
 ///
 /// 四个字段都印出来：鼠标的有线本体是 `391D:1005`、dongle 是 `391D:1A05`，只差一个字符，
 /// 只印一半的话用户根本看不出程序说的是哪一条。
@@ -245,7 +262,7 @@ fn insert_block(
 /// 一次 [`pin_primary`] 的结果。
 ///
 /// 文本和"这一次到底改没改"分成两样交出去，与 [`Refreshed`] 同一个理由：**落盘那一步不该
-/// 自己再判一遍**。`config-refresh` 靠 `filled` 是不是空的来决定写不写文件——没改动却重写
+/// 自己再判一遍**。自动补空块靠 `filled` 是不是空的来决定写不写文件——没改动却重写
 /// 一遍会白白改掉文件的修改时间，也让人以为程序动过它；而回写只动一格，没有一个"补了几处"
 /// 的清单可以借，所以那件事在这里是一个具名字段。
 #[derive(Debug)]
@@ -271,7 +288,7 @@ pub struct Pinned {
 /// [`crate::state::LastKnown::remember_primary`]。
 ///
 /// **这一格是程序唯一允许覆盖的、用户写过的值。**ADR-0003 把它点了名："只补空缺和程序
-/// 自己管的字段（`primary`、`config-refresh` 填充的 Endpoint 块）"。用户在菜单里点一下
+/// 自己管的字段（`primary`、自动补空块填充的 Endpoint 块）"。用户在菜单里点一下
 /// 就是要改这一格，此时"不动用户写过的值"反而意味着那一下点了没用。别的每一处仍然一概不动，
 /// `tests/config.rs::primary_writeback_touches_nothing_else_the_user_wrote` 逐行守着这句话。
 ///
@@ -282,7 +299,7 @@ pub fn pin_primary(text: &str, wanted: &PrimaryRule) -> Result<Pinned> {
     let config = Config::parse(text)?;
 
     // 不在册的 id **一个字节都不写**。写下去的话，下一次启动 `primary::select` 交回的是
-    // `Selection::PinnedNotFound`：一行都没标，命令行上多一句"配置里 primary 钉的 id 不在
+    // `Selection::PinnedNotFound`：托盘上一台都不画，悬停提示说"配置里 primary 钉的 id 不在
     // 登记的 Device 里"。让程序自己写出那种配置，等于替用户造一个他没犯的错——而菜单只
     // 可能把在册的设备列出来，所以走到这里的一个不在册的 id 是**调用方的 bug**。
     if let PrimaryRule::Pinned(device_id) = wanted

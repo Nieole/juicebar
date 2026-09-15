@@ -40,8 +40,6 @@ test = false
 #   Win32_System_Registry —— RegGetValueW，读任务栏此刻是深色还是浅色（Personalize 下的
 #       SystemUsesLightTheme）。Windows 没给这件事一个 API，那个注册表值就是它公开的答案
 #   Win32_UI_HiDpi —— GetDpiForSystem，按显示缩放给图标选尺寸（icon::IconSize::for_dpi）
-#   Win32_System_Console —— AttachConsole：程序是窗口程序（双击不闪黑框），过渡期的 status 与
-#       config-refresh 借启动它的那个终端印字（src/main.rs）
 #   Win32_System_Com + Win32_System_TaskScheduler + Win32_System_Variant + Win32_System_Ole —— 开机自启的计划任务
 #       （src/shell/scheduled_task.rs，docs/adr/0007）：CoInitializeEx / CoCreateInstance 起 ITaskService，建、删、
 #       问那个"登录时以最高权限运行"的任务；Connect / RegisterTaskDefinition 收 VARIANT，windows crate 要 Variant
@@ -50,10 +48,7 @@ test = false
 #       schtasks 的命令行设不了，得另写一份任务 XML（parking lot Q320）
 # 选 windows 而不是 windows-sys：HID 那一层要传 PHIDP_PREPARSED_DATA 这类不透明句柄并配对释放，
 # 有类型包装能少写一批 unsafe。
-windows = { version = "0.62.2", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_HiDpi", "Win32_System_Console", "Win32_System_Com", "Win32_System_TaskScheduler", "Win32_System_Variant", "Win32_System_Ole"] }
-
-# 子命令 status / scan / probe / run。derive 是为了让子命令定义和帮助文本住在一处。
-clap = { version = "4.6.6", features = ["derive"] }
+windows = { version = "0.62.2", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_UI_HiDpi", "Win32_System_Com", "Win32_System_TaskScheduler", "Win32_System_Variant", "Win32_System_Ole"] }
 
 # 配置文件（设备清单、身份合并规则、主设备选择）。选 TOML 是因为配置要人手写、要带注释——
 # 首次运行自动生成的草稿里有大量「这一项我猜不出来，你自己填」的提示，JSON 放不下注释。
@@ -64,7 +59,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.5"
 
 # 格式保留的 TOML 原地编辑，见 docs/adr/0003。程序要往用户手写的配置里补东西
-# （`config-refresh` 填空着的 Endpoint 块，以及 `primary` 的回写，见 `config::pin_primary`），
+# （自动补空着的 Endpoint 块、登记设备，以及 `primary` 与 `[tray]` 的回写，见 `config::pin_primary`），
 # 而 serde 那套的序列化会把整份文件重新写一遍、洗掉全部注释——这份配置的价值有一半在注释里。
 # 只有**写用户手写的那份配置**用它；读配置仍然走 `toml` + serde（读要的是类型化的模型而不是
 # 文档树），而状态文件那一份读写都走 serde——那里没有注释要保。
@@ -72,3 +67,9 @@ toml_edit = "0.25.13"
 
 # 错误传播。这是个单人自用工具，调用方只有 main，不需要给错误分类型，anyhow 的上下文链就够。
 anyhow = "1.0.104"
+
+[dev-dependencies]
+
+# 诊断工具示例程序（`examples/` 下的 scan / caps / probe）的参数解析。成品没有命令行（docs/adr/0008），它只剩示例
+# 程序在用，所以放在这里：发布构建不编它。derive 是为了让参数定义和帮助文本住在一处。
+clap = { version = "4.6.6", features = ["derive"] }

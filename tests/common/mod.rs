@@ -326,7 +326,7 @@ pub fn scanned_ble(
 /// 2026-03-15，也就是票 05 真机实测那台鼠标的缓存日期。
 ///
 /// **它是个字面量而不是一个假时钟。**陈旧判定那一层收的是 `Timestamp` 而不是 `&dyn Clock`
-/// ——问环境只在 `cli::status::run` 的顶上发生一次。所以用例根本没有系统时钟可碰，
+/// ——问环境只在托盘取数线程的顶上发生一次（`juicebar::shell`）。所以用例根本没有系统时钟可碰，
 /// 也没有一处 sleep：那比给它们一个假时钟更硬（parking lot Q27）。
 pub const NOW: Timestamp = Timestamp::from_unix_secs(20_537 * 86_400);
 

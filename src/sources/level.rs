@@ -3,7 +3,7 @@
 //! 这个模块不属于任何一个协议家族——两个驱动交出来的都是 [`Reading`]，而"这个
 //! Reading 可信吗"、"要显示的那个百分比取自哪里"两问的答案对每个家族都一样。
 //! 它放在 `sources` 下面是因为它答的是**取数**这一侧的问题，而不是呈现那一侧的：
-//! `status` 那一行只是把结论印出来。
+//! 悬停提示与菜单那一行只是把结论写出来。
 //!
 //! 规格见 `.scratch/battery-readout/spec.md`「电量数值」，两处**故意偏离厂商上位机**
 //! 的地方记在 `docs/adr/0002-battery-level-source.md`，`voltageToLevel` 的原始算法与
@@ -30,7 +30,7 @@ pub enum Level {
 }
 
 impl std::fmt::Display for Level {
-    /// 用 `CONTEXT.md` 的词，原样。这几个字会出现在 `status` 的每一行上
+    /// 用 `CONTEXT.md` 的词，原样。这几个字会出现在悬停提示与菜单那一行上
     /// （`EndpointKind` 的 `Display` 是同一个理由）。
     ///
     /// **措辞与产生它的规则住在同一个文件里。**Unknown 后面那句解释只有
