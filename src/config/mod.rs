@@ -34,6 +34,7 @@ mod tray;
 pub use draft::draft;
 pub use edit::{Fill, Pinned, Refreshed, pin_primary, refresh};
 pub use edit::{TrayWritten, write_tray};
+pub use edit::{register_ble, unregister_ble};
 pub use known_devices::{KNOWN_DEVICES, KnownDevice};
 pub use tray::{PrimaryMark, TraySetting, TraySettings, Unrecognised};
 
@@ -295,5 +296,18 @@ impl Config {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("读不到配置 {}", path.display()))?;
         Self::parse(&text).with_context(|| format!("配置 {} 有问题", path.display()))
+    }
+
+    /// 蓝牙地址是 `address` 的那台 Device（写法不同也算，[`BluetoothEndpoint::matches`]）；哪台都没登记着它就是 `None`。
+    ///
+    /// 菜单"登记设备"列不列一台扫到的蓝牙设备（`crate::tray::register`）与写回拒不拒这一次登记（[`register_ble`]）问的是
+    /// 同一件事，只在这里判一次：两处各判一遍，改岔了菜单就会列出一项点了必被拒绝的"登记到"。
+    pub fn device_with_bluetooth_address(&self, address: &str) -> Option<&Device> {
+        self.devices.iter().find(|device| {
+            device
+                .bluetooth
+                .as_ref()
+                .is_some_and(|bluetooth| bluetooth.matches(address))
+        })
     }
 }

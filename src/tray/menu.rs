@@ -118,6 +118,8 @@ pub enum Command {
     TraySetting(TraySetting),
     /// "图标样式"里点了"恢复默认"：图标样式那六项换回缺省值，"菜单显示"那两项不动。
     RestoreIconDefaults,
+    /// "登记设备"里点了一项：把一个蓝牙地址登记到某台，或者解除某台的蓝牙登记（`super::register`）。
+    Register(Box<super::register::Command>),
 }
 
 /// 菜单这一块的动作。
@@ -183,6 +185,7 @@ impl Tray {
         // "图标样式 ›""菜单显示 ›"（票 07）、"登记设备 ›"（票 11、12）、"开机自启"（票 13）依次排在这里。
         items.push(self.icon_style_menu());
         items.push(self.menu_display_menu());
+        items.push(self.register_submenu());
         items.push(self.launch.autostart_entry());
         items.push(Item::Separator);
         items.push(Item::Entry(Entry {
@@ -238,6 +241,8 @@ impl Tray {
             Command::RestoreIconDefaults => {
                 self.on_tray_settings(TraySetting::icon_defaults().to_vec(), out);
             }
+            // 登记设备那一块自己的事：交给外壳写回，写完靠重读生效（`super::register`）。
+            Command::Register(command) => super::register::on_command(*command, out),
         }
     }
 }

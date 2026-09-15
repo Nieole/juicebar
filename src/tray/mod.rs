@@ -21,6 +21,7 @@
 //! | 告警 | [`warnings`] | 没有（写状态文件的结果由 `shell/worker.rs` 交回） | 看 [`Event::Fetched`]；[`warnings::Event`] | 只写日志 |
 //! | 菜单深浅 | [`menu_theme`] | `shell/menu_theme.rs`、`shell/look.rs` | 启动时随 [`Look`] 交进来，变了是 [`Event::LookChanged`] | 只写日志 |
 //! | 启动 | [`launch`] | `shell/launch.rs` | [`launch::Event`]；[`menu::Command::EnableAutostart`]、[`menu::Command::DisableAutostart`] | [`launch::Action`]；弹通知 |
+//! | 登记设备 | [`register`] | `shell/register.rs` | 看 [`Event::Tick`]；[`register::Event`] | [`register::Action`]；写回走 [`config::Action`] |
 //!
 //! 这一层（[`Event`]、[`Action`]、[`Tray::handle`]）只做路由：每个关注点在这里占一格，往自己那一格里
 //! 加事件、加动作、加状态，只改自己的那两个文件（内核一个、外壳一个）。三样是大家共用的，所以住在
@@ -41,6 +42,7 @@ pub mod launch;
 pub mod menu;
 pub mod menu_theme;
 pub mod notify;
+pub mod register;
 pub mod round;
 mod settings_menu;
 pub mod warnings;
@@ -64,6 +66,8 @@ pub struct Tray {
     warnings: warnings::Warnings,
     /// 开机自启的那个计划任务，外壳上一次问系统时在不在（[`launch`]）。
     launch: launch::Launch,
+    /// 登记设备：上一遍扫到的本机蓝牙设备，"登记设备 ›"照它列（[`register`]）。
+    register: register::Register,
     /// 点过"退出"了：之后什么事件都不再有动作——不再轮询，也不再画。
     quit: bool,
 }
@@ -92,6 +96,8 @@ impl Tray {
         cadence.on_tick(&config, now, &mut out);
         let mut scans = config::Scans::default();
         scans.request(&mut out);
+        let mut register = register::Register::default();
+        register.on_tick(&config, now, &mut out);
         let tray = Self {
             config,
             cadence,
@@ -100,6 +106,7 @@ impl Tray {
             scans,
             warnings: warnings::Warnings::default(),
             launch: launch::Launch::default(),
+            register,
             quit: false,
         };
         (tray, out)
@@ -115,6 +122,7 @@ impl Tray {
             Event::Tick(now) => {
                 self.cadence.on_tick(&self.config, now, &mut out);
                 self.round.on_tick(&self.config, now, &mut out);
+                self.register.on_tick(&self.config, now, &mut out);
             }
             Event::Fetched(fetched) => {
                 let fetched = *fetched;
@@ -130,6 +138,7 @@ impl Tray {
             Event::Warnings(event) => self.warnings.on_event(event, &mut out),
             Event::Launch(event) => self.launch.on_event(event, &mut out),
             Event::LookChanged(look) => self.round.on_look_changed(look, &mut out),
+            Event::Register(event) => self.register.on_event(event, &mut out),
         }
         out
     }
@@ -165,6 +174,8 @@ pub enum Event {
     /// 任务栏的样子可能变了（深浅色切了、显示缩放改了）：外壳收到 Windows 的消息、或者要弹出菜单了，重新问了一遍，交进来
     /// 的是此刻的样子。其实没变也照样交，内核看出没变就什么都不做。
     LookChanged(Look),
+    /// 登记设备那一侧的事：外壳扫了一遍本机的蓝牙设备。
+    Register(register::Event),
 }
 
 /// 某台 Device 的一次取数有了结果：取数线程交回来的全部东西。
@@ -198,4 +209,6 @@ pub enum Action {
     Log(String),
     /// 启动：建、删开机自启的计划任务。
     Launch(launch::Action),
+    /// 登记设备：扫一遍本机的蓝牙设备。
+    Register(register::Action),
 }

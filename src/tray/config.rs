@@ -73,6 +73,20 @@ pub enum Action {
     /// 此刻文件的全文、照配置那道缝格式保留地只改这几个键（[`crate::config::write_tray`]），本来就这样写着就不写。读全文
     /// 而不是照内核手上那一份写，理由同 [`Scan::text`]。
     WriteTray(Vec<TraySetting>),
+    /// 把本机扫到的这个蓝牙地址登记到这台 Device 上（菜单"登记设备"里点的"登记到"）：外壳读此刻文件的全文、照配置那道缝
+    /// 格式保留地补上那一块（[`crate::config::register_ble`]），本来就登记着这个地址就不写。读全文的理由同 [`Scan::text`]。
+    RegisterBle {
+        /// 登记到哪一台：它的 id。
+        device_id: String,
+        /// 本机扫到的那个蓝牙地址，照 Windows 报的写法。
+        address: String,
+    },
+    /// 删掉这台 Device 的蓝牙登记（菜单"登记设备 › 解除蓝牙登记"里点的）：外壳读此刻文件的全文、照配置那道缝只删那一块
+    /// （[`crate::config::unregister_ble`]），本来就没有蓝牙地址就不写。
+    UnregisterBle {
+        /// 解除哪一台：它的 id。
+        device_id: String,
+    },
 }
 
 /// 扫一遍本机这件事走到哪了（[`Action::Scan`]）。

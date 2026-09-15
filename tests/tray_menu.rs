@@ -64,10 +64,7 @@ fn rows_above_the_first_separator(menu: &Menu) -> Vec<(String, bool, Option<Comm
 
 /// 一级菜单里归别的票、还没做出来的那几项：比对一级的基准时略去。那张票做出来了，就把它那一行拿掉；一个都不剩时，
 /// 一级的整份比对归 `menu-as-designed` 07。
-const NOT_BUILT_YET: &[&str] = &[
-    // 票 11、12
-    "子菜单 「登记设备」",
-];
+const NOT_BUILT_YET: &[&str] = &[];
 
 /// 一级，罐装：设备行在上（Primary Device 打勾，取数失败的那一行变灰），分隔线，"托盘上画哪一台 ›"，分隔线，
 /// "打开配置文件"与"退出"。

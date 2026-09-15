@@ -413,7 +413,7 @@ fn the_draft_writes_the_endpoint_placeholders_from_one_shape() {
     let text = config::draft(&[mouse_dongle()]);
 
     // 占位**始终**只是注释：两块都不许解析成真配置。`address` 那一行是本次改动第一次往
-    // 草稿里写，那个 `#` 一旦掉了，用户会拿到一台地址是"把 scan 里那串…"的蓝牙设备。
+    // 草稿里写，那个 `#` 一旦掉了，用户会拿到一台地址是"12 位十六进制的蓝牙地址…"的蓝牙设备。
     let config = Config::parse(&text).expect("草稿必须解析得动");
     assert!(config.devices[0].wired.is_none(), "Wired 那一块只能是注释");
     assert!(
@@ -446,7 +446,11 @@ fn the_draft_writes_the_endpoint_placeholders_from_one_shape() {
         ble.contains("另一颗芯片"),
         "蓝牙那一段要说清地址为什么猜不出来：{ble}"
     );
-    assert!(ble.contains("juicebar scan"), "还要说清去哪儿抄：{ble}");
+    assert!(
+        ble.contains("登记设备"),
+        "还要说清去托盘菜单的哪儿登记它：{ble}"
+    );
+    assert!(!ble.contains("scan"), "不再叫人去跑命令行抄地址：{ble}");
 
     // 在场的那一条仍然是真块，所以上面那两段的形状不是"整份草稿都被注释掉了"。
     assert!(
@@ -928,13 +932,13 @@ driver = \"vgn_keyboard\"
 /// Ble 也是一条 Endpoint，草稿不该让用户不知道它存在。
 ///
 /// 它的地址程序猜不出来——同一只鼠标的 BLE 射频是另一颗芯片，连 VID 都和 dongle 不同，
-/// 几套身份之间没有能缝合的字段——所以它是注释掉的占位，并写明去哪儿抄地址。
+/// 几套身份之间没有能缝合的字段——所以它是注释掉的占位，并写明去托盘菜单的哪儿登记它的地址。
 #[test]
 fn the_draft_leaves_room_for_the_ble_endpoint() {
     let text = config::draft(&[mouse_dongle()]);
 
     assert!(text.contains("# [device.bluetooth]"), "Ble 那一块要写出来");
-    assert!(text.contains("juicebar scan"), "要写明去哪儿抄 MAC");
+    assert!(text.contains("登记设备"), "要写明去托盘菜单的哪儿登记 MAC");
     assert!(
         !text.lines().any(|line| line.trim() == "[device.bluetooth]"),
         "地址猜不出来，所以这一块只能是注释"
@@ -1901,4 +1905,179 @@ fn tray_writeback_refuses_a_tray_key_that_is_not_a_table() {
         .to_string();
 
     assert!(error.contains("[tray]"), "得说清是哪一处：{error}");
+}
+
+// ---------------------------------------------------------------
+// 蓝牙登记与解除：菜单"登记设备"里点的那一下，只动那一块
+// ---------------------------------------------------------------
+
+/// 把本机扫到的一个蓝牙地址登记到 dragonfly3（它还没有蓝牙地址）：文件里只多出块名、地址与一行空行，落在
+/// dragonfly3 已有的那一块后面、下一个 `[[device]]` 前面；原有的每一行原样、按原次序都在。
+///
+/// 登记到**第一台**而不是最后一台，守的是 `config_refresh_puts_the_block_under_the_right_device` 同一个坑：块排错了
+/// 位置，TOML 就把它算到下一台头上。
+#[test]
+fn ble_registration_adds_the_bluetooth_block_under_that_device_and_nothing_else() {
+    let written = config::register_ble(HANDWRITTEN_CONFIG, "dragonfly3", "f4ee2553b27e")
+        .unwrap()
+        .expect("dragonfly3 还没有蓝牙地址，该写");
+
+    let (at, added) = inserted_lines(HANDWRITTEN_CONFIG, &written);
+    assert_eq!(
+        added,
+        [
+            "  [device.bluetooth]\n",
+            "  address = \"f4ee2553b27e\"\n",
+            "\n"
+        ],
+        "只多出这一块：\n{written}"
+    );
+    assert_eq!(
+        HANDWRITTEN_CONFIG.split_inclusive('\n').nth(at - 1),
+        Some("\n"),
+        "块前面空一行，接在 dragonfly3 那一块后面：\n{written}"
+    );
+    let config = Config::parse(&written).unwrap();
+    assert!(
+        config.devices[0]
+            .bluetooth
+            .as_ref()
+            .is_some_and(|bluetooth| bluetooth.matches("f4ee2553b27e")),
+        "地址落在 dragonfly3 上"
+    );
+    assert!(config.devices[1].bluetooth.is_none(), "neon75 一个字没动");
+}
+
+/// 这台已经登记着别的地址：拒绝，一个字节都不写——换地址是先解除、再登记，一点不会悄悄覆盖旧地址。登记的正是这个
+/// 地址（托盘还没重读到上一次登记时又点了一下）就什么都不必写，换个写法也是同一个地址。
+#[test]
+fn ble_registration_never_overwrites_an_address_the_device_already_has() {
+    let registered = config::register_ble(HANDWRITTEN_CONFIG, "neon75", "f4ee2553b27e")
+        .unwrap()
+        .expect("neon75 还没有蓝牙地址，该写");
+
+    let error = config::register_ble(&registered, "neon75", "38184c8f1a2b")
+        .expect_err("已经有地址的不许覆盖")
+        .to_string();
+    assert!(
+        error.contains("f4ee2553b27e") && error.contains("解除"),
+        "得说清旧地址是哪个、要先解除：{error}"
+    );
+    assert_eq!(
+        config::register_ble(&registered, "neon75", "F4:EE:25:53:B2:7E").unwrap(),
+        None,
+        "同一个地址，一个字节都不必写"
+    );
+}
+
+/// 同一个地址已经登记在另一台上：拒绝。两台说的会是同一台设备的电量。
+#[test]
+fn ble_registration_refuses_an_address_another_device_already_has() {
+    let registered = config::register_ble(HANDWRITTEN_CONFIG, "neon75", "f4ee2553b27e")
+        .unwrap()
+        .expect("neon75 还没有蓝牙地址，该写");
+
+    let error = config::register_ble(&registered, "dragonfly3", "f4ee2553b27e")
+        .expect_err("一个地址不登记给两台")
+        .to_string();
+
+    assert!(
+        error.contains("neon75"),
+        "得说清它已经登记在哪一台上：{error}"
+    );
+}
+
+/// 不在册的 id：拒绝，得说清是哪个 id。
+#[test]
+fn ble_registration_refuses_an_id_that_is_not_a_registered_device() {
+    let error = config::register_ble(HANDWRITTEN_CONFIG, "dragonfly4", "f4ee2553b27e")
+        .expect_err("不在册的 id 不该写进去")
+        .to_string();
+
+    assert!(
+        error.contains("dragonfly4"),
+        "得说清是哪个 id 不在册：{error}"
+    );
+}
+
+/// 解除蓝牙登记：删掉那一台的 `[device.bluetooth]` 那一块，别的一个字节都不动——登记之后再解除，文件逐字节回到登记
+/// 之前（登记时补在块前面的那一行空行也跟着走）。
+#[test]
+fn ble_unregistration_after_registration_gives_back_the_file_byte_for_byte() {
+    let registered = config::register_ble(HANDWRITTEN_CONFIG, "dragonfly3", "f4ee2553b27e")
+        .unwrap()
+        .expect("dragonfly3 还没有蓝牙地址，该写");
+
+    let unregistered = config::unregister_ble(&registered, "dragonfly3")
+        .unwrap()
+        .expect("dragonfly3 登记着地址，该写");
+
+    assert_eq!(unregistered, HANDWRITTEN_CONFIG);
+}
+
+/// 解除只删块名与块里那几行键：用户写在块上面的注释一句不丢（ADR-0003）。用户照草稿里 Ble 那段占位的说明，自己去掉
+/// `#`、填上地址，那段说明就在块名上面，正是这个样子。
+#[test]
+fn ble_unregistration_keeps_the_comments_written_above_the_block() {
+    let before = r#"[[device]]
+id = "neon75"
+name = "VGN Neon75"
+driver = "vgn_keyboard"
+
+  [device.wireless_24g]
+  vid = 0x3151
+  pid = 0x5038
+  usage_page = 0xFFFF
+  usage = 0x0002
+  report_id = 0
+
+  # 键盘的蓝牙，配对在这台电脑上
+  [device.bluetooth]
+  address = "f4ee2553b27e"
+
+[[device]]
+id = "dragonfly3"
+name = "Dragonfly 3 Master+"
+driver = "vgn_mouse"
+"#;
+
+    let after = config::unregister_ble(before, "neon75")
+        .unwrap()
+        .expect("neon75 登记着地址，该写");
+
+    let (_, removed) = inserted_lines(&after, before);
+    assert_eq!(
+        removed,
+        ["  [device.bluetooth]\n", "  address = \"f4ee2553b27e\"\n"],
+        "只删块名与地址那两行，上面那句注释留着：\n{after}"
+    );
+    let config = Config::parse(&after).unwrap();
+    assert!(config.devices[0].bluetooth.is_none());
+    assert_eq!(config.devices.len(), 2);
+}
+
+/// 这台本来就没有蓝牙地址（托盘还没重读到上一次解除时又点了一下）：一个字节都不必写，也不是错。
+#[test]
+fn ble_unregistration_writes_nothing_when_the_device_has_no_address() {
+    assert_eq!(
+        config::unregister_ble(HANDWRITTEN_CONFIG, "neon75").unwrap(),
+        None
+    );
+}
+
+/// 蓝牙那一块写成行内表：程序不去拆一个没想到的形状，说出来，一个字节都不删。
+#[test]
+fn ble_unregistration_refuses_a_block_it_does_not_recognise() {
+    let before = r#"[[device]]
+id = "neon75"
+name = "VGN Neon75"
+driver = "vgn_keyboard"
+bluetooth = { address = "f4ee2553b27e" }
+"#;
+
+    let error = config::unregister_ble(before, "neon75")
+        .expect_err("认不出的形状不删")
+        .to_string();
+
+    assert!(error.contains("手动"), "得说清要用户自己去删：{error}");
 }

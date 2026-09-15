@@ -19,6 +19,7 @@ use windows::Win32::Foundation::{ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION};
 // 草稿怎么落盘照命令行那一套（`config-refresh`），票 14 收掉命令行时一起搬过来。
 use crate::cli::config_refresh::write_draft;
 use crate::config::{Config, TraySetting, pin_primary, write_tray};
+use crate::config::{register_ble, unregister_ble};
 use crate::hid::HidInfo;
 use crate::primary::PrimaryRule;
 use crate::tray::config::{Action, Event, Scan};
@@ -135,6 +136,17 @@ impl ConfigFile {
         }
         Ok(())
     }
+
+    /// 读此刻文件的全文，照配置那道缝改一处（`edit` 交回改好的全文；本来就是那样时交回 `None`，一个字节都不写），有改动才
+    /// 写。菜单"登记设备"里点的登记与解除走这里。不改记下的样子，理由见模块文档：下一格看得出文件变了，照常重读。
+    fn rewrite(&self, edit: impl FnOnce(&str) -> Result<Option<String>>) -> Result<()> {
+        let text = std::fs::read_to_string(&self.path)
+            .with_context(|| format!("读不到配置 {}", self.path.display()))?;
+        if let Some(written) = edit(&text)? {
+            self.write(&written)?;
+        }
+        Ok(())
+    }
 }
 
 /// 文件此刻的样子；读不到它的属性（文件不在）就是 `None`。
@@ -177,6 +189,22 @@ pub(super) fn execute(action: Action, app: &mut App) {
             if let Err(e) = app.config.write_tray(&settings) {
                 app.log
                     .write(&format!("没能把图标样式与菜单显示写回配置 —— {e:#}"));
+            }
+        }
+        Action::RegisterBle { device_id, address } => {
+            if let Err(e) = app
+                .config
+                .rewrite(|text| register_ble(text, &device_id, &address))
+            {
+                app.log.write(&format!(
+                    "没能把蓝牙地址 {address} 登记到 {device_id} —— {e:#}"
+                ));
+            }
+        }
+        Action::UnregisterBle { device_id } => {
+            if let Err(e) = app.config.rewrite(|text| unregister_ble(text, &device_id)) {
+                app.log
+                    .write(&format!("没能解除 {device_id} 的蓝牙登记 —— {e:#}"));
             }
         }
     }

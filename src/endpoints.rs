@@ -402,8 +402,7 @@ impl Endpoints for SystemEndpoints {
         // "没配对？"就是把人往错的方向指——它配着对，只是这条通路答不出电量。
         let cached = self.find_ble(configured).ok_or_else(|| {
             anyhow!(
-                "本机带电量属性的 BLE 设备里没有地址 {}（没配对？还是这台设备不报电量？\
-                 跑 `juicebar scan` 看本机有哪些）",
+                "本机带电量属性的 BLE 设备里没有地址 {}（没配对？还是这台设备不报电量？本机扫到、还没登记的蓝牙设备列在托盘菜单的\"登记设备\"里）",
                 configured.address
             )
         })?;

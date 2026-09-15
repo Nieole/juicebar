@@ -1528,6 +1528,55 @@ Reported 还是 Derived 留给悬停提示与日志。代价是不是 Primary De
 
 **推荐**：维持。翻案关在 `src/icon/bytes.rs` 的两个签名、`src/shell/icon.rs` 与 `src/shell/menu.rs` 各一处调用、`tests/icon_bytes.rs`。归 `/settle`。
 
+### Q310 —— 本机的蓝牙设备排在取数线程上扫：启动时一遍，之后每 `poll_interval_bluetooth` 秒一遍
+
+**From:** resident-tray 票 11（蓝牙登记到已有 Device，解除蓝牙登记）
+
+**取的路**：内核新开一格「登记设备」（`src/tray/register.rs`，外壳 `src/shell/register.rs`）。启动时要一遍扫描；之后时钟每走一格
+看一眼，外头没有一遍还没交回来、离上一次要已经过了 `poll_interval_bluetooth`（缺省 10 秒），就再要一遍。扫描排在取数线程上
+（一次 `bluetooth::enumerate`），与取数同一条队，不碰消息循环；扫到的存在内核里，弹菜单时"登记设备 ›"照上一遍扫到的列。
+扫不了就沿用上一遍扫到的，同一个原因只记一次日志。间隔借 Ble 的轮询间隔：一遍扫描与 Ble 那一级每次取数做的是同一种读法
+（Windows 缓存的设备属性，几乎免费）。
+
+**另一条路**：①弹菜单之前在消息循环上当场扫一遍，菜单列的永远是此刻；②只在插拔（`WM_DEVICECHANGE`）与弹菜单时扫，平时
+不扫。站得住：①菜单绝不落后，也不必每 10 秒白扫一遍；②平时一次都不扫。代价：①在消息循环上做 CM_* 调用，设备树正在变时
+`instance_ids` 最多重试 8 次，brief 明令别卡消息循环；②刚配对的耳机不产生 HID 设备接口的插拔消息，第一次弹菜单看不到它，
+要再弹一次才有。
+
+**推荐**：维持。翻案关在 `src/tray/register.rs` 的扫描节奏、`src/shell/register.rs` 与 `src/shell/worker.rs` 的蓝牙扫描，用例在
+`tests/tray_register.rs`。归 `/settle`（手工验收时顺带看一眼：配对一台新蓝牙设备后，十来秒内菜单里出现它）。
+
+### Q311 —— 解除蓝牙登记删的是原文里的行：块名与块里的键那几行，块上面的注释留着
+
+**From:** resident-tray 票 11（蓝牙登记到已有 Device，解除蓝牙登记）
+
+**取的路**：`config::unregister_ble` 不用 `toml_edit` 删表，而是拿解析时记下的位置（span）找出 `[device.bluetooth]` 块名那一行与
+块里每个键的那几行，在原文上删掉；块名正上方是一行空行时连它一起删（那是登记时补上的，登记之后再解除，文件逐字节回到登记
+之前）。写在块上面的注释一句不丢。写成行内表、点号键的认不出，报错、一个字节不删，外壳记日志。
+
+**另一条路**：`toml_edit` 删表（`Table::remove`），与 `refresh`、`pin_primary` 同一套写法。站得住：几行代码，不碰原文偏移；块名
+上面那几句注释说的就是这一块，块没了它们跟着走也说得通。代价是 ADR-0003 那句"注释一句不丢"在这里破例：用户照草稿的说明
+自己去掉 `#` 填地址时，草稿那段说明就住在块名上面，解除一次就没了。
+
+**推荐**：维持。翻案关在 `src/config/edit.rs` 的 `unregister_ble`、`block_lines` 与 `tests/config.rs` 的
+`ble_unregistration_keeps_the_comments_written_above_the_block`。归 `/settle`。
+
+### Q312 —— 登记与解除靠重读生效：内核不当场改手上那一份配置，点击时记日志，写不进由外壳记
+
+**From:** resident-tray 票 11（蓝牙登记到已有 Device，解除蓝牙登记）
+
+**取的路**：点"登记到"或"解除蓝牙登记"里的一项，内核只交出写回（`config::Action::RegisterBle` / `UnregisterBle`）并记一行日志
+说点了什么；外壳读此刻文件的全文、照配置那道缝写回，下一两格重读进来，内核才换上新配置（票面"写回之后靠重读生效"）。重读
+之前又点了一次，配置那道缝交回"不必写"或者拒绝，外壳只记日志；写不进也只记日志，与 Q294 同一个处置。登记之后那台下一次
+什么时候取数照旧（Q172）：键盘 2.4G 失联时最多等一个 `poll_interval_24g`，菜单里的读数才从 Ble 来。
+
+**另一条路**：照"托盘上画哪一台"（Q252）当场改手上那一份的蓝牙地址，菜单立刻换样，并当场排那台一次取数。站得住：点完立刻
+看得到结果，手工验收不必等一分钟。代价：内核要多一个改 `Config` 的口子（今天只改 `primary` 一格），写不进时屏幕与文件说两件
+事（Q294 那个毛病多一处）；当场排一次取数要动节奏那一格。
+
+**推荐**：维持；"登记之后当场取一次数"交 `/settle`，与 Q292 的②（重读读好之后当场重算）一起看。翻案关在
+`src/tray/register.rs` 的点击处理与 `src/tray/cadence.rs`。归 `/settle`。
+
 ### Q320 —— 开机自启的计划任务走任务计划程序的 COM 接口，不起 `schtasks.exe`
 
 **From:** resident-tray 票 13（单实例与开机自启）

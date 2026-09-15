@@ -9,6 +9,7 @@
 
 use anyhow::{Context, Result, anyhow};
 
+use crate::config::draft::bluetooth_block;
 use crate::config::draft::endpoint_block;
 use crate::config::known_devices::{is_present, recognise, same_scanned_identity};
 use crate::config::tray::Literal;
@@ -161,7 +162,7 @@ pub fn refresh(text: &str, collections: &[HidInfo]) -> Result<Refreshed> {
                 ));
                 continue;
             }
-            insert_endpoint_block(&mut doc, index, kind, identity)?;
+            insert_block(&mut doc, index, kind, &endpoint_block(kind, identity))?;
             // 身份里有没实测过的部分就一并说出来。`is_present` 核对的只有 VID/PID/usage
             // 四项，`report_id` 是枚举问不出来的——那一项若是抄来的猜测，用户有权知道
             // 自己刚拿到的是一个没人验过的值。
@@ -193,20 +194,19 @@ fn describe(endpoint: &HidEndpoint) -> String {
     )
 }
 
-/// 把一条 Endpoint 的块插进第 `index` 个 `[[device]]` 里。
+/// 把一条 Endpoint 的块插进第 `index` 个 `[[device]]` 里：`rendered` 是那一块渲染好的文本。
 ///
 /// 块是**先渲染成文本再解析回来**的：`toml_edit` 保留解析时看到的原始写法，于是
 /// `vid = 0x391D` 落到文件里仍然是十六进制，而不是被规范化成 14621。手工构造
 /// `Formatted<i64>` 再改 repr 能得到同样的结果，但那要跟 `toml_edit` 的内部表示打交道，
-/// 而这里已经有一个"块该长什么样"的唯一写法（[`endpoint_block`]），复用它同时也保证了
-/// 补出来的块和草稿里写的块逐字一致。
-fn insert_endpoint_block(
+/// 而这里已经有一个"块该长什么样"的唯一写法（[`endpoint_block`]、蓝牙那一块是 [`bluetooth_block`]），
+/// 复用它同时也保证了补出来的块和草稿里写的块逐字一致。
+fn insert_block(
     doc: &mut toml_edit::DocumentMut,
     index: usize,
     kind: EndpointKind,
-    endpoint: &HidEndpoint,
+    rendered: &str,
 ) -> Result<()> {
-    let rendered = endpoint_block(kind, endpoint);
     let snippet = rendered
         .parse::<toml_edit::DocumentMut>()
         .context("渲染出来的 Endpoint 块自己解析不动，这是程序的错，不是配置的错")?;
@@ -468,4 +468,165 @@ fn literal_value(setting: TraySetting) -> toml_edit::Value {
         Literal::Word(word) => toml_edit::Value::from(word),
         Literal::Switch(on) => toml_edit::Value::from(on),
     }
+}
+
+// ---------------------------------------------------------------
+// 蓝牙登记与解除：菜单"登记设备"里点的那一下
+// ---------------------------------------------------------------
+
+/// 把本机扫到的一个蓝牙地址登记到这台 Device 上：往它的 `[[device]]` 里补一块 `[device.bluetooth]`，文件里别的一个
+/// 字节都不动。交回写好的全文；这台本来就登记着这个地址时是 `None`，一个字节都不必写（理由同 [`Pinned`]）。
+///
+/// 触发它的是托盘菜单"登记设备"里点的"登记到"（`crate::tray::config::Action::RegisterBle`），落盘在外壳
+/// （`shell/config.rs`）：读此刻文件的全文、调这个函数、有新文本才写。与 [`pin_primary`] 一样是纯函数。
+///
+/// **只补空缺，一点不覆盖**（ADR-0003）：这台已经登记着别的地址，就拒绝、一个字节不写——换地址是先解除
+/// （[`unregister_ble`]）、再登记，每一步都看得见。菜单的"登记到"本来只列还没有蓝牙地址的 Device，所以走到这里的
+/// 多半是托盘还没重读到用户刚改过的配置。同一个地址已经登记在另一台上也拒绝：两台说的是同一台设备的电量。
+pub fn register_ble(text: &str, device_id: &str, address: &str) -> Result<Option<String>> {
+    // 读用 serde、写用 toml_edit，理由同 [`refresh`]。
+    let config = Config::parse(text)?;
+    let index = device_index(&config, device_id)?;
+    if !address.chars().any(|c| c.is_ascii_alphanumeric()) {
+        return Err(anyhow!(
+            "蓝牙地址 \"{address}\" 里没有地址：登记不进 {device_id}"
+        ));
+    }
+    if let Some(bluetooth) = &config.devices[index].bluetooth {
+        if bluetooth.matches(address) {
+            return Ok(None);
+        }
+        return Err(anyhow!(
+            "{device_id} 已经登记着蓝牙地址 {}，不覆盖它：要换，先解除 {device_id} 的蓝牙登记，再登记 {address}",
+            bluetooth.address
+        ));
+    }
+    if let Some(other) = config.device_with_bluetooth_address(address) {
+        return Err(anyhow!(
+            "蓝牙地址 {address} 已经登记在 {} 上，不再登记到 {device_id}",
+            other.id
+        ));
+    }
+
+    let mut doc = text
+        .parse::<toml_edit::DocumentMut>()
+        .context("配置解析失败（toml_edit）")?;
+    insert_block(
+        &mut doc,
+        index,
+        EndpointKind::Ble,
+        &bluetooth_block(address),
+    )?;
+    let text = doc.to_string();
+
+    // **自检**，与 [`pin_primary`] 同一个道理：拿启动时那条读法读回来，这一台登记的必须就是这个地址，一台不多一台不少。
+    let written =
+        Config::parse(&text).context("登记之后的配置自己解析不动了，这是程序的错，不是配置的错")?;
+    let landed = written
+        .devices
+        .get(index)
+        .filter(|device| device.id == device_id)
+        .and_then(|device| device.bluetooth.as_ref())
+        .is_some_and(|bluetooth| bluetooth.matches(address));
+    if !landed || written.devices.len() != config.devices.len() {
+        return Err(anyhow!(
+            "蓝牙地址 {address} 登记不进 {device_id}：写进去再读回来不是这一台的地址"
+        ));
+    }
+    Ok(Some(text))
+}
+
+/// 配置里 id 是 `device_id` 的那一台排第几。不在册就说出来：菜单只列在册的 Device，走到这里多半是托盘还没重读到
+/// 用户刚改过的配置。
+fn device_index(config: &Config, device_id: &str) -> Result<usize> {
+    config
+        .devices
+        .iter()
+        .position(|device| device.id == device_id)
+        .ok_or_else(|| anyhow!("配置里没有 id 是 \"{device_id}\" 的 Device"))
+}
+
+/// 解除这台 Device 的蓝牙登记：删掉它的 `[device.bluetooth]` 那一块（连同块名正上方的那一行空行，见 [`block_lines`]），
+/// 文件里别的一个字节都不动。交回写好的全文；这台
+/// 本来就没有蓝牙地址时是 `None`（托盘还没重读到上一次解除时又点了一下），一个字节都不必写。
+///
+/// 触发它的是托盘菜单"登记设备 › 解除蓝牙登记"里点的那一台（`crate::tray::config::Action::UnregisterBle`），落盘在外壳，
+/// 与 [`register_ble`] 同一条路。
+///
+/// **删的是行，而且只删块名与块里那几行键**：写在块上面的注释一句不丢（ADR-0003）。`toml_edit` 的删表做不到这一点
+/// ——块名上面的注释住在那张表的 decor 里，表删了它就跟着没了，而用户照草稿的说明自己去掉 `#`、填上地址时，那段说明
+/// 正住在那里。所以拿 `toml_edit` 解析时记下的位置（span）找出那几行，在原文上删掉（[`block_lines`]）。
+pub fn unregister_ble(text: &str, device_id: &str) -> Result<Option<String>> {
+    let config = Config::parse(text)?;
+    let index = device_index(&config, device_id)?;
+    if config.devices[index].bluetooth.is_none() {
+        return Ok(None);
+    }
+    let parsed = toml_edit::Document::parse(text).context("配置解析失败（toml_edit）")?;
+    let removed = block_lines(&parsed, text, index)?;
+    let kept: String = text
+        .split_inclusive('\n')
+        .enumerate()
+        .filter(|(line, _)| !removed.contains(line))
+        .map(|(_, content)| content)
+        .collect();
+
+    // **自检**，与 [`register_ble`] 同一个道理：读回来这一台没有蓝牙地址了，一台不多一台不少。
+    let written =
+        Config::parse(&kept).context("解除之后的配置自己解析不动了，这是程序的错，不是配置的错")?;
+    let gone = written
+        .devices
+        .get(index)
+        .filter(|device| device.id == device_id)
+        .is_some_and(|device| device.bluetooth.is_none());
+    if !gone || written.devices.len() != config.devices.len() {
+        return Err(anyhow!(
+            "解除不了 {device_id} 的蓝牙登记：删掉那一块再读回来，不是只少了这一台的地址"
+        ));
+    }
+    Ok(Some(kept))
+}
+
+/// 第 `index` 个 `[[device]]` 的 `[device.bluetooth]` 那一块占着原文的哪几行（从 0 数）：块名那一行，块里每个键从键到
+/// 值的那几行；块名正上方是一行空行时连它一起——那是 [`register_ble`] 登记时补在块前面的，登记之后再解除，文件逐字节
+/// 回到登记之前。用户手写的块，前面那一行空行也跟着走：分不出那一行是谁写的，而删的是空行、不是注释（ADR-0003 守的
+/// 是注释一句不丢）。
+///
+/// 只认写成一张表、下面不再挂子表的那种（草稿与 [`register_ble`] 写的都是）。写成行内表或者点号键，就说认不出、一个
+/// 字节都不删：照一个没想到的形状删行，删坏了用户的配置比不删糟得多。
+fn block_lines(parsed: &toml_edit::Document<&str>, text: &str, index: usize) -> Result<Vec<usize>> {
+    let unrecognised = || {
+        anyhow!(
+            "第 {} 个 [[device]] 的蓝牙那一块不是写成 [device.bluetooth] 一张表的，程序不去拆它：请在配置文件里手动删掉那一块",
+            index + 1
+        )
+    };
+    let table = parsed
+        .get("device")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .and_then(|devices| devices.get(index))
+        .and_then(|device| device.get(EndpointKind::Ble.config_key()))
+        .and_then(toml_edit::Item::as_table)
+        .filter(|table| !table.is_dotted() && table.iter().all(|(_, item)| item.is_value()))
+        .ok_or_else(unrecognised)?;
+    let line_of = |offset: usize| text[..offset].matches('\n').count();
+
+    // 块名那一行认的是 `]` 所在的那一行：span 的尾巴一定落在块名上。
+    let header = table.span().ok_or_else(unrecognised)?;
+    let header_line = line_of(header.end.saturating_sub(1));
+    let mut lines = vec![header_line];
+    for (name, _) in table.iter() {
+        let (key, item) = table.get_key_value(name).ok_or_else(unrecognised)?;
+        let (Some(from), Some(to)) = (key.span(), item.span()) else {
+            return Err(unrecognised());
+        };
+        lines.extend(line_of(from.start)..=line_of(to.end.saturating_sub(1)));
+    }
+    let blank_above = header_line.checked_sub(1).filter(|above| {
+        text.split_inclusive('\n')
+            .nth(*above)
+            .is_some_and(|content| content.trim().is_empty())
+    });
+    lines.extend(blank_above);
+    Ok(lines)
 }
