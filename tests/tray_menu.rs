@@ -5,9 +5,11 @@
 
 mod common;
 
+use std::collections::BTreeSet;
+
 use common::NOW;
 use common::menu::{Depth, assert_matches_design, baseline, canned, submenu, which_device};
-use common::menu::{canned_with_tray, device_row, one_value_baselines};
+use common::menu::{canned_with_tray, device_row, exported_baselines, one_value_baselines};
 use common::tray::{
     MOUSE_AND_KEYBOARD, Screen, feed, fetched, fetched_with_warning, just_read, later, start,
     state_not_saved, state_saved,
@@ -62,23 +64,83 @@ fn rows_above_the_first_separator(menu: &Menu) -> Vec<(String, bool, Option<Comm
         .collect()
 }
 
-/// 一级菜单里归别的票、还没做出来的那几项：比对一级的基准时略去。那张票做出来了，就把它那一行拿掉；一个都不剩时，
-/// 一级的整份比对归 `menu-as-designed` 07。
-const NOT_BUILT_YET: &[&str] = &[];
+/// 设计稿导出到 `tests/menu_baselines/` 的每一份基准，都有用例在比：设计稿多导出一份、没有用例去比它，这里就红。
+///
+/// "有用例在比"看的是测试目标（`tests/*.rs`，Cargo 自己找出来的就是这几个；`tests/common/` 不是）的源码里有没有这三种
+/// 调用：`baseline("名字")`——一份 `Baseline` 除了交给 `assert_matches_design` 什么都做不了；`one_value_baselines("前缀")`
+/// ——从目录里列出"从罐装出发只改一项"的那几份逐份比，列出来的都算；`preview_baselines("名字")`——`tests/icon.rs` 里逐像素
+/// 比并排预览的那份网格。`//` 之后的不算。调用折成了几行、名字不是字面量的，这里认不出，照"没人比"红：宁可错红。它认不出
+/// 的错绿有几种（不在跑的代码、块注释与原始字符串里写着的调用），记在 parking lot Q350。
+#[test]
+fn every_baseline_the_design_exports_is_compared_by_some_test() {
+    let compared = compared_baselines();
 
-/// 一级，罐装：设备行在上（Primary Device 打勾，取数失败的那一行变灰），分隔线，"托盘上画哪一台 ›"，分隔线，
-/// "打开配置文件"与"退出"。
+    let not_compared: Vec<String> = exported_baselines()
+        .into_iter()
+        .filter(|name| !compared.contains(name))
+        .collect();
+
+    assert!(
+        not_compared.is_empty(),
+        "设计稿导出了、却没有用例在比的基准（tests/menu_baselines/<名字>.txt）：{not_compared:?}"
+    );
+}
+
+/// 测试目标的源码里比了哪几份基准（怎么认，见 [`every_baseline_the_design_exports_is_compared_by_some_test`]）。
+fn compared_baselines() -> BTreeSet<String> {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests");
+    let mut compared = BTreeSet::new();
+    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("读不到 {dir}：{e}")) {
+        let path = entry.expect("列得出 tests/ 里的一项").path();
+        if path.extension().is_none_or(|extension| extension != "rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("读不到 {}：{e}", path.display()));
+        // 每一行只看 `//` 之前那一段：注释里写着的调用不算。字符串里碰巧有 `//` 时截掉的是真代码，只会错红。
+        for line in source.lines().filter_map(|line| line.split("//").next()) {
+            for function in ["baseline", "preview_baselines"] {
+                compared.extend(
+                    literal_arguments(line, function)
+                        .into_iter()
+                        .map(str::to_owned),
+                );
+            }
+            for prefix in literal_arguments(line, "one_value_baselines") {
+                compared.extend(
+                    one_value_baselines(prefix)
+                        .into_iter()
+                        .map(|(name, _)| name),
+                );
+            }
+        }
+    }
+    compared
+}
+
+/// 这一行里 `function("…")` 每一处括号里的那段字面量。紧挨在前面的若还是标识符的一部分（`one_value_baselines` 里的
+/// `baselines`），那是另一个函数，不算。
+fn literal_arguments<'a>(line: &'a str, function: &str) -> Vec<&'a str> {
+    let call = format!("{function}(\"");
+    line.match_indices(call.as_str())
+        .filter(|(at, _)| !line[..*at].ends_with(|c: char| c == '_' || c.is_alphanumeric()))
+        .filter_map(|(at, _)| {
+            line[at + call.len()..]
+                .split_once('"')
+                .map(|(argument, _)| argument)
+        })
+        .collect()
+}
+
+/// 一级，罐装：设备行在上（Primary Device 打勾，取数失败的那一行变灰），分隔线，"托盘上画哪一台 ›""图标样式 ›""菜单显示 ›"
+/// "登记设备 ›"与"开机自启"，分隔线，"打开配置文件"与"退出"。一级的每一份基准都整份比，一行都不略。
 #[test]
 fn the_top_level_matches_the_design() {
     let (tray, _screen) = canned("primary = \"lowest\"");
 
     let menu = tray.menu(NOW);
 
-    assert_matches_design(
-        baseline("top").without(NOT_BUILT_YET),
-        &menu.items,
-        Depth::TopLevel,
-    );
+    assert_matches_design(baseline("top"), &menu.items, Depth::TopLevel);
 }
 
 /// 一级，钉死 neon75：勾跟着这一轮的 Primary Device 挪到它那一行（它此刻取数失败，照样变灰），子菜单右列写它的名字。
@@ -88,11 +150,7 @@ fn the_top_level_matches_the_design_when_a_failing_device_is_pinned() {
 
     let menu = tray.menu(NOW);
 
-    assert_matches_design(
-        baseline("top-primary-neon75").without(NOT_BUILT_YET),
-        &menu.items,
-        Depth::TopLevel,
-    );
+    assert_matches_design(baseline("top-primary-neon75"), &menu.items, Depth::TopLevel);
 }
 
 /// 一级，钉死 dragonfly3：这一轮的 Primary Device 本来就是它，一级与罐装只差子菜单右列。
@@ -103,7 +161,7 @@ fn the_top_level_matches_the_design_when_the_lowest_device_is_pinned() {
     let menu = tray.menu(NOW);
 
     assert_matches_design(
-        baseline("top-primary-dragonfly3").without(NOT_BUILT_YET),
+        baseline("top-primary-dragonfly3"),
         &menu.items,
         Depth::TopLevel,
     );
@@ -117,11 +175,7 @@ fn the_top_level_matches_the_design_with_every_warning_hanging() {
 
     let menu = tray.menu(NOW);
 
-    assert_matches_design(
-        baseline("top-warnings").without(NOT_BUILT_YET),
-        &menu.items,
-        Depth::TopLevel,
-    );
+    assert_matches_design(baseline("top-warnings"), &menu.items, Depth::TopLevel);
 }
 
 /// 一级，配置里一台 Device 都没有：设备行那一块是一句说明，"托盘上画哪一台"里只剩"自动（电量最低）"，其余照旧。
@@ -131,11 +185,7 @@ fn the_top_level_matches_the_design_when_the_config_has_no_device() {
 
     let menu = tray.menu(NOW);
 
-    assert_matches_design(
-        baseline("top-no_devices").without(NOT_BUILT_YET),
-        &menu.items,
-        Depth::TopLevel,
-    );
+    assert_matches_design(baseline("top-no_devices"), &menu.items, Depth::TopLevel);
 }
 
 /// 一级，从罐装出发关掉"写出来源和多久前"（`menu_source = false`）：有读数的那一行中段空着，取数失败的那一行照写短原因。
@@ -146,7 +196,7 @@ fn the_top_level_matches_the_design_without_source_and_age() {
     let menu = tray.menu(NOW);
 
     assert_matches_design(
-        baseline("top-menu_source-false").without(NOT_BUILT_YET),
+        baseline("top-menu_source-false"),
         &menu.items,
         Depth::TopLevel,
     );
@@ -160,7 +210,7 @@ fn the_top_level_matches_the_design_when_only_the_radio_marks_the_primary_device
     let menu = tray.menu(NOW);
 
     assert_matches_design(
-        baseline("top-primary_mark-radio").without(NOT_BUILT_YET),
+        baseline("top-primary_mark-radio"),
         &menu.items,
         Depth::TopLevel,
     );
@@ -448,14 +498,27 @@ fn the_icon_style_submenu_matches_the_design_after_changing_any_one_value() {
     }
 }
 
-/// "菜单显示 ›"：两个勾选项，勾照 `menu_source` 与 `primary_mark` 打——罐装两项都勾着，从罐装出发各关一项各一份。
+/// "菜单显示 ›"，罐装：两个勾选项，勾照 `menu_source` 与 `primary_mark` 打——罐装两项都勾着。
 #[test]
 fn the_menu_display_submenu_matches_the_design() {
-    let mut cases = vec![("menu_display".to_string(), String::new())];
-    cases.extend(one_value_baselines("menu_display"));
-    assert_eq!(cases.len(), 3, "罐装一份，两项各关一份：{cases:?}");
+    let (tray, _screen) = canned("primary = \"lowest\"");
 
-    for (name, line) in cases {
+    let menu = tray.menu(NOW);
+
+    assert_matches_design(
+        baseline("menu_display"),
+        submenu(&menu, "菜单显示"),
+        Depth::Whole,
+    );
+}
+
+/// "菜单显示 ›"，从罐装出发各关一项各一份：关掉的那一项不再打勾。
+#[test]
+fn the_menu_display_submenu_matches_the_design_after_switching_off_either_item() {
+    let changed = one_value_baselines("menu_display");
+    assert_eq!(changed.len(), 2, "两项各关一份：{changed:?}");
+
+    for (name, line) in changed {
         let (tray, _screen) = canned_with_tray(&line);
 
         let menu = tray.menu(NOW);

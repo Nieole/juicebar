@@ -1763,6 +1763,44 @@ Neon75」右列「Dongle24G」，靠右列分开（Q284 的①）。两行各点
 扫不了之后可能很久不再扫，照上一遍列就挂着一份很久的旧样子。翻案关在 `src/tray/config.rs` 的 `Event::Scanned` 一支与
 `tests/tray_register.rs` 的 `a_hid_scan_that_failed_lists_no_known_hid_device`。归 `/settle`（记下即可）。
 
+### Q350 —— "每份基准都有用例在比"靠扫测试目标的源码认出比对的调用，不靠一张按名字派发的总表
+
+**From:** menu-as-designed 票 07（整张菜单与设计稿对上）
+
+**取的路**：`tests/tray_menu.rs` 的 `every_baseline_the_design_exports_is_compared_by_some_test`：列出 `tests/menu_baselines/` 里
+设计稿导出的每一份（`canned` 除外，Q351），再扫 `tests/*.rs`（Cargo 找出来的测试目标）每一行 `//` 之前那一段，认 `baseline("名字")`、
+`one_value_baselines("前缀")`（照目录展开）、`preview_baselines("名字")` 三种调用，有一份没被认出就红。认不出的写法（调用折成几行、
+名字是拼出来的）照"没人比"红，宁可错红、不可错绿——本票当场撞上一回：`menu_display` 那一份原先有人比，名字却是写进元组里再拼的，
+拆成字面量调用才绿。`preview-gray` 一并算：它不是菜单，但出自同一份导出脚本，设计稿多导一张网格没人比，一样该红。
+
+**另一条路**：按名字派发。一条用例列目录，每个名字 match 到它的起手（罐装、改哪一项、喂哪次扫描）、比哪一段、展不展开，没有分支的
+名字当场红——"有人比"由构造保证，不靠认源码里的字。站得住：认的是字，一段不在跑的代码（`#[ignore]` 的用例、没人调的函数）里写着
+`baseline("x")` 也算数。代价：登记设备那四份的起手在 `tests/tray_register.rs` 的私有帮手里，得搬进 `common::menu` 或把那四条用例
+搬过来；每份一条、各带文档注释的用例也并成一张表。
+
+**推荐**：维持。认字会错绿的几种（review 列的）：不在跑的代码（`#[ignore]` 的用例、没人调的函数、被 `#![cfg]` 关掉的整个文件）、
+`/* */` 与原始字符串里写着的调用、别处另有一个同名的 `baseline` 帮手；`one_value_baselines`、`preview_baselines` 交出的也不是
+`Baseline`，写了调用却只数份数、不逐份比，照样算。今天测试目标里一处都没踩中（review 核过）；一份 `Baseline` 除了交给
+`assert_matches_design` 什么都做不了，两个列目录的帮手旁边各有一句数份数的断言；并行队列里 `tray_register.rs` 也不归本票动。
+合并时留意：兄弟票若把登记设备那几条改成循环里拼出来的名字，`tray_menu` 会红——那正是要它红的，拆回字面量调用即可。哪天菜单
+比对要并成一张表，再换派发。翻案关在 `tests/tray_menu.rs` 那条用例与它的两个帮手、`tests/common/menu.rs` 的 `exported_baselines`。
+归 `/settle`（记下即可）。
+
+### Q351 —— `canned.txt` 不进"每份基准都有用例在比"：用例里的罐装照它手写，不拿它去比
+
+**From:** menu-as-designed 票 07（整张菜单与设计稿对上）
+
+**取的路**：`exported_baselines` 跳过 `canned`。它是给人读的一段话——两台 Device 各自这一次取数的情形、托盘 16 像素深色、开机自启
+没开、本机没扫到可登记的设备——`tests/common/menu.rs` 的 `CANNED_DEVICES` 与 `canned` 照它手写。两边漂开，多半在别的比对里显形：
+设备行的占位、勾、变灰、右列，"开机自启"的勾，"登记设备"里那一行灰字，都照罐装那一轮排。
+
+**另一条路**：照行解析 `canned.txt`，断言 `canned()` 起出来的托盘就处在它说的情形。站得住：漂了而比对照绿的情形存在——譬如设计稿把
+罐装的 dragonfly3 改成 58%，基准里电量只是占位，一份比对都不会红。代价：给一段写给人看的话认一个格式，设计稿哪天换个说法这条就红，
+红的原因与菜单无关。
+
+**推荐**：维持。罐装的数值漂移只影响设备行，而设备行的确切字符串本来就由 `tests/tray_device_row.rs` 按自己的起手断言，不靠罐装。
+翻案关在 `tests/common/menu.rs` 的 `exported_baselines` 与一条新用例。归 `/settle`（记下即可）。
+
 ## Settled
 
 <!-- 一条记录一行：编号、它本来的那一句话、分到哪一道、去了哪儿。正文在 git 里，每一趟的收口 commit 写在那一趟的小节里。 -->
