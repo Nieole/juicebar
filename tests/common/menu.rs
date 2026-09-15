@@ -11,7 +11,7 @@
 //! let (tray, _screen) = canned("primary = \"lowest\"");
 //! let menu = tray.menu(NOW);
 //! assert_matches_design(baseline("primary"), submenu(&menu, "托盘上画哪一台"), Depth::Whole);
-//! assert_matches_design(baseline("top").without(NOT_BUILT_YET), &menu.items, Depth::TopLevel);
+//! assert_matches_design(baseline("top"), &menu.items, Depth::TopLevel);
 //! ```
 
 use std::fmt::Write;
@@ -115,6 +115,22 @@ pub fn one_value_baselines(prefix: &str) -> Vec<(String, String)> {
     found
 }
 
+/// 设计稿导出到 `tests/menu_baselines/` 的每一份基准的名字（不带 `.txt`），按名字排好：各份菜单基准，外加"灰状态"并排
+/// 预览的像素网格 `preview-gray`。`canned` 不算：它写的是基准用的罐装配置与环境，是 [`canned`] 照着写的那一份，不是拿来
+/// 比的（parking lot Q351）。
+pub fn exported_baselines() -> Vec<String> {
+    let mut found: Vec<String> = std::fs::read_dir(DIR)
+        .unwrap_or_else(|e| panic!("读不到 {DIR}：{e}"))
+        .filter_map(|entry| {
+            let file = entry.ok()?.file_name().into_string().ok()?;
+            let name = file.strip_suffix(".txt")?;
+            (name != "canned").then(|| name.to_string())
+        })
+        .collect();
+    found.sort();
+    found
+}
+
 /// 排成文本时子菜单展不展开。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Depth {
@@ -142,29 +158,6 @@ pub fn baseline(name: &str) -> Baseline {
     Baseline {
         name: name.to_string(),
         lines,
-    }
-}
-
-impl Baseline {
-    /// 比对时略去这几行（各略去第一次出现的那一行）：一级菜单里归别的票、还没做出来的那几项。那张票做出来了，
-    /// 就把它那一行从名单里拿掉；一个都不略去的整份比对归 `menu-as-designed` 07。
-    ///
-    /// 每一行都得真在基准里：略去一行基准里没有的，多半是设计稿改了而名单没跟上，那就当场说出来。
-    pub fn without(mut self, lines: &[&str]) -> Self {
-        for line in lines {
-            let at = self
-                .lines
-                .iter()
-                .position(|kept| kept == line)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "tests/menu_baselines/{}.txt 里没有要略去的这一行：{line}",
-                        self.name
-                    )
-                });
-            self.lines.remove(at);
-        }
-        self
     }
 }
 
