@@ -142,12 +142,12 @@ impl Tray {
     /// 一级菜单里的"登记设备 ›"，连同它子菜单里的几项。
     pub(super) fn register_submenu(&self) -> Item {
         let mut groups: Vec<Vec<Item>> = Vec::new();
-        let unregistered = unregistered(&self.config, &self.register.found);
+        let unregistered = unregistered_group(&self.config, &self.register.found);
         if !unregistered.is_empty() {
             groups.push(unregistered);
         }
         // 票 12：认得但没登记的 HID 设备那一组排在这里。
-        groups.extend(unregister(&self.config).map(|item| vec![item]));
+        groups.extend(unregister_submenu(&self.config).map(|item| vec![item]));
         let items = if groups.is_empty() {
             vec![Item::Entry(Entry {
                 grayed: true,
@@ -163,7 +163,7 @@ impl Tray {
 /// 未登记的蓝牙设备那一组：本机扫到、带电量属性、地址不在任何 Device 里的，每一台一个子菜单，右列写扫到它的那条通路
 /// （Ble），里面是"登记到 ›"——**只列还没有蓝牙地址的 Device**，已经有地址的不列：换地址是先解除、再登记，一点不会悄悄
 /// 覆盖旧地址。
-fn unregistered(config: &Config, found: &[BleBattery]) -> Vec<Item> {
+fn unregistered_group(config: &Config, found: &[BleBattery]) -> Vec<Item> {
     found
         .iter()
         // 带电量属性的才列：登记上了，Ble 那一级读的正是这个属性。
@@ -208,7 +208,7 @@ fn unregistered(config: &Config, found: &[BleBattery]) -> Vec<Item> {
 
 /// "解除蓝牙登记 ›"：有蓝牙地址的每台 Device 一项，右列写它登记的地址（照配置里的写法），登记错了看得出是哪个。一台
 /// 都没有就没有这一组。
-fn unregister(config: &Config) -> Option<Item> {
+fn unregister_submenu(config: &Config) -> Option<Item> {
     let bound: Vec<Item> = config
         .devices
         .iter()
@@ -230,11 +230,10 @@ fn unregister(config: &Config) -> Option<Item> {
 }
 
 /// 这台扫到的蓝牙设备已经登记在某台 Device 上了吗：看地址对不对得上，写法不同也算
-/// （[`crate::config::BluetoothEndpoint::matches`]）。登记过的那台已经是一级里的一行设备行，这里再列一遍就是同一台说在两处。
+/// （[`Config::device_with_bluetooth_address`]，写回拒不拒这一次登记问的也是它）。登记过的那台已经是一级里的一行设备行，
+/// 这里再列一遍就是同一台说在两处。
 fn is_registered(config: &Config, found: &BleBattery) -> bool {
     config
-        .devices
-        .iter()
-        .filter_map(|device| device.bluetooth.as_ref())
-        .any(|bluetooth| bluetooth.matches(&found.address))
+        .device_with_bluetooth_address(&found.address)
+        .is_some()
 }

@@ -129,9 +129,7 @@ fn register_to_lists_only_the_devices_that_have_no_bluetooth_address() {
 
 /// "登记设备 › `name` › 登记到"那一项。
 fn register_to<'a>(menu: &'a Menu, name: &str) -> &'a Entry {
-    let [Item::Entry(register)] = submenu(menu, "登记设备") else {
-        panic!("「登记设备」是一个 Entry");
-    };
+    let register = register_entry(menu);
     let found = child(register, name);
     child(found, "登记到")
 }
@@ -222,9 +220,7 @@ fn a_ble_device_whose_address_is_already_registered_is_not_listed() {
     );
 
     let menu = tray.menu(NOW);
-    let [Item::Entry(register)] = submenu(&menu, "登记设备") else {
-        panic!("「登记设备」是一个 Entry");
-    };
+    let register = register_entry(&menu);
 
     assert_eq!(texts(register), ["WH-1000XM5", "解除蓝牙登记"]);
 }
@@ -243,9 +239,7 @@ fn a_ble_device_without_a_battery_level_is_not_listed() {
     );
 
     let menu = tray.menu(NOW);
-    let [Item::Entry(register)] = submenu(&menu, "登记设备") else {
-        panic!("「登记设备」是一个 Entry");
-    };
+    let register = register_entry(&menu);
 
     assert_eq!(texts(register), ["WH-1000XM5"]);
 }
@@ -311,9 +305,7 @@ fn clicking_a_device_under_unregister_asks_the_shell_to_remove_its_address() {
         reloaded(&canned_with_neon75_address("f4ee2553b27e")),
     );
     let menu = tray.menu(NOW);
-    let [Item::Entry(register)] = submenu(&menu, "登记设备") else {
-        panic!("「登记设备」是一个 Entry");
-    };
+    let register = register_entry(&menu);
     let command = child(child(register, "解除蓝牙登记"), "VGN Neon75")
         .command
         .clone()
@@ -409,13 +401,19 @@ fn a_scan_that_failed_is_logged_once_per_reason_and_keeps_the_last_list() {
         ],
         "同一个原因接连两次只记一次，扫成过之后再记"
     );
-    let [Item::Entry(register)] = submenu(&menu, "登记设备") else {
-        panic!("「登记设备」是一个 Entry");
-    };
+    let register = register_entry(&menu);
     assert_eq!(texts(register), ["WH-1000XM5"], "照上一遍扫到的列");
 }
 
 /// 外壳照内核的吩咐扫了一遍本机的蓝牙设备，扫不了，完整原因是 `reason`。
 fn scan_failed(reason: &str) -> Event {
     Event::Register(register::Event::Scanned(Err(reason.to_string())))
+}
+
+/// 一级菜单里的"登记设备"那一项，连同它子菜单里的几项。
+fn register_entry(menu: &Menu) -> &Entry {
+    let [Item::Entry(register)] = submenu(menu, "登记设备") else {
+        panic!("「登记设备」是一个 Entry");
+    };
+    register
 }

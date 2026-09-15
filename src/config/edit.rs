@@ -384,12 +384,7 @@ pub fn register_ble(text: &str, device_id: &str, address: &str) -> Result<Option
             bluetooth.address
         ));
     }
-    if let Some(other) = config.devices.iter().find(|device| {
-        device
-            .bluetooth
-            .as_ref()
-            .is_some_and(|bluetooth| bluetooth.matches(address))
-    }) {
+    if let Some(other) = config.device_with_bluetooth_address(address) {
         return Err(anyhow!(
             "蓝牙地址 {address} 已经登记在 {} 上，不再登记到 {device_id}",
             other.id
@@ -434,7 +429,8 @@ fn device_index(config: &Config, device_id: &str) -> Result<usize> {
         .ok_or_else(|| anyhow!("配置里没有 id 是 \"{device_id}\" 的 Device"))
 }
 
-/// 解除这台 Device 的蓝牙登记：删掉它的 `[device.bluetooth]` 那一块，文件里别的一个字节都不动。交回写好的全文；这台
+/// 解除这台 Device 的蓝牙登记：删掉它的 `[device.bluetooth]` 那一块（连同块名正上方的那一行空行，见 [`block_lines`]），
+/// 文件里别的一个字节都不动。交回写好的全文；这台
 /// 本来就没有蓝牙地址时是 `None`（托盘还没重读到上一次解除时又点了一下），一个字节都不必写。
 ///
 /// 触发它的是托盘菜单"登记设备 › 解除蓝牙登记"里点的那一台（`crate::tray::config::Action::UnregisterBle`），落盘在外壳，
@@ -476,7 +472,8 @@ pub fn unregister_ble(text: &str, device_id: &str) -> Result<Option<String>> {
 
 /// 第 `index` 个 `[[device]]` 的 `[device.bluetooth]` 那一块占着原文的哪几行（从 0 数）：块名那一行，块里每个键从键到
 /// 值的那几行；块名正上方是一行空行时连它一起——那是 [`register_ble`] 登记时补在块前面的，登记之后再解除，文件逐字节
-/// 回到登记之前。
+/// 回到登记之前。用户手写的块，前面那一行空行也跟着走：分不出那一行是谁写的，而删的是空行、不是注释（ADR-0003 守的
+/// 是注释一句不丢）。
 ///
 /// 只认写成一张表、下面不再挂子表的那种（草稿与 [`register_ble`] 写的都是）。写成行内表或者点号键，就说认不出、一个
 /// 字节都不删：照一个没想到的形状删行，删坏了用户的配置比不删糟得多。

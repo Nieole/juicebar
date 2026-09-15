@@ -414,10 +414,7 @@ fn the_draft_writes_the_endpoint_placeholders_from_one_shape() {
         ble.contains("登记设备"),
         "还要说清去托盘菜单的哪儿登记它：{ble}"
     );
-    assert!(
-        !ble.contains("juicebar scan"),
-        "不再叫人去跑命令行抄地址：{ble}"
-    );
+    assert!(!ble.contains("scan"), "不再叫人去跑命令行抄地址：{ble}");
 
     // 在场的那一条仍然是真块，所以上面那两段的形状不是"整份草稿都被注释掉了"。
     assert!(
