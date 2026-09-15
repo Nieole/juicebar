@@ -25,7 +25,7 @@ use crate::config::{Device, General};
 use crate::endpoints::EndpointKind;
 use crate::icon::IconState;
 use crate::primary::{self, Candidate, CandidateReading, Selection};
-use crate::readout::{NoReading, RowReading};
+use crate::readout::{NoReading, Outcome, RowReading};
 use crate::sources::level::{Level, LevelSource, level_for};
 use crate::staleness::{Freshness, Staleness};
 use crate::state::Provenance;
@@ -33,15 +33,27 @@ use crate::vendor_hub::{Processes, VendorHub};
 
 /// 一台 Device 这一轮手上有的东西——这一轮的输入。
 ///
-/// 前两种就是一次取数交出来的那个 `Result`（[`crate::readout::read_or_last_known`]，见下面的
-/// `From`）；第三种是一次取数都还没有结果的时候，常驻之后每台设备刚启动时都是它。
+/// 一次取数交出来的就是它：命令行拿的是那个 `Result`（[`crate::readout::read_or_last_known`]），托盘拿的是连同
+/// "退到上次已知值时这一次为什么没读到"的那一份（[`Outcome`]），见下面两个 `From`。无已知值是一次取数都还没有
+/// 结果的时候，常驻之后每台设备刚启动时都是它。
 ///
 /// 它归调用方所有、一轮一轮地留着（托盘里某台 Device 两次取数之间会过好几轮），这一轮只借它：
 /// [`NoReading`] 装着一个 `anyhow::Error`，拷不了。
 pub enum InHand {
-    /// 一份读数：这一次取数读到的，或者读不到时退到的上次已知值——哪一种由
-    /// [`RowReading::provenance`] 分辨。
+    /// 一份读数：这一次取数读到的，或者上次已知值——哪一种由 [`RowReading::provenance`] 分辨。
+    ///
+    /// 上次已知值走这里的，是说不出"这一次为什么没读到"的那几种：刚启动时从状态文件里拿出来的（还没有"这一次"），
+    /// 以及命令行的那一份（它只标"上次已知值"）。
     Reading(RowReading),
+    /// 这一次取数没读到（`because`：取数失败的某一种来路，或者暂停），退到了上次已知值（`last_known`）。
+    ///
+    /// 与 [`Self::Reading`] 分开，是因为那一行要说**这一次**为什么没读到：菜单设备行的中段写它的短原因，右列照样
+    /// 写上次已知值的电量（`menu-as-designed` spec「设备行」，parking lot Q234）。图标状态、电量、来源、多久前都
+    /// 照那份上次已知值判，与 [`Self::Reading`] 一模一样。
+    FellBack {
+        last_known: RowReading,
+        because: NoReading,
+    },
     /// 一次取数什么都没交出来，又退不到上次已知值：取数失败，或者暂停。
     NoReading(NoReading),
     /// 无已知值：一次取数都还没有结果，状态文件里也没有它。
@@ -51,11 +63,26 @@ pub enum InHand {
 }
 
 impl From<Result<RowReading, NoReading>> for InHand {
-    /// 一次取数的结果就是这一轮手上的东西。
+    /// 一次取数的结果就是这一轮手上的东西。退到上次已知值时的原因不在这个 `Result` 里，所以那一份是 [`Self::Reading`]。
     fn from(fetched: Result<RowReading, NoReading>) -> Self {
         match fetched {
             Ok(row) => Self::Reading(row),
             Err(no_reading) => Self::NoReading(no_reading),
+        }
+    }
+}
+
+impl From<Outcome> for InHand {
+    /// 托盘那一次取数的结果（[`crate::readout::read_or_last_known_with_reason`]）：退到了上次已知值，就连同这一次的原因。
+    fn from(outcome: Outcome) -> Self {
+        match (outcome.row, outcome.fell_back_because) {
+            (Ok(last_known), Some(because)) => Self::FellBack {
+                last_known,
+                because,
+            },
+            (Ok(row), None) => Self::Reading(row),
+            // 退不到时原因就是那个 `Err`，`fell_back_because` 那时是 `None`（`Outcome` 上写着）。
+            (Err(no_reading), _) => Self::NoReading(no_reading),
         }
     }
 }
@@ -125,21 +152,27 @@ pub enum Warning {
     ConfigUnreadable(String),
 }
 
+impl Warning {
+    /// 那件事没办成的那半句，不带完整原因：菜单顶上一条告警一行，写的就是它（`crate::tray::menu`）；`Display` 在它
+    /// 后面接完整原因，日志与命令行印那一整句。两处说的是同一件事，所以前半句只在这里写一次。
+    pub fn headline(&self) -> &'static str {
+        match self {
+            Self::ProcessesUnknown(_) => "认不出本机在跑哪些进程，这一轮不暂停",
+            Self::StateNotSaved(_) => "记不下这一轮的读数（下次启动就没有上次已知值了）",
+            Self::ConfigUnreadable(_) => "读不了配置文件，沿用上一份读好的",
+        }
+    }
+}
+
 impl fmt::Display for Warning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let headline = self.headline();
         match self {
-            Self::ProcessesUnknown(reason) => {
-                write!(f, "认不出本机在跑哪些进程，这一轮不暂停 —— {reason}")
+            Self::ProcessesUnknown(reason) | Self::ConfigUnreadable(reason) => {
+                write!(f, "{headline} —— {reason}")
             }
-            Self::StateNotSaved(reason) => {
-                write!(
-                    f,
-                    "记不下这一轮的读数（下次启动就没有上次已知值了）—— {reason}"
-                )
-            }
-            Self::ConfigUnreadable(reason) => {
-                write!(f, "读不了配置文件，沿用上一份读好的 —— {reason}")
-            }
+            // 半句收在全角括号上，破折号前面不留空格。
+            Self::StateNotSaved(reason) => write!(f, "{headline}—— {reason}"),
         }
     }
 }
@@ -228,6 +261,8 @@ pub struct DeviceState<'a> {
     pub low_battery: u8,
     /// 它这一轮拿什么出来给人看。电量、来源、多久前、短原因都从这里读（下面那几个方法）。
     pub shown: Shown<'a>,
+    /// 退到了上次已知值时，这一次取数为什么没读到（[`InHand::FellBack`]）；别的时候是 `None`。从 [`Self::reason`] 读。
+    fell_back_because: Option<&'a NoReading>,
 }
 
 /// 一台 Device 这一轮拿什么出来给人看：[`InHand`] 借过来，读数那一种再带上它在"当下"有多旧。
@@ -267,19 +302,25 @@ impl<'a> DeviceState<'a> {
         now: Timestamp,
     ) -> Self {
         let low_battery = general.low_battery_for(device);
-        let shown = match in_hand {
-            InHand::Reading(row) => Shown::Reading {
-                row,
-                staleness: Staleness::assess(&row.reading, general, now),
-            },
-            InHand::NoReading(no_reading) => Shown::NoReading(no_reading),
-            InHand::NoKnownValue => Shown::NoKnownValue,
+        let reading = |row: &'a RowReading| Shown::Reading {
+            row,
+            staleness: Staleness::assess(&row.reading, general, now),
+        };
+        let (shown, fell_back_because) = match in_hand {
+            InHand::Reading(row) => (reading(row), None),
+            InHand::FellBack {
+                last_known,
+                because,
+            } => (reading(last_known), Some(because)),
+            InHand::NoReading(no_reading) => (Shown::NoReading(no_reading), None),
+            InHand::NoKnownValue => (Shown::NoKnownValue, None),
         };
         Self {
             device,
             icon_state: icon_state(&shown, device.level_source, low_battery),
             low_battery,
             shown,
+            fell_back_because,
         }
     }
 
@@ -313,15 +354,16 @@ impl<'a> DeviceState<'a> {
         self.reading().and_then(|(_, staleness)| staleness.age_secs)
     }
 
-    /// 一句短原因：手上没有读数时，取数那一层说的那一句——为什么交不出数（取数失败的三种来路，
-    /// 或者暂停）。有读数、或者无已知值（没有什么失败了）时没有。
+    /// 这一次取数为什么没拿到读数（取数失败的三种来路，或者暂停）：手上没有读数时是取数那一层交出的那个；退到了
+    /// 上次已知值时也有，是这一次取数自己的原因（parking lot Q234）。这一次读到了、无已知值（没有什么失败了），
+    /// 或者手上的上次已知值说不出"这一次"（刚启动时从状态文件里拿的、命令行的那一份）时没有。
     ///
-    /// 交的是那个值本身，不是一句另写的短话：它的 `Display` 就是那一句（命令行那一行印的正是它），
-    /// 而它的变体还分得出是暂停还是取数失败。菜单上要多短，由排菜单的那一侧定（parking lot Q152）。
+    /// 交的是那个值本身：菜单设备行说它的短原因（[`NoReading::short_reason`]），命令行、悬停提示与日志说完整原因
+    /// （`Display`），而它的变体还分得出是暂停还是取数失败。
     pub fn reason(&self) -> Option<&'a NoReading> {
         match self.shown {
             Shown::NoReading(no_reading) => Some(no_reading),
-            Shown::Reading { .. } | Shown::NoKnownValue => None,
+            Shown::Reading { .. } | Shown::NoKnownValue => self.fell_back_because,
         }
     }
 

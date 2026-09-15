@@ -1143,11 +1143,65 @@ driver = "vgn_keyboard"
   report_id = 0
 "#;
 
+/// 钉死在这个 id 上：菜单里点了某一台时交给回写的那条规则。
+fn pin_to(id: &str) -> PrimaryRule {
+    PrimaryRule::Pinned(id.to_string())
+}
+
+/// 钉死之后在菜单里切回"自动（电量最低）"：`primary` 那一格写回 `"lowest"`，别的一行都不动——连那一行
+/// 行尾的注释也在。逐行比一遍，理由同 `primary_writeback_touches_nothing_else_the_user_wrote`。
+#[test]
+fn primary_writeback_switches_back_to_lowest_touching_only_that_line() {
+    let before = HANDWRITTEN_CONFIG.replace(
+        "primary = \"lowest\"",
+        "primary = \"neon75\"   # 先钉着键盘",
+    );
+
+    let written = config::pin_primary(&before, &PrimaryRule::Lowest).unwrap();
+
+    assert!(written.changed, "从钉死换回自动是改动");
+    assert_eq!(
+        Config::parse(&written.text).unwrap().general.primary,
+        PrimaryRule::Lowest,
+        "重启后生效的就是自动"
+    );
+    let before: Vec<&str> = before.lines().collect();
+    let after: Vec<&str> = written.text.lines().collect();
+    assert_eq!(before.len(), after.len(), "行数都不该变");
+    let changed: Vec<(&str, &str)> = before
+        .iter()
+        .zip(&after)
+        .filter(|(before, after)| before != after)
+        .map(|(before, after)| (*before, *after))
+        .collect();
+    assert_eq!(
+        changed,
+        [(
+            "primary = \"neon75\"   # 先钉着键盘",
+            "primary = \"lowest\"   # 先钉着键盘"
+        )],
+        "只该动 primary 那一行，行尾注释原样留着"
+    );
+}
+
+/// 本来就是自动时再点一次"自动（电量最低）"：一个字节都不写。`[general]` 整节没写时 `primary` 缺省就是自动，
+/// 同样不写——不然会凭空多出一节来。
+#[test]
+fn primary_writeback_writes_nothing_when_it_is_already_lowest() {
+    let written = config::pin_primary(HANDWRITTEN_CONFIG, &PrimaryRule::Lowest).unwrap();
+    assert!(!written.changed);
+    assert_eq!(written.text, HANDWRITTEN_CONFIG);
+
+    let unwritten = config::pin_primary(ONE_DEVICE, &PrimaryRule::Lowest).unwrap();
+    assert!(!unwritten.changed);
+    assert_eq!(unwritten.text, ONE_DEVICE);
+}
+
 /// 用户在菜单里选了另一台，那个选择要落到 `primary` 这一格里——而**下一次启动读的就是它**，
 /// 所以这里读回来的方式与真正启动时同一条（`Config::parse`），不是去文本里找字符串。
 #[test]
 fn primary_writeback_pins_the_device_the_user_chose() {
-    let pinned = config::pin_primary(HANDWRITTEN_CONFIG, "neon75").unwrap();
+    let pinned = config::pin_primary(HANDWRITTEN_CONFIG, &pin_to("neon75")).unwrap();
 
     assert!(pinned.changed, "从 lowest 换成一台具体设备是改动");
     let config = Config::parse(&pinned.text).expect("回写之后必须还解析得动");
@@ -1162,8 +1216,8 @@ fn primary_writeback_pins_the_device_the_user_chose() {
 /// 会白白改掉文件的修改时间，也让人以为程序动过它——`config-refresh` 守的是同一条。
 #[test]
 fn primary_writeback_writes_nothing_when_it_is_already_that_device() {
-    let once = config::pin_primary(HANDWRITTEN_CONFIG, "neon75").unwrap();
-    let twice = config::pin_primary(&once.text, "neon75").unwrap();
+    let once = config::pin_primary(HANDWRITTEN_CONFIG, &pin_to("neon75")).unwrap();
+    let twice = config::pin_primary(&once.text, &pin_to("neon75")).unwrap();
 
     assert!(!twice.changed, "同一个 id 钉第二遍不是改动");
     assert_eq!(twice.text, once.text, "什么都没改的时候不该把文件重写一遍");
@@ -1184,7 +1238,7 @@ name = "VGN Neon75"
 driver = "vgn_keyboard"
 "#;
 
-    let pinned = config::pin_primary(before, "neon75").unwrap();
+    let pinned = config::pin_primary(before, &pin_to("neon75")).unwrap();
 
     for kept in [
         "# 上面这句在键的 decor 里",
@@ -1211,7 +1265,7 @@ name = "VGN Neon75"
 driver = "vgn_keyboard"
 "#;
 
-    let pinned = config::pin_primary(before, "neon75").unwrap();
+    let pinned = config::pin_primary(before, &pin_to("neon75")).unwrap();
 
     assert!(pinned.changed);
     assert_eq!(
@@ -1240,7 +1294,7 @@ fn primary_writeback_creates_the_general_section_when_the_config_has_none() {
         "{ONE_DEVICE}\n[[device]]\nid = \"neon75\"\nname = \"VGN Neon75\"\ndriver = \"vgn_keyboard\"\n"
     );
 
-    let pinned = config::pin_primary(&two, "neon75").unwrap();
+    let pinned = config::pin_primary(&two, &pin_to("neon75")).unwrap();
 
     let config = Config::parse(&pinned.text).expect("新建 [general] 之后必须还解析得动");
     assert_eq!(
@@ -1270,7 +1324,7 @@ fn primary_writeback_creates_the_general_section_when_the_config_has_none() {
 /// 所以这里收到一个不在册的 id 是**调用方的 bug**，该当场说出来。
 #[test]
 fn primary_writeback_refuses_an_id_that_is_not_a_registered_device() {
-    let error = config::pin_primary(HANDWRITTEN_CONFIG, "dragonfly4")
+    let error = config::pin_primary(HANDWRITTEN_CONFIG, &pin_to("dragonfly4"))
         .expect_err("不在册的 id 不该写进去")
         .to_string();
 
@@ -1293,7 +1347,7 @@ name = "起名起得不巧"
 driver = "vgn_mouse"
 "#;
 
-    let error = config::pin_primary(before, "lowest")
+    let error = config::pin_primary(before, &pin_to("lowest"))
         .expect_err("钉不住的就别写进去")
         .to_string();
 
@@ -1307,7 +1361,7 @@ driver = "vgn_mouse"
 /// 逐行这一半才是真正守边界的那一半——列举只能证明我想到的那几处没丢。
 #[test]
 fn primary_writeback_touches_nothing_else_the_user_wrote() {
-    let pinned = config::pin_primary(HANDWRITTEN_CONFIG, "neon75").unwrap();
+    let pinned = config::pin_primary(HANDWRITTEN_CONFIG, &pin_to("neon75")).unwrap();
 
     for kept in [
         "# 这份配置是我自己写的，一个字都不许动",
@@ -1355,7 +1409,7 @@ name = "VGN Neon75"
 driver = "vgn_keyboard"
 "#;
 
-    let pinned = config::pin_primary(before, "neon75").unwrap();
+    let pinned = config::pin_primary(before, &pin_to("neon75")).unwrap();
 
     assert_eq!(
         Config::parse(&pinned.text).unwrap().general.primary,

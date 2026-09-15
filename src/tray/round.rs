@@ -57,6 +57,8 @@ pub struct SaveState {
 /// 一轮这一块记着的东西：每台 Device 手上有什么、上一轮选的是谁、托盘上此刻是什么样子。
 pub struct Rounds {
     look: Look,
+    /// 手上最近的那个"当下"：上一格时钟，或者上一次取数。不是由取数开的那一轮（菜单里换了 Primary Device）照它判。
+    now: Timestamp,
     /// 每台 Device 手上有的东西，一轮一轮地留着：一台两次取数之间会过好几轮。
     in_hand: BTreeMap<String, InHand>,
     /// 上一轮按规则选出的那一台，起手是状态文件里的 `last_primary`（`CONTEXT.md`「保持上次的选择」）。
@@ -92,6 +94,7 @@ impl Rounds {
             .collect();
         let mut rounds = Self {
             look,
+            now,
             in_hand,
             remembered: last_known.last_primary().map(str::to_owned),
             primary: None,
@@ -122,7 +125,33 @@ impl Rounds {
             InHand::Reading(row) if row.provenance == Provenance::JustRead
         );
         self.in_hand.insert(fetched.device_id, fetched.in_hand);
-        let selected = self.compose(config, fetched.at, warnings, out);
+        self.now = fetched.at;
+        self.new_round(config, warnings, just_read, out);
+    }
+
+    /// 菜单里换了"托盘上画哪一台"（`config` 里的 `primary` 已经是新的那一条）：照它**当场**重算这一轮、重画——用户点
+    /// 了就该看见图标换人，不等下一次取数（parking lot Q252 在菜单这一头的那一半）。
+    ///
+    /// 各台手上的东西不变，"当下"是手上最近的那一刻（[`Self::now`]）。存不存状态文件照取数开的那一轮的规矩，只是没有
+    /// 新读到的东西要记：这一轮选出的换了人才存（记下 `last_primary`）。
+    pub fn on_primary_changed(
+        &mut self,
+        config: &Config,
+        warnings: Vec<Warning>,
+        out: &mut Vec<super::Action>,
+    ) {
+        self.new_round(config, warnings, false, out);
+    }
+
+    /// 合成新的一轮、画出来；这一轮选出的换了人，或者 `just_read`（这一次取数真读到了一份），就存状态文件。
+    fn new_round(
+        &mut self,
+        config: &Config,
+        warnings: Vec<Warning>,
+        just_read: bool,
+        out: &mut Vec<super::Action>,
+    ) {
+        let selected = self.compose(config, self.now, warnings, out);
         let changed = selected.is_some() && selected != self.remembered;
         if changed {
             self.remembered.clone_from(&selected);
@@ -137,6 +166,7 @@ impl Rounds {
     /// 时钟走到了：不是新的一轮——Primary Device 不换人，图标不重判——只让悬停提示里的"多久前"跟上
     /// 当下。悬停提示是一段死字，不跟着走，它就一直说"0 秒前"。
     pub fn on_tick(&mut self, config: &Config, now: Timestamp, out: &mut Vec<super::Action>) {
+        self.now = now;
         let Some(id) = &self.primary else {
             return;
         };
@@ -222,6 +252,40 @@ impl Rounds {
     pub(super) fn look(&self) -> Look {
         self.look
     }
+
+    /// 每台 Device 在 `now` 这一刻的样子（菜单的设备行照它排）：与合成这一轮时同一组、同一个次序（配置里的书写
+    /// 顺序），只是"当下"换成了此刻——"多久前"跟着走，与两轮之间的悬停提示同一个道理。
+    pub(super) fn device_states<'a>(
+        &'a self,
+        config: &'a Config,
+        now: Timestamp,
+    ) -> Vec<DeviceState<'a>> {
+        config
+            .devices
+            .iter()
+            .filter_map(|device| {
+                self.in_hand
+                    .get(&device.id)
+                    .map(|in_hand| DeviceState::assess(device, in_hand, &config.general, now))
+            })
+            .collect()
+    }
+
+    /// 这一轮的 Primary Device，选不出来是 `None`：托盘上此刻画的就是它。
+    pub(super) fn primary(&self) -> Option<&str> {
+        self.primary.as_deref()
+    }
+
+    /// 配置换了一份（重读读好了）：新登记的 Device 手上先是无已知值——状态文件只在启动时读，之后没有它可以问——好让它
+    /// 在第一次取数回来之前就在这一轮里，菜单上照样有它那一行（本票 Spec review 指出：不然从一台都没有变成有一台时，
+    /// 设备行那一块整块是空的）。已经记着的一样不动；配置里删掉的留着也无妨，合成这一轮只照配置里的名单取。
+    pub(super) fn track_devices(&mut self, config: &Config) {
+        for device in &config.devices {
+            self.in_hand
+                .entry(device.id.clone())
+                .or_insert(InHand::NoKnownValue);
+        }
+    }
 }
 
 /// 状态文件里这台 Device 的上次已知值，交成这一轮手上的东西；没有（或者已经过了 `very_stale_after`）
@@ -261,7 +325,11 @@ fn log_failure(config: &Config, fetched: &Fetched, out: &mut Vec<super::Action>)
             device.name
         )));
     }
-    if let Some(reason @ NoReading::Failed(_)) = &fetched.fell_back_because {
+    if let InHand::FellBack {
+        because: reason @ NoReading::Failed(_),
+        ..
+    } = &fetched.in_hand
+    {
         out.push(super::Action::Log(format!(
             "{} 取数失败，退到上次已知值：{reason}",
             device.name
@@ -275,13 +343,24 @@ fn log_failure(config: &Config, fetched: &Fetched, out: &mut Vec<super::Action>)
 /// 理由对图标一字不差——十天前的一个 62 画在托盘上就是一句假话。图标状态照旧（Stale，或者低电），
 /// 渲染器在有状态、没有数的时候画"没有读数时"那个符号，日期由悬停提示说。
 fn percent_to_draw(state: &DeviceState<'_>) -> Option<u8> {
+    match level_to_show(state)? {
+        Level::Reported(percent) | Level::Derived(percent) => Some(percent),
+        Level::Unknown => None,
+    }
+}
+
+/// 这一台此刻拿得出来给人看的那个电量：图标上画的数（[`percent_to_draw`]）与菜单设备行右列写的电量
+/// （`super::device_row`）是同一个，所以只在这里判一次。
+///
+/// 没有读数、陈旧到只该说日期的那一档、电量 Unknown，都没有数可给人看。
+pub(super) fn level_to_show(state: &DeviceState<'_>) -> Option<Level> {
     let (_, staleness) = state.reading()?;
     match staleness.freshness {
         Freshness::Fresh | Freshness::Stale => {}
         Freshness::VeryStale => return None,
     }
     match state.level()? {
-        Level::Reported(percent) | Level::Derived(percent) => Some(percent),
+        level @ (Level::Reported(_) | Level::Derived(_)) => Some(level),
         Level::Unknown => None,
     }
 }

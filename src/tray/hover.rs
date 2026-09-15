@@ -15,9 +15,10 @@
 use crate::bluetooth::age_text;
 use crate::endpoints::EndpointKind;
 use crate::primary::Selection;
+use crate::readout::RowReading;
 use crate::round::{DeviceState, Round, Shown};
 use crate::sources::level::level_for;
-use crate::staleness::Freshness;
+use crate::staleness::{Freshness, Staleness};
 use crate::state::Provenance;
 
 /// 悬停提示最长多少个 UTF-16 单元：`NOTIFYICONDATAW::szTip` 是 128 格，末尾一格要留给 NUL。
@@ -26,11 +27,14 @@ use crate::state::Provenance;
 /// 省略号（[`text`]）。完整的原因在日志里。
 pub const MAX_UTF16: usize = 127;
 
+/// 配置里一台 Device 都没登记时说的那一句：悬停提示写它，菜单设备行那一块也写它（`super::menu`）。
+pub(super) const NO_DEVICE: &str = "配置里一个 Device 都没有";
+
 /// 这一轮的悬停提示：Primary Device 那一台的样子；选不出 Primary Device 时，说为什么。
 pub fn text(round: &Round<'_>) -> String {
     // 一台都没登记是根上的原因：那时说"选不出谁"只是同一件事的第二遍（命令行那一行也在这时不补那句）。
     if round.devices.is_empty() {
-        return "配置里一个 Device 都没有".to_string();
+        return NO_DEVICE.to_string();
     }
     fit(match (round.primary_state(), round.primary) {
         (Some(state), _) => device_lines(state).join("\n"),
@@ -75,11 +79,7 @@ fn device_lines(state: &DeviceState<'_>) -> Vec<String> {
     let mut lines = vec![state.device.name.clone()];
     match &state.shown {
         Shown::Reading { row, staleness } => {
-            // 上次已知值里记着的"充电中"不算（`Provenance::charging_now`，图标状态问的是同一条）。
-            let charging = match row.provenance.charging_now(row.reading.reading.charging) {
-                Some(true) => "，充电中",
-                Some(false) | None => "",
-            };
+            let charging = charging_marker(row);
             // 陈旧到不该再显示数字的那一档，电量整段换成它是哪一天的——一个几个月前的百分比写出来就是
             // 一句假话。说不出取得时刻就判不出这一档，那一支走不到，照常写。
             lines.push(match (staleness.freshness, row.reading.taken_at) {
@@ -89,25 +89,9 @@ fn device_lines(state: &DeviceState<'_>) -> Vec<String> {
                     format!("{level}{charging}")
                 }
             });
-            let source = row.reading.endpoint;
-            let from = match source {
-                EndpointKind::Wired | EndpointKind::Dongle24G => {
-                    format!("来自 {source}（{}）", age_text(staleness.age_secs))
-                }
-                EndpointKind::Ble => {
-                    format!(
-                        "来自 {source}（Windows 缓存，{}）",
-                        age_text(staleness.age_secs)
-                    )
-                }
-            };
-            lines.push(format!(
-                "{from}{}",
-                stale_marker(row.provenance, staleness.freshness)
-            ));
-            // 点那个上位机的名：用户能动手的地方只有它。
-            if let Some(hub) = &row.paused_by {
-                lines.push(format!("已暂停（{} 正在运行）", hub.process()));
+            lines.push(source_and_age(row, staleness));
+            if let Some(note) = paused_note(row) {
+                lines.push(note);
             }
         }
         // 取数失败的三种来路与暂停，那一句由取数那一层说（`NoReading` 的 `Display`）。太长就被截在
@@ -118,6 +102,44 @@ fn device_lines(state: &DeviceState<'_>) -> Vec<String> {
         }
     }
     lines
+}
+
+/// 来源与多久前，连同它能不能当现状："来自 Dongle24G（3 分钟前），已陈旧"。
+///
+/// 菜单设备行的中段说的是同一件事，用的就是这一句（`super::device_row`，spec 用户故事 16）。
+pub(super) fn source_and_age(row: &RowReading, staleness: &Staleness) -> String {
+    let source = row.reading.endpoint;
+    let from = match source {
+        EndpointKind::Wired | EndpointKind::Dongle24G => {
+            format!("来自 {source}（{}）", age_text(staleness.age_secs))
+        }
+        EndpointKind::Ble => {
+            format!(
+                "来自 {source}（Windows 缓存，{}）",
+                age_text(staleness.age_secs)
+            )
+        }
+    };
+    format!(
+        "{from}{}",
+        stale_marker(row.provenance, staleness.freshness)
+    )
+}
+
+/// "，充电中"：这一次取数读到它正在充电时接在电量后面。上次已知值里记着的"充电中"不算（`Provenance::charging_now`，
+/// 图标状态问的是同一条）。菜单设备行的中段接的也是它（`super::device_row`）。
+pub(super) fn charging_marker(row: &RowReading) -> &'static str {
+    match row.provenance.charging_now(row.reading.reading.charging) {
+        Some(true) => "，充电中",
+        Some(false) | None => "",
+    }
+}
+
+/// 这一次取数有 Endpoint 为上位机让开过：点那个上位机的名，用户能动手的地方只有它。菜单设备行的中段接的也是它。
+pub(super) fn paused_note(row: &RowReading) -> Option<String> {
+    row.paused_by
+        .as_ref()
+        .map(|hub| format!("已暂停（{} 正在运行）", hub.process()))
 }
 
 /// 陈旧标注：新鲜、这一次取数读到的什么都不加，其余每一种都以"已陈旧"开头。

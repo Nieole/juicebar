@@ -15,7 +15,7 @@
 //! |---|---|---|---|---|
 //! | 轮询节奏 | [`cadence`] | `shell/cadence.rs` | 看 [`Event::Tick`]、[`Event::Fetched`] | [`cadence::Action`] |
 //! | 一轮 | [`round`]，文字在 [`hover`] | `shell/round.rs` | 看 [`Event::Tick`]、[`Event::Fetched`] | [`round::Action`] |
-//! | 菜单 | [`menu`] | `shell/menu.rs` | [`menu::Command`] | [`menu::Action`] |
+//! | 菜单 | [`menu`]，设备行的字在 `device_row` | `shell/menu.rs` | [`menu::Command`] | [`menu::Action`] |
 //! | 通知 | [`notify`] | `shell/notify.rs` | 看 [`Event::Fetched`] | [`notify::Notice`] |
 //! | 配置 | [`config`] | `shell/config.rs` | [`config::Event`] | [`config::Action`] |
 //! | 告警 | [`warnings`] | 没有（写状态文件的结果由 `shell/worker.rs` 交回） | 看 [`Event::Fetched`]；[`warnings::Event`] | 只写日志 |
@@ -34,6 +34,7 @@
 
 pub mod cadence;
 pub mod config;
+mod device_row;
 pub mod hover;
 pub mod menu;
 pub mod menu_theme;
@@ -44,7 +45,6 @@ pub mod warnings;
 use crate::clock::Timestamp;
 use crate::config::Config;
 use crate::icon::{IconSize, Theme};
-use crate::readout::NoReading;
 use crate::round::{InHand, Warning};
 use crate::state::LastKnown;
 
@@ -158,10 +158,9 @@ pub struct Fetched {
     pub device_id: String,
     /// 这一次取数的"当下"：取数与陈旧判定共用的那一个（`crate::clock` 上写了为什么只问一次）。
     pub at: Timestamp,
-    /// 交给这一轮的那一份（[`crate::readout::read_or_last_known`] 交的就是它）。
+    /// 交给这一轮的那一份（[`crate::readout::read_or_last_known_with_reason`] 交的 [`crate::readout::Outcome`]）：退到了
+    /// 上次已知值时连同这一次取数自己为什么没读到（[`InHand::FellBack`]）。
     pub in_hand: InHand,
-    /// 退到了上次已知值时，这一次取数自己为什么没读到（[`crate::readout::Outcome`]）。
-    pub fell_back_because: Option<NoReading>,
     /// 取数之前问本机进程的结果：问不出来时的那一条告警，问出来了是 `None`
     /// （[`crate::round::PauseCheck::warning`]）。有就挂上、没有就摘掉（[`warnings`]）。
     pub warning: Option<Warning>,
@@ -174,7 +173,7 @@ pub enum Action {
     Cadence(cadence::Action),
     /// 一轮：重画图标、更新悬停提示、存状态文件。
     Round(round::Action),
-    /// 菜单：本票只有退出。
+    /// 菜单：打开日志、退出。
     Menu(menu::Action),
     /// 弹一条通知。
     Notify(notify::Notice),

@@ -11,10 +11,13 @@
 //! 同一条路进来——用户手改的与程序写回的，内核分不出、也不必分。
 //!
 //! 换掉配置**不重开一轮**：图标与悬停提示照新配置排，要等下一次取数有结果（parking lot Q252）；各台下一次
-//! 什么时候问，也还是上一次取数有结果时按旧配置算定的那一刻（parking lot Q172）。
+//! 什么时候问，也还是上一次取数有结果时按旧配置算定的那一刻（parking lot Q172）。**例外是菜单里换了"托盘上画
+//! 哪一台"**：那是内核自己做的改动，当场改手上那一份的 `primary`、重算这一轮（`super::menu`），写回照旧交给外壳
+//! （[`Action::WritePrimary`]），之后重读进来的是同一个选择。
 
 use crate::config::{Config, Fill, refresh};
 use crate::hid::HidInfo;
+use crate::primary::PrimaryRule;
 use crate::round::Warning;
 
 use super::Tray;
@@ -59,6 +62,9 @@ pub enum Action {
     Scan,
     /// 把配置文件整个换成这份全文。今天只有自动补空块写它，新文本由配置那道缝生成（[`crate::config::refresh`]）。
     Write(String),
+    /// 把 `primary` 写成这一条（菜单"托盘上画哪一台"里点的）：外壳读此刻文件的全文、照配置那道缝格式保留地只改那一格
+    /// （[`crate::config::pin_primary`]），本来就是这一条就不写。读全文而不是照内核手上那一份写，理由同 [`Scan::text`]。
+    WritePrimary(PrimaryRule),
 }
 
 /// 扫一遍本机这件事走到哪了（[`Action::Scan`]）。
@@ -103,6 +109,7 @@ impl Tray {
     pub(super) fn on_config(&mut self, event: Event, out: &mut Vec<super::Action>) {
         match event {
             Event::Reloaded(Ok(config)) => {
+                self.round.track_devices(&config);
                 self.config = config;
                 self.warnings.clear(Matter::ConfigFile);
             }

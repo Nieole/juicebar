@@ -152,6 +152,22 @@ pub enum IconState {
     NoKnownValue,
 }
 
+impl std::fmt::Display for IconState {
+    /// `CONTEXT.md`「图标状态」里的那八个名字，原样：菜单设备行的右列没有数可写时写的就是它（`crate::tray::menu`）。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Normal => "正常",
+            Self::Low => "低电",
+            Self::Charging => "充电中",
+            Self::Stale => "Stale",
+            Self::Paused => "暂停",
+            Self::FetchFailed => "取数失败",
+            Self::Unknown => "Unknown",
+            Self::NoKnownValue => "无已知值",
+        })
+    }
+}
+
 /// 托盘图标的四档尺寸，对应 100% / 125% / 150% / 200% 显示缩放。
 ///
 /// 只有这四档：设计稿逐档审过每一笔落在哪个像素上，别的尺寸没有人看过。
