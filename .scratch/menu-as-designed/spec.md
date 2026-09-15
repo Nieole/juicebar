@@ -1,6 +1,6 @@
 # 菜单照设计稿
 
-Status: ready-for-agent
+Status: resolved
 
 术语一律按 `CONTEXT.md`（Device / Endpoint / 一次取数 / 一轮 / Stale / Unknown / 取数失败 / 暂停 /
 上次已知值 / Primary Device / 图标状态 / **短原因** / **告警**，后两个是这一次新收的）。相关决策：

@@ -1,6 +1,6 @@
 # 取数与配置各归其模块
 
-Status: ready-for-agent
+Status: resolved
 
 **零行为变化。** 这份 spec 交付的全部是边界：两个长成多用途的文件各自搬进自己的模块，
 外加一处让编译器守住的完备性。术语一律按 `CONTEXT.md`（Device / Endpoint / Reading /

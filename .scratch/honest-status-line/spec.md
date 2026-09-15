@@ -1,6 +1,6 @@
 # 那一行只说它答得出的话
 
-Status: ready-for-agent
+Status: resolved
 
 用户看得见的措辞改动，两处。术语一律按 `CONTEXT.md`（Reading / Stale / Unknown / 失联 / 暂停 /
 **读取异常** / 上次已知值）。相关决策见 `docs/adr/0002`（电量数值来源与不可信值）与

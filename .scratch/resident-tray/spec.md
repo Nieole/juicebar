@@ -1,6 +1,6 @@
 # 常驻托盘
 
-Status: ready-for-agent
+Status: resolved
 
 术语一律按 `CONTEXT.md`（Device / Endpoint / Reading / 一次取数 / 一轮 / Stale / Unknown / 读取异常 /
 上次已知值 / 失联 / 取数失败 / 暂停 / Primary Device / 图标状态 / 保持上次的选择）。相关决策：

@@ -1,13 +1,14 @@
 # 这一屏成为一个函数
 
-Status: ready-for-agent
+Status: resolved
 
 四块内容，共一个形状：**上一趟买的是那一行说的是不是实话，这一趟买的是说这句话的东西有没有
 名字和形状。** 术语一律按 `CONTEXT.md`（Reading / Stale / Unknown / 失联 / 读取异常 / **取数失败** /
 暂停 / 上次已知值 / Primary Device）。相关决策见 `docs/adr/0001`（接收器有自己一组 VID/PID）与
 `docs/adr/0004`（坏帧时取有界的沉默）。
 
-出处是第 2 趟 `/settle` 结算出来的 Q69、Q88、Q89、Q91，磨制过程见 `.scratch/homeless-2.md`。
+出处是第 2 趟 `/settle` 结算出来的 Q69、Q88、Q89、Q91，磨制过程见 `.scratch/homeless-2.md`（四条都已
+消化，文件已删，正文在 git 的 `7f169cf` 里）。
 **词汇已经先行**：「取数失败」这一条在磨这份 spec 的过程中一落定就写进了 `CONTEXT.md`。
 
 ## Problem Statement

@@ -1,6 +1,6 @@
 # 电量取数链路：协议驱动、Device 模型与配置
 
-Status: ready-for-agent
+Status: resolved
 
 对应实现顺序的第 4、5 步。术语一律按 `CONTEXT.md`（Device / Endpoint / Reading /
 Reported Level / Derived Level / Stale / Unknown / Primary Device）。相关决策见
