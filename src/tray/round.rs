@@ -31,7 +31,7 @@ pub enum Action {
 /// 图标怎么画：外壳拿它原样调 [`crate::icon::render`]。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IconRequest {
-    /// 图标样式。本票一律缺省（读 `[tray]` 表归票 07）。
+    /// 图标样式：手上那份配置的 `[tray]` 里管图标的六项。
     pub settings: IconSettings,
     /// Primary Device 的图标状态；选不出 Primary Device 时是无已知值。
     pub state: IconState,
@@ -211,7 +211,7 @@ impl Rounds {
             warnings,
             now,
         );
-        let icon = self.icon_for(round.primary_state());
+        let icon = self.icon_for(config.tray.icon, round.primary_state());
         let tooltip = hover::text(&round);
         let selected = round.primary.primary_id().map(str::to_owned);
         if self.shown_icon != Some(icon) {
@@ -234,17 +234,52 @@ impl Rounds {
     ///
     /// 选不出 Primary Device（选不出来，或者钉的 id 不在册）时画无已知值：图标上没有哪一台，"没有读数
     /// 时画什么"那个符号说的正是这件事；为什么选不出来，由悬停提示说。
-    fn icon_for(&self, primary: Option<&DeviceState<'_>>) -> IconRequest {
+    fn icon_for(&self, settings: IconSettings, primary: Option<&DeviceState<'_>>) -> IconRequest {
         let (state, percent) = match primary {
             Some(state) => (state.icon_state, percent_to_draw(state)),
             None => (IconState::NoKnownValue, None),
         };
         IconRequest {
-            settings: IconSettings::default(),
+            settings,
             state,
             percent,
             size: self.look.size,
             theme: self.look.theme,
+        }
+    }
+
+    /// 图标样式换了（菜单里点的，或者重读进来的配置里 `[tray]` 变了）：**不开新的一轮**，把托盘上此刻画着的那一张换成
+    /// 新的样式重画。Primary Device、图标状态、电量都不变，所以也没有状态文件要存；样式其实没变就什么都不发。
+    pub(super) fn restyle(&mut self, settings: IconSettings, out: &mut Vec<super::Action>) {
+        let Some(shown) = self.shown_icon else {
+            return;
+        };
+        self.redraw(IconRequest { settings, ..shown }, out);
+    }
+
+    /// 任务栏的样子变了（深浅色、显示缩放）：换掉手上那一份——图标照它画，菜单此刻实际的深浅也照它答（parking lot
+    /// Q261）——再把托盘上此刻画着的那一张换成新的调色与尺寸重画。与 [`Self::restyle`] 一样不开新的一轮；样子没变就
+    /// 什么都不发。
+    pub(super) fn on_look_changed(&mut self, look: Look, out: &mut Vec<super::Action>) {
+        self.look = look;
+        let Some(shown) = self.shown_icon else {
+            return;
+        };
+        self.redraw(
+            IconRequest {
+                size: look.size,
+                theme: look.theme,
+                ..shown
+            },
+            out,
+        );
+    }
+
+    /// 照这张重画，与此刻画着的一样就不发。
+    fn redraw(&mut self, icon: IconRequest, out: &mut Vec<super::Action>) {
+        if self.shown_icon != Some(icon) {
+            self.shown_icon = Some(icon);
+            out.push(super::Action::Round(Action::DrawIcon(icon)));
         }
     }
 

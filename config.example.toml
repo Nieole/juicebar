@@ -49,6 +49,33 @@ show_unknown_ble = false
 pause_when_vendor_hub_running = true
 vendor_hub_processes = ["VGN VHUB.exe"]
 
+# 托盘图标与右键菜单。每一项都有默认值，不写就用默认值。
+[tray]
+
+# 图标画法："number" A 纯数字，"battery" B 电池，"ring" C 圆环，"bar" D 数字+底条
+style = "bar"
+
+# 数字字形："block" 粗块，"fine" 细体，"system" 系统字体
+glyph = "block"
+
+# 满电 100 怎么画："digits" 照画 100，"cap_99" 画成 99，"block" 满格符号
+full = "block"
+
+# 灰状态怎么区分："one" 全部一个灰，"split" 灰数字与灰符号两种，"split_pause" 两种，另给暂停加琥珀点
+gray = "split"
+
+# 一次读数都没有过时画什么："dash" 两道横线 --，"question" 问号，"outline" 空的轮廓，"logo" 程序图标
+no_last_known = "dash"
+
+# 充电中的标记："color" 只靠绿色，"bolt_large" 24 像素以上加闪电，"bolt" 所有尺寸都加闪电
+charging = "color"
+
+# 菜单里写不写来源：true 写来源和多久前，false 只写电量
+menu_source = true
+
+# 菜单里 Primary Device 标在哪："both" 两处都标，"radio" 只留单选
+primary_mark = "both"
+
 
 # ---------------------------------------------------------------
 # Device。每个物理设备一条，把它的几条 Endpoint 合并在一起。

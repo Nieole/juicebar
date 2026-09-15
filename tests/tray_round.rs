@@ -8,7 +8,7 @@ mod common;
 
 use common::NOW;
 use common::tray::{
-    MOUSE_AND_KEYBOARD, failed, feed, fell_back, fetched, just_read, last_known_value, later,
+    LOOK, MOUSE_AND_KEYBOARD, failed, feed, fell_back, fetched, just_read, last_known_value, later,
     reading, start, start_with_look,
 };
 use juicebar::endpoints::EndpointKind;
@@ -39,7 +39,7 @@ fn a_fetch_result_starts_a_new_round_and_the_icon_draws_the_primary_devices_stat
 }
 
 /// 一次取数都还没回来的时候，图标就已经在了：状态文件里什么都没有，画无已知值——调色与尺寸按启动
-/// 时任务栏的深浅色与显示缩放（变了之后重画归票 07）。样式是缺省的那一套（读 `[tray]` 表归票 07）。
+/// 时任务栏的深浅色与显示缩放（运行中变了见下一条）。配置里没写 `[tray]`，样式是缺省的那一套。
 #[test]
 fn at_startup_with_nothing_on_record_the_icon_shows_no_known_value_in_the_taskbars_theme_and_size()
 {
@@ -61,6 +61,54 @@ fn at_startup_with_nothing_on_record_the_icon_shows_no_known_value_in_the_taskba
             theme: Theme::Light,
         }
     );
+}
+
+/// 运行中任务栏切到浅色、显示缩放改成 150%（外壳收到 Windows 的消息，把此刻的样子喂进来）：图标**当场**照新的调色与
+/// 尺寸重画，画的还是那一台、那个数、那个样式；这不是新的一轮，没有东西要存。
+#[test]
+fn a_changed_taskbar_theme_or_display_scale_redraws_the_icon_at_once() {
+    let (mut tray, mut screen) = start(MOUSE_AND_KEYBOARD, &LastKnown::default(), NOW);
+    feed(
+        &mut tray,
+        &mut screen,
+        fetched(
+            "dragonfly3",
+            NOW,
+            just_read(EndpointKind::Dongle24G, 62, NOW),
+        ),
+    );
+    let before = screen.icon();
+    let saves = screen.saves.len();
+
+    feed(
+        &mut tray,
+        &mut screen,
+        Event::LookChanged(Look {
+            theme: Theme::Light,
+            size: IconSize::Px24,
+            ..LOOK
+        }),
+    );
+
+    assert_eq!(
+        screen.icon(),
+        IconRequest {
+            theme: Theme::Light,
+            size: IconSize::Px24,
+            ..before
+        }
+    );
+    assert_eq!(screen.saves.len(), saves, "不是新的一轮，没有东西要存");
+}
+
+/// Windows 为别的设置广播了一次、任务栏的样子其实没变：什么都不做。
+#[test]
+fn a_look_that_did_not_change_redraws_nothing() {
+    let (mut tray, _screen) = start(MOUSE_AND_KEYBOARD, &LastKnown::default(), NOW);
+
+    let actions = tray.handle(Event::LookChanged(LOOK));
+
+    assert!(actions.is_empty(), "{actions:?}");
 }
 
 /// 状态文件里有上次已知值、也记着上一轮的 Primary Device：一次取数都还没回来，图标就画那台的上次已知值

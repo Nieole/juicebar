@@ -13,6 +13,7 @@
 //!
 //! 设备行没有点击动作。措辞归代码，设计稿基准里只占位（parking lot Q283）。
 
+use crate::config::{PrimaryMark, TraySettings};
 use crate::icon::IconState;
 use crate::round::DeviceState;
 
@@ -20,7 +21,7 @@ use super::hover;
 use super::menu::{Entry, Kind, Placeholder};
 use super::round::level_to_show;
 
-/// "菜单显示"那两项怎么设（ADR-0005 的 `menu_source`、`primary_mark`）。票 07 读 `[tray]` 表来填它；在那之前一律是缺省。
+/// "菜单显示"那两项怎么设（ADR-0005 的 `menu_source`、`primary_mark`），照 `[tray]` 表填（[`RowDisplay::of`]）。
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RowDisplay {
     /// "写出来源和多久前"：关着时，有读数的那一行中段空着，短原因照写（spec 用户故事 14）。
@@ -29,11 +30,12 @@ pub(super) struct RowDisplay {
     pub mark_primary: bool,
 }
 
-impl Default for RowDisplay {
-    fn default() -> Self {
+impl RowDisplay {
+    /// 手上那份配置的 `[tray]` 里，"菜单显示"那两项此刻怎么设。
+    pub(super) fn of(settings: &TraySettings) -> Self {
         Self {
-            source_and_age: true,
-            mark_primary: true,
+            source_and_age: settings.menu_source,
+            mark_primary: settings.primary_mark == PrimaryMark::Both,
         }
     }
 }

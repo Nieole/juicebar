@@ -1456,6 +1456,64 @@ Reported 还是 Derived 留给悬停提示与日志。代价是不是 Primary De
 **推荐**：补上，写短原因而不是完整原因（放得下，与设备行同一句），完整原因留给日志。翻案关在 `src/tray/hover.rs` 的 `device_lines`
 与 `tests/tray_hover.rs`。归 `/settle`。
 
+### Q300 —— 手改了 `[tray]`、重读读好了：当场照新样式重画图标，不等下一次取数；认不出的取值只在第一次出现时记日志
+
+**From:** resident-tray 票 07（图标样式与菜单显示）
+
+**取的路**：`Event::Reloaded(Ok)` 换掉配置之后调 `Rounds::restyle`：不开新的一轮，只把托盘上此刻画着的那一张换成新配置里的图标样式
+重画（样式没变就什么都不发）；菜单里点的那一下走的也是它。`[tray]` 里认不出的取值，启动时每一处记一行日志，重读时只记上一份里
+没有的——程序自己写回配置之后也会重读一遍，点一下菜单不该把别处那句笔误再记一遍。
+
+**另一条路**：照 Q252 "换掉配置不重开一轮，图标要等下一次取数"办，手改的 `[tray]` 最多晚一个轮询间隔（2.4G 缺省 60 秒）才出现在
+图标上；日志每读一次照记一次。站得住：与 `[general]` 的改动同一个规矩，内核少一处特例，日志也不必比对上一份。代价是用户在编辑器
+里改完样式、回头看托盘没变，会以为没生效。
+
+**推荐**：维持。重画不是新的一轮（不重判 Primary Device、不存状态文件），与 Q252 要避免的那件事不冲突。翻案关在 `src/tray/config.rs`
+的 `on_config` 与 `tests/tray_config.rs` 的两条用例。归 `/settle`。
+
+### Q301 —— 显示缩放改读主显示器此刻的有效 DPI，不再用 `GetDpiForSystem`
+
+**From:** resident-tray 票 07（图标样式与菜单显示）
+
+**取的路**：`src/shell/look.rs` 的 `primary_monitor_dpi`：`MonitorFromPoint((0, 0), MONITOR_DEFAULTTOPRIMARY)` 加 `GetDpiForMonitor`
+（`MDT_EFFECTIVE_DPI`），问不出来才退回 `GetDpiForSystem`。理由：`GetDpiForSystem` 是登录那一刻的系统 DPI，运行中改了缩放它不变
+（"部分应用要注销后才会调整"说的就是它），票面要的"缩放改一次，图标与预览重画"用它做不到；通知区在主显示器的任务栏上。外壳收
+`WM_SETTINGCHANGE`、`WM_DPICHANGED`、`WM_DISPLAYCHANGE` 三条都重问一次，弹出菜单之前也问一次。**本会话没有管理员权限、起不了托盘，
+没在实机上看过**；看不见的窗口收不收得到 `WM_DPICHANGED` 也没查实，另外两条与弹出之前那一次兜着。
+
+**另一条路**：照旧 `GetDpiForSystem`，缩放变化只认 `WM_DPICHANGED` 的 wParam 带来的新 DPI；或者 `GetDpiForWindow` 问那扇看不见的窗口。
+站得住：前者不多调一个 Shcore 函数，后者跟着窗口所在的显示器走。代价：前者全靠看不见的窗口收得到那条消息（没查实），后者对零尺寸、
+从不显示的窗口是否及时更新同样没查实。
+
+**推荐**：维持，手工验收"缩放改一次"时核（不注销，看托盘图标换没换档、预览换没换尺寸）；没换就改认 `WM_DPICHANGED` 带来的 DPI。
+翻案关在 `src/shell/look.rs` 一个函数。归票 07 的手工验收，结论回填这一条。
+
+### Q302 —— 回写 `[tray]`：没写的键、要的是缺省值就不补；"恢复默认"把写着别的取值的键改写成缺省值，不删键
+
+**From:** resident-tray 票 07（图标样式与菜单显示）
+
+**取的路**：`config::write_tray`（`src/config/edit.rs`）逐键：写着的正是这个取值 → 不动；写着别的（连认不出的笔误）→ 只换值、留住前后
+的空白与行尾注释；没写 → 要的是缺省值就不动（不凭空多出一行、一张表，与 `pin_primary` 切回自动时不建 `[general]` 同理），不是缺省值
+就补在 `[tray]` 末尾，整张没有就建在 `[general]` 之后、所有 `[[device]]` 之前。"恢复默认"是图标样式那六个键各走一遍这条规矩。
+
+**另一条路**："恢复默认"把六个键删掉（缺席即缺省），点了缺省值那一项也删掉那个键。站得住：文件回到"没改过"的样子，更短。代价：
+键上方与行尾的注释跟着键一起没了，而那多半是用户写的；`config.example.toml` 本身把八个键写全，删键会让照样例抄来的配置越改越不像样例。
+
+**推荐**：维持。翻案关在 `src/config/edit.rs` 的 `write_tray_key` 与 `tests/config.rs` 的几条回写用例。归 `/settle`。
+
+### Q303 —— 首次运行的草稿不写 `[tray]`
+
+**From:** resident-tray 票 07（图标样式与菜单显示）
+
+**取的路**：`[tray]` 只写进了 `config.example.toml`（票面那一格），`src/config/draft.rs` 的草稿没动：票面没点它，rt-11 同时在改那个文件。
+菜单里改一项时 `write_tray` 会在 `[general]` 之后建出 `[tray]`，草稿里没有这张表不妨碍回写。
+
+**另一条路**：草稿照 `[general]` 的写法把八个键连同一两句注释写出来，`tests/config.rs` 加一条"草稿与样例的 `[tray]` 逐项一致"（照
+`the_draft_and_the_example_config_agree_on_the_general_switches`）。站得住：`src/config/draft.rs` 的 `DRAFT_PREAMBLE` 文档写着"一个用户
+看不见的开关等于不存在"，而草稿是大多数人唯一会打开的那份配置。代价：草稿更长；与 rt-11 在 `draft.rs` 上交汇。
+
+**推荐**：补上，等 rt-11 合并之后。翻案关在 `src/config/draft.rs` 与 `tests/config.rs`。归 `/settle`。
+
 ## Settled
 
 <!-- 一条记录一行：编号、它本来的那一句话、分到哪一道、去了哪儿。正文在 git 里，每一趟的收口 commit 写在那一趟的小节里。 -->

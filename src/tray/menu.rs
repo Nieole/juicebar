@@ -6,11 +6,12 @@
 //! 基准锁住（`tests/menu_baselines/`）：用例把模型排成同一种文本逐项比对。
 //!
 //! 一级自上而下（`menu-as-designed` spec「菜单自上而下」）：告警（有才出现）→ 设备行（`super::device_row`）→
-//! "托盘上画哪一台 ›" → "打开配置文件" → "退出"，分隔线照设计稿。"图标样式 ›"与"菜单显示 ›"归票 07，"登记设备 ›"
-//! 归票 11、12，"开机自启"归票 13。
+//! "托盘上画哪一台 ›" → "图标样式 ›" → "菜单显示 ›"（这两个在 `super::settings_menu`）→ "打开配置文件" → "退出"，
+//! 分隔线照设计稿。"登记设备 ›"归票 11、12，"开机自启"归票 13。
 
 use crate::clock::Timestamp;
 use crate::config::Config;
+use crate::config::TraySetting;
 use crate::icon::{IconSettings, IconSize, IconState, Theme};
 use crate::primary::PrimaryRule;
 use crate::round::Warning;
@@ -109,6 +110,10 @@ pub enum Command {
     Primary(PrimaryRule),
     /// 退出。
     Quit,
+    /// "图标样式""菜单显示"里点了一项：`[tray]` 里那一个键换成这个取值（`super::settings_menu`）。
+    TraySetting(TraySetting),
+    /// "图标样式"里点了"恢复默认"：图标样式那六项换回缺省值，"菜单显示"那两项不动。
+    RestoreIconDefaults,
 }
 
 /// 菜单这一块的动作。
@@ -158,7 +163,7 @@ impl Tray {
                 ..Entry::new(Kind::Normal, hover::NO_DEVICE)
             }));
         }
-        let display = RowDisplay::default();
+        let display = RowDisplay::of(&self.config.tray);
         let primary = self.round.primary();
         items.extend(
             self.round
@@ -172,6 +177,8 @@ impl Tray {
         items.push(Item::Separator);
         items.push(which_device(&self.config));
         // "图标样式 ›""菜单显示 ›"（票 07）、"登记设备 ›"（票 11、12）、"开机自启"（票 13）依次排在这里。
+        items.push(self.icon_style_menu());
+        items.push(self.menu_display_menu());
         items.push(Item::Separator);
         items.push(Item::Entry(Entry {
             command: Some(Command::OpenConfigFile),
@@ -208,6 +215,11 @@ impl Tray {
             Command::Quit => {
                 self.quit = true;
                 out.push(super::Action::Menu(Action::Quit));
+            }
+            // "图标样式""菜单显示"里改了一项：当场生效、重画、写回（`super::settings_menu`）。
+            Command::TraySetting(setting) => self.on_tray_settings(vec![setting], out),
+            Command::RestoreIconDefaults => {
+                self.on_tray_settings(TraySetting::icon_defaults().to_vec(), out);
             }
         }
     }

@@ -7,17 +7,21 @@ mod common;
 
 use common::NOW;
 use common::menu::{Depth, assert_matches_design, baseline, canned, submenu, which_device};
+use common::menu::{canned_with_tray, device_row, one_value_baselines};
 use common::tray::{
     MOUSE_AND_KEYBOARD, Screen, feed, fetched, fetched_with_warning, just_read, later, start,
     state_not_saved, state_saved,
 };
 use juicebar::config::Config;
+use juicebar::config::{PrimaryMark, TraySetting};
 use juicebar::endpoints::EndpointKind;
+use juicebar::icon::{Charging, Full, Glyph, Gray, IconSettings, NoLastKnown, Style};
 use juicebar::primary::PrimaryRule;
 use juicebar::round::Warning;
 use juicebar::state::LastKnown;
-use juicebar::tray::menu::{self, Command, Item, Menu};
-use juicebar::tray::{Event, Tray, config};
+use juicebar::tray::menu::{self, Command, Entry, Item, Kind, Menu};
+use juicebar::tray::round::{self, IconRequest};
+use juicebar::tray::{Action, Event, Tray, config};
 
 /// 一台 Device 都没登记的配置。
 const NO_DEVICE: &str = "[general]\nprimary = \"lowest\"\n";
@@ -61,9 +65,6 @@ fn rows_above_the_first_separator(menu: &Menu) -> Vec<(String, bool, Option<Comm
 /// 一级菜单里归别的票、还没做出来的那几项：比对一级的基准时略去。那张票做出来了，就把它那一行拿掉；一个都不剩时，
 /// 一级的整份比对归 `menu-as-designed` 07。
 const NOT_BUILT_YET: &[&str] = &[
-    // 票 07
-    "子菜单 「图标样式」",
-    "子菜单 「菜单显示」",
     // 票 11、12
     "子菜单 「登记设备」",
     // 票 13
@@ -137,6 +138,34 @@ fn the_top_level_matches_the_design_when_the_config_has_no_device() {
 
     assert_matches_design(
         baseline("top-no_devices").without(NOT_BUILT_YET),
+        &menu.items,
+        Depth::TopLevel,
+    );
+}
+
+/// 一级，从罐装出发关掉"写出来源和多久前"（`menu_source = false`）：有读数的那一行中段空着，取数失败的那一行照写短原因。
+#[test]
+fn the_top_level_matches_the_design_without_source_and_age() {
+    let (tray, _screen) = canned_with_tray("menu_source = false");
+
+    let menu = tray.menu(NOW);
+
+    assert_matches_design(
+        baseline("top-menu_source-false").without(NOT_BUILT_YET),
+        &menu.items,
+        Depth::TopLevel,
+    );
+}
+
+/// 一级，从罐装出发只留单选（`primary_mark = "radio"`）：设备行上不再打勾，这一轮是谁只看"托盘上画哪一台"之外的地方。
+#[test]
+fn the_top_level_matches_the_design_when_only_the_radio_marks_the_primary_device() {
+    let (tray, _screen) = canned_with_tray("primary_mark = \"radio\"");
+
+    let menu = tray.menu(NOW);
+
+    assert_matches_design(
+        baseline("top-primary_mark-radio").without(NOT_BUILT_YET),
         &menu.items,
         Depth::TopLevel,
     );
@@ -381,6 +410,379 @@ fn switching_back_to_automatic_redraws_the_icon_at_once_and_writes_lowest() {
     assert_eq!(
         screen.config,
         [config::Action::WritePrimary(PrimaryRule::Lowest)]
+    );
+}
+
+/// "图标样式 ›"，罐装（六项都是缺省值）：一级那一行右边不写字；第二层六行各写当前值，末尾一条分隔线与"恢复默认"；最里一层
+/// 每个选项挂一张预览（固定画 57，"满电 100"那一组画 100；"灰状态"那一组三张并排），当前值那一项落圆点、加粗，缺省值
+/// 那一项右边写"默认"，B 电池右边写"16、20 像素不显示数字"。罐装的托盘是 16 像素、菜单是深色，预览照它画。
+#[test]
+fn the_icon_style_submenu_matches_the_design() {
+    let (tray, _screen) = canned("primary = \"lowest\"");
+
+    let menu = tray.menu(NOW);
+
+    assert_matches_design(
+        baseline("icon_style"),
+        submenu(&menu, "图标样式"),
+        Depth::Whole,
+    );
+}
+
+/// "图标样式 ›"，从罐装出发只改一项，每个取值各一份：第二层那一行的右列换成新的取值，圆点与加粗挪过去；每一张预览
+/// 都照新的设置画——只把它那一项换成它的选项，其余照用户此刻的设置（所以改了充电标记，别的几组预览也带着它）。
+#[test]
+fn the_icon_style_submenu_matches_the_design_after_changing_any_one_value() {
+    let changed = one_value_baselines("icon_style");
+    assert_eq!(
+        changed.len(),
+        14,
+        "ADR-0005 管图标的六个键里，不是缺省值的取值一共 14 个（3 + 2 + 2 + 2 + 3 + 2）：{changed:?}"
+    );
+
+    for (name, line) in changed {
+        let (tray, _screen) = canned_with_tray(&line);
+
+        let menu = tray.menu(NOW);
+
+        assert_matches_design(baseline(&name), submenu(&menu, "图标样式"), Depth::Whole);
+    }
+}
+
+/// "菜单显示 ›"：两个勾选项，勾照 `menu_source` 与 `primary_mark` 打——罐装两项都勾着，从罐装出发各关一项各一份。
+#[test]
+fn the_menu_display_submenu_matches_the_design() {
+    let mut cases = vec![("menu_display".to_string(), String::new())];
+    cases.extend(one_value_baselines("menu_display"));
+    assert_eq!(cases.len(), 3, "罐装一份，两项各关一份：{cases:?}");
+
+    for (name, line) in cases {
+        let (tray, _screen) = canned_with_tray(&line);
+
+        let menu = tray.menu(NOW);
+
+        assert_matches_design(baseline(&name), submenu(&menu, "菜单显示"), Depth::Whole);
+    }
+}
+
+/// 一级菜单里沿着这几段字一层层往里走到的那一项：`["图标样式", "画法"]` 是第二层"画法"那一行。
+fn entry_at<'a>(menu: &'a Menu, path: &[&str]) -> &'a Entry {
+    let mut items = menu.items.as_slice();
+    let mut found = None;
+    for text in path {
+        let entry = items
+            .iter()
+            .find_map(|item| match item {
+                Item::Entry(entry) if entry.text == *text => Some(entry),
+                Item::Entry(_) | Item::Separator => None,
+            })
+            .unwrap_or_else(|| panic!("菜单里沿着 {path:?} 走不到「{text}」"));
+        if let Kind::Submenu(children) = &entry.kind {
+            items = children;
+        }
+        found = Some(entry);
+    }
+    found.expect("路径不是空的")
+}
+
+/// 这一项子菜单里每一项的字与点了交给内核的东西（分隔线跳过）。
+fn choices(entry: &Entry) -> Vec<(String, Option<Command>)> {
+    let Kind::Submenu(children) = &entry.kind else {
+        panic!("「{}」不是子菜单", entry.text);
+    };
+    children
+        .iter()
+        .filter_map(|item| match item {
+            Item::Entry(entry) => Some((entry.text.clone(), entry.command.clone())),
+            Item::Separator => None,
+        })
+        .collect()
+}
+
+fn tray_setting(setting: TraySetting) -> Option<Command> {
+    Some(Command::TraySetting(setting))
+}
+
+/// "图标样式"里每一项点了交给内核的，就是它说的那一项：六组里每个选项是 `[tray]` 里那个键的那个取值（键与取值照
+/// ADR-0005，菜单上的字照设计稿），末尾"恢复默认"是恢复默认。
+#[test]
+fn each_icon_style_choice_hands_the_kernel_the_setting_it_stands_for() {
+    let (tray, _screen) = canned("primary = \"lowest\"");
+    let menu = tray.menu(NOW);
+
+    let group = |title: &str| choices(entry_at(&menu, &["图标样式", title]));
+
+    assert_eq!(
+        group("画法"),
+        [
+            (
+                "A 纯数字".to_string(),
+                tray_setting(TraySetting::Style(Style::Number))
+            ),
+            (
+                "B 电池".to_string(),
+                tray_setting(TraySetting::Style(Style::Battery))
+            ),
+            (
+                "C 圆环".to_string(),
+                tray_setting(TraySetting::Style(Style::Ring))
+            ),
+            (
+                "D 数字+底条".to_string(),
+                tray_setting(TraySetting::Style(Style::Bar))
+            ),
+        ]
+    );
+    assert_eq!(
+        group("字形"),
+        [
+            (
+                "粗块".to_string(),
+                tray_setting(TraySetting::Glyph(Glyph::Block))
+            ),
+            (
+                "细体".to_string(),
+                tray_setting(TraySetting::Glyph(Glyph::Fine))
+            ),
+            (
+                "系统字体".to_string(),
+                tray_setting(TraySetting::Glyph(Glyph::System))
+            ),
+        ]
+    );
+    assert_eq!(
+        group("满电 100"),
+        [
+            (
+                "照画 100".to_string(),
+                tray_setting(TraySetting::Full(Full::Digits))
+            ),
+            (
+                "画成 99".to_string(),
+                tray_setting(TraySetting::Full(Full::Cap99))
+            ),
+            (
+                "满格符号".to_string(),
+                tray_setting(TraySetting::Full(Full::Block))
+            ),
+        ]
+    );
+    assert_eq!(
+        group("灰状态"),
+        [
+            (
+                "全部一个灰".to_string(),
+                tray_setting(TraySetting::Gray(Gray::One))
+            ),
+            (
+                "灰数字与灰符号两种".to_string(),
+                tray_setting(TraySetting::Gray(Gray::Split))
+            ),
+            (
+                "两种，另给暂停加琥珀点".to_string(),
+                tray_setting(TraySetting::Gray(Gray::SplitPause))
+            ),
+        ]
+    );
+    assert_eq!(
+        group("没有读数时"),
+        [
+            (
+                "两道横线 --".to_string(),
+                tray_setting(TraySetting::NoLastKnown(NoLastKnown::Dash))
+            ),
+            (
+                "问号".to_string(),
+                tray_setting(TraySetting::NoLastKnown(NoLastKnown::Question))
+            ),
+            (
+                "空的轮廓".to_string(),
+                tray_setting(TraySetting::NoLastKnown(NoLastKnown::Outline))
+            ),
+            (
+                "程序图标".to_string(),
+                tray_setting(TraySetting::NoLastKnown(NoLastKnown::Logo))
+            ),
+        ]
+    );
+    assert_eq!(
+        group("充电标记"),
+        [
+            (
+                "只靠绿色".to_string(),
+                tray_setting(TraySetting::Charging(Charging::Color))
+            ),
+            (
+                "24 像素以上加闪电".to_string(),
+                tray_setting(TraySetting::Charging(Charging::BoltLarge))
+            ),
+            (
+                "所有尺寸都加闪电".to_string(),
+                tray_setting(TraySetting::Charging(Charging::Bolt))
+            ),
+        ]
+    );
+    assert_eq!(
+        entry_at(&menu, &["图标样式", "恢复默认"]).command,
+        Some(Command::RestoreIconDefaults)
+    );
+}
+
+/// 点"图标样式 › 画法 › A 纯数字"：图标**当场**照新的样式重画（不等下一次取数），画的还是那一台、那个数；外壳收到"把
+/// `[tray]` 的 style 写成 number"；再弹出的菜单里，"画法"那一行右边写"A 纯数字"。
+#[test]
+fn choosing_an_icon_style_redraws_the_icon_at_once_and_writes_that_key_back() {
+    let (mut tray, mut screen) = both_read(MOUSE_AND_KEYBOARD);
+    let before = screen.icon();
+
+    feed(
+        &mut tray,
+        &mut screen,
+        Event::Menu(Command::TraySetting(TraySetting::Style(Style::Number))),
+    );
+
+    assert_eq!(
+        screen.icon(),
+        IconRequest {
+            settings: IconSettings {
+                style: Style::Number,
+                ..IconSettings::default()
+            },
+            ..before
+        }
+    );
+    assert_eq!(
+        screen.config,
+        [config::Action::WriteTray(vec![TraySetting::Style(
+            Style::Number
+        )])]
+    );
+    assert_eq!(
+        entry_at(&tray.menu(NOW), &["图标样式", "画法"])
+            .right
+            .as_deref(),
+        Some("A 纯数字")
+    );
+}
+
+/// "恢复默认"：起手照配置画的 C 圆环、所有尺寸加闪电，当场换回缺省的样式重画；外壳收到图标样式那六个键的缺省值；
+/// "菜单显示"那两项不动。
+#[test]
+fn restoring_the_icon_defaults_redraws_the_icon_and_leaves_the_menu_display_alone() {
+    let configured = format!(
+        "[tray]\nstyle = \"ring\"\ncharging = \"bolt\"\nmenu_source = false\n{MOUSE_AND_KEYBOARD}"
+    );
+    let (mut tray, mut screen) = both_read(&configured);
+    assert_eq!(
+        screen.icon().settings,
+        IconSettings {
+            style: Style::Ring,
+            charging: Charging::Bolt,
+            ..IconSettings::default()
+        },
+        "起手就照配置里的 [tray] 画"
+    );
+
+    feed(
+        &mut tray,
+        &mut screen,
+        Event::Menu(Command::RestoreIconDefaults),
+    );
+
+    assert_eq!(screen.icon().settings, IconSettings::default());
+    assert_eq!(
+        screen.config,
+        [config::Action::WriteTray(vec![
+            TraySetting::Style(Style::Bar),
+            TraySetting::Glyph(Glyph::Block),
+            TraySetting::Full(Full::Block),
+            TraySetting::Gray(Gray::Split),
+            TraySetting::NoLastKnown(NoLastKnown::Dash),
+            TraySetting::Charging(Charging::Color),
+        ])]
+    );
+    assert!(
+        !entry_at(&tray.menu(NOW), &["菜单显示", "写出来源和多久前"]).checked,
+        "菜单显示那两项不归恢复默认管"
+    );
+}
+
+/// "菜单显示 › 写出来源和多久前"：开着时点它交出的是"关掉"（不是"切换"）；喂进去之后，下一次弹出的菜单里有读数的那一行
+/// 只写名字，勾也落了，再点交出的是"打开"；外壳收到"把 menu_source 写成 false"；图标上没有来源，不重画。
+#[test]
+fn switching_off_source_and_age_shows_in_the_next_menu_and_is_written_back() {
+    let (mut tray, mut screen) = both_read(MOUSE_AND_KEYBOARD);
+    let click = entry_at(&tray.menu(NOW), &["菜单显示", "写出来源和多久前"])
+        .command
+        .clone()
+        .expect("点得到");
+    assert_eq!(click, Command::TraySetting(TraySetting::MenuSource(false)));
+
+    let actions = tray.handle(Event::Menu(click));
+
+    assert!(
+        !actions
+            .iter()
+            .any(|action| matches!(action, Action::Round(round::Action::DrawIcon(_)))),
+        "图标上没有来源，不重画：{actions:?}"
+    );
+    screen.apply(actions);
+    assert_eq!(
+        screen.config,
+        [config::Action::WriteTray(vec![TraySetting::MenuSource(
+            false
+        )])]
+    );
+    let menu = tray.menu(NOW);
+    assert_eq!(
+        device_row(&menu, "Dragonfly 3 Master+").text,
+        "Dragonfly 3 Master+"
+    );
+    let switch = entry_at(&menu, &["菜单显示", "写出来源和多久前"]);
+    assert!(!switch.checked);
+    assert_eq!(
+        switch.command,
+        Some(Command::TraySetting(TraySetting::MenuSource(true)))
+    );
+}
+
+/// "菜单显示 › 在设备列表里标出 Primary Device"：开着时点它交出的是"只留单选"；喂进去之后设备行上的勾当场没了，再点交出
+/// 的是"两处都标"；外壳收到"把 primary_mark 写成 radio"。
+#[test]
+fn switching_off_the_primary_device_mark_shows_in_the_next_menu_and_is_written_back() {
+    let (mut tray, mut screen) = both_read(MOUSE_AND_KEYBOARD);
+    let click = entry_at(
+        &tray.menu(NOW),
+        &["菜单显示", "在设备列表里标出 Primary Device"],
+    )
+    .command
+    .clone()
+    .expect("点得到");
+    assert_eq!(
+        click,
+        Command::TraySetting(TraySetting::PrimaryMark(PrimaryMark::Radio))
+    );
+
+    feed(&mut tray, &mut screen, Event::Menu(click));
+
+    assert_eq!(
+        screen.config,
+        [config::Action::WriteTray(vec![TraySetting::PrimaryMark(
+            PrimaryMark::Radio
+        )])]
+    );
+    let menu = tray.menu(NOW);
+    assert!(
+        !device_row(&menu, "VGN Neon75").checked,
+        "这一轮的 Primary Device 是电量最低的键盘"
+    );
+    let switch = entry_at(&menu, &["菜单显示", "在设备列表里标出 Primary Device"]);
+    assert!(!switch.checked);
+    assert_eq!(
+        switch.command,
+        Some(Command::TraySetting(TraySetting::PrimaryMark(
+            PrimaryMark::Both
+        )))
     );
 }
 

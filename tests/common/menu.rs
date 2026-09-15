@@ -86,6 +86,35 @@ pub fn canned(general: &str) -> (Tray, Screen) {
     (tray, screen)
 }
 
+/// 同 [`canned`]（`primary = "lowest"`），外加 `[tray]` 表里写着 `tray`：从罐装出发改的那几行，一行一个 `键 = 取值`。
+pub fn canned_with_tray(tray: &str) -> (Tray, Screen) {
+    canned(&format!("primary = \"lowest\"\n\n[tray]\n{tray}"))
+}
+
+/// 菜单基准里"从罐装出发只改一项"的那几份：文件名是 `<prefix>-<键>-<取值>.txt`（设计稿导出的命名）。交出每一份的
+/// 基准名与它在 `[tray]` 表里的那一行（布尔不加引号），按基准名排好。从目录里列而不是手抄名单：设计稿多导一份，
+/// 这里就多比一份。
+pub fn one_value_baselines(prefix: &str) -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = std::fs::read_dir(DIR)
+        .unwrap_or_else(|e| panic!("读不到 {DIR}：{e}"))
+        .filter_map(|entry| {
+            let file = entry.ok()?.file_name().into_string().ok()?;
+            let name = file.strip_suffix(".txt")?;
+            let (key, value) = name
+                .strip_prefix(prefix)?
+                .strip_prefix('-')?
+                .split_once('-')?;
+            let value = match value {
+                "true" | "false" => value.to_string(),
+                word => format!("\"{word}\""),
+            };
+            Some((name.to_string(), format!("{key} = {value}")))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
 /// 排成文本时子菜单展不展开。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Depth {

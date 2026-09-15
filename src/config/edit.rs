@@ -1,7 +1,7 @@
-//! 格式保留的原地编辑：`config-refresh` 的补全，与 `primary` 的回写。
+//! 格式保留的原地编辑：`config-refresh` 的补全，`primary` 的回写，与 `[tray]` 的回写。
 //!
-//! 两样都走 `toml_edit` 而不是 serde 的序列化——后者会把整份文件重写一遍、洗掉全部
-//! 注释，而这份配置的价值有一半在注释里（见 `docs/adr/0003`）。两样也都是纯函数：
+//! 几样都走 `toml_edit` 而不是 serde 的序列化——后者会把整份文件重写一遍、洗掉全部
+//! 注释，而这份配置的价值有一半在注释里（见 `docs/adr/0003`）。几样也都是纯函数：
 //! 文本进、文本出，落盘那一步在调用方。
 //!
 //! **改回写机制只改这一个文件**，`toml_edit` 那几个坑（从别的文档克隆过来的表带着
@@ -11,7 +11,8 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::config::draft::endpoint_block;
 use crate::config::known_devices::{is_present, recognise, same_scanned_identity};
-use crate::config::{Config, HidEndpoint};
+use crate::config::tray::Literal;
+use crate::config::{Config, HidEndpoint, TraySetting};
 use crate::endpoints::EndpointKind;
 use crate::hid::HidInfo;
 use crate::primary::PrimaryRule;
@@ -351,4 +352,120 @@ pub fn pin_primary(text: &str, wanted: &PrimaryRule) -> Result<Pinned> {
         text,
         changed: true,
     })
+}
+
+// ---------------------------------------------------------------
+// [tray] 回写：把菜单里点的那一项落进 config.toml
+// ---------------------------------------------------------------
+
+/// 一次 [`write_tray`] 的结果，与 [`Pinned`] 同一个形状、同一个理由：落盘那一步不该自己再判一遍改没改。
+#[derive(Debug)]
+pub struct TrayWritten {
+    /// 回写之后的全文。每一项本来就这样写着时与入参**逐字节相同**。
+    pub text: String,
+    /// 这一次真的改了什么吗。`false` = 一个字节都不必写。
+    pub changed: bool,
+}
+
+/// 把 `[tray]` 里这几个键写成菜单里点的取值，文件里别的一个字节都不动。菜单里点一项是一个键；"恢复默认"是图标样式
+/// 那六个（[`TraySetting::icon_defaults`]）。
+///
+/// ADR-0005 让这八项"在菜单里改，点一下立刻生效并按 ADR-0003 格式保留地写回"，所以它们与 `primary` 一样是程序
+/// 允许覆盖的、用户写过的值。与 [`pin_primary`] 一样是纯函数，落盘在外壳（`shell/config.rs`）。
+///
+/// 每个键怎么写：
+/// - **写着的正是这个取值**：不动。
+/// - **写着别的**（连认不出的笔误也算）：只换那个值，前后的空白与行尾注释原样搬过来，理由同 [`pin_primary`]。
+/// - **没写**：要的是缺省值就不动——不写生效的本来就是它，凭空多出一行、一张表只会让人以为程序动过它；要的不是
+///   缺省值，就补在 `[tray]` 最后；整张 `[tray]` 都没有时建一张真表（不是行内表，理由同 [`pin_primary`] 建
+///   `[general]`），排在 `[general]` 后面、所有 `[[device]]` 前面。
+///
+/// `tray` 写成了一张表以外的东西时写不进去，交回错误，一个字节都不写。
+pub fn write_tray(text: &str, settings: &[TraySetting]) -> Result<TrayWritten> {
+    // 先照启动时那条读法读一遍：配置此刻写坏了（别处的错），就别往里写，免得回写之后那条自检把用户的错说成程序的错。
+    Config::parse(text)?;
+    let mut doc = text
+        .parse::<toml_edit::DocumentMut>()
+        .context("配置解析失败（toml_edit）")?;
+    let mut changed = false;
+    for &setting in settings {
+        changed |= write_tray_key(&mut doc, setting)?;
+    }
+    if !changed {
+        return Ok(TrayWritten {
+            text: text.to_string(),
+            changed: false,
+        });
+    }
+    let text = doc.to_string();
+
+    // 自检，理由同 [`pin_primary`]：写完的文本拿启动时那条读法读回来，每一项都得真的是菜单里点的那一个。
+    let written =
+        Config::parse(&text).context("回写之后的配置自己解析不动了，这是程序的错，不是配置的错")?;
+    if let Some(missed) = settings
+        .iter()
+        .find(|setting| !setting.is_in(&written.tray))
+    {
+        return Err(anyhow!(
+            "[tray] 里的 {} 写不成：写进去再读回来不是菜单里点的那一个",
+            missed.key()
+        ));
+    }
+    Ok(TrayWritten {
+        text,
+        changed: true,
+    })
+}
+
+/// 把一个键写进文档树，交回改没改。
+fn write_tray_key(doc: &mut toml_edit::DocumentMut, setting: TraySetting) -> Result<bool> {
+    let key = setting.key();
+    let Some(tray) = doc.get_mut("tray") else {
+        if setting.is_default() {
+            return Ok(false);
+        }
+        // 与 `[general]` 同一个位置编号：输出时按编号稳定排序，而这张新表挂在文档最后，同号时就紧跟在 `[general]`
+        // 后面、排在编号更大的 `[[device]]` 前面。没有 `[general]` 就取 0，排在所有表前面（理由见 [`pin_primary`]）。
+        let position = doc
+            .get("general")
+            .and_then(toml_edit::Item::as_table)
+            .and_then(toml_edit::Table::position)
+            .unwrap_or(0);
+        let mut table = toml_edit::Table::new();
+        table.set_position(Some(position));
+        table.insert(key, toml_edit::Item::Value(literal_value(setting)));
+        doc.insert("tray", toml_edit::Item::Table(table));
+        return Ok(true);
+    };
+    let table = tray
+        .as_table_like_mut()
+        .ok_or_else(|| anyhow!("[tray] 不是一张表，{key} 写不进去"))?;
+    let Some(slot) = table.get_mut(key) else {
+        if setting.is_default() {
+            return Ok(false);
+        }
+        table.insert(key, toml_edit::Item::Value(literal_value(setting)));
+        return Ok(true);
+    };
+    let already = match setting.literal() {
+        Literal::Word(word) => slot.as_str() == Some(word),
+        Literal::Switch(on) => slot.as_bool() == Some(on),
+    };
+    if already {
+        return Ok(false);
+    }
+    let mut value = literal_value(setting);
+    if let Some(previous) = slot.as_value() {
+        *value.decor_mut() = previous.decor().clone();
+    }
+    *slot = toml_edit::Item::Value(value);
+    Ok(true)
+}
+
+/// 这一项的取值做成一个 TOML 值。
+fn literal_value(setting: TraySetting) -> toml_edit::Value {
+    match setting.literal() {
+        Literal::Word(word) => toml_edit::Value::from(word),
+        Literal::Switch(on) => toml_edit::Value::from(on),
+    }
 }
