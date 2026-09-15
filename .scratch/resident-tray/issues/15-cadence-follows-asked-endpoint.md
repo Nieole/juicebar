@@ -24,6 +24,12 @@ spec「轮询节奏」与票 05 定的是：每台 Device 按**它上一次取�
 
 据队列说，修它要动一次取数交回的结果、外壳的取数线程与取数那一层，超出票 05 的票面。
 
+**顺带一起接的（第 3 趟 `/settle` 从 parking lot Q172 派过来）：**"下一次什么时候问"今天在取数有结果的
+那一刻按当时的配置算定成一个时刻（`src/tray/cadence.rs` 的 `on_fetched` 写 `due`），配置换了不重算：把
+`poll_interval_24g` 从 3600 改成 60，最多还要等一小时才生效。Q172 自己推荐的改法——`due` 只记上一次取数
+的时刻与那条 Endpoint，`on_tick` 每一格按内核**此刻**手上的配置算到没到点——与本票要重做的 `interval`
+判法落在同一处，修本票时一并换过去，用例写在"配置读到了"那个事件上（`tests/tray_config.rs`）。
+
 **Blocked by:** None
 
 **Status:** needs-triage

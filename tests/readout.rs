@@ -795,7 +795,7 @@ fn keeps_reading_the_ble_cache_while_the_two_hid_endpoints_are_paused() {
 /// 暂停期间，**没让开的那几条自己的失败原因不能被吞掉**。
 ///
 /// 让开两条 HID，而 `Ble` 在场却答不出电量：关掉上位机，那台设备的蓝牙那一头还是老样子。所以
-/// 这一行以 `Ble` 自己的原因收尾，不接空列表那一支的"关掉它之后这几条才试得到"——那半句只在
+/// 这一行以 `Ble` 自己的原因收尾，不接空列表那一支的"关掉它之后才试得到"——那半句只在
 /// 什么都没试过时才是全部实情。parking lot Q40 允许沉默的理由是"手上有历史值就意味着这套配置
 /// 曾经读通过"，而这一支连历史值都没有，那句理由不成立。
 #[test]
@@ -831,7 +831,7 @@ fn keeps_the_reason_of_the_endpoints_it_did_try_while_paused() {
         "Ble 自己那条原因不该被吞掉：{line}"
     );
     assert!(
-        !line.contains("关掉它之后这几条才试得到"),
+        !line.contains("关掉它之后才试得到"),
         "试过的那几条有原因要交代，不接空列表那一支的那半句：{line}"
     );
 }
@@ -858,7 +858,7 @@ fn does_not_promise_a_reading_once_the_vendor_hub_is_closed() {
 
     assert_eq!(
         line,
-        "暂停中 —— VGN VHUB.exe 正在运行，Dongle24G 让开（同时发命令会互相覆盖对方的应答），关掉它之后这几条才试得到"
+        "暂停中 —— VGN VHUB.exe 正在运行，Dongle24G 让开（同时发命令会互相覆盖对方的应答），关掉它之后才试得到"
     );
 }
 

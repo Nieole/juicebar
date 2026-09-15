@@ -175,7 +175,7 @@ fn is_configured(candidates: &[Candidate<'_>], id: &str) -> bool {
 /// （固件把电量那一格填了 0），而一份陈旧读数里的那个百分比本身一点问题都没有——它只是
 /// 不该再当作现状。
 fn comparable(candidate: &Candidate<'_>) -> Option<u8> {
-    // 失联的连读数都没有，两道筛子都无从谈起。
+    // 取数失败的连读数都没有，两道筛子都无从谈起。
     let reading = candidate.reading?;
     // 第一道：**新鲜**。用 [`Freshness`]，不自己去比时刻（parking lot Q26 给本票的原话）。
     //

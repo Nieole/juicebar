@@ -116,7 +116,7 @@ fn device_lines(state: &DeviceState<'_>) -> Vec<String> {
             }
         }
         // 取数失败的三种来路与暂停，那一句由取数那一层说（`NoReading` 的 `Display`）。太长就被截在
-        // [`MAX_UTF16`]：短原因归菜单那一侧定（parking lot Q152），悬停提示照原句写到放不下为止。
+        // [`MAX_UTF16`]：短原因也在那一层（`NoReading::short_reason`，菜单行用它），悬停提示照原句写到放不下为止。
         Shown::NoReading(no_reading) => lines.push(no_reading.to_string()),
         Shown::NoKnownValue => {
             lines.push("无已知值 —— 还没读到过，也没有上次已知值".to_string());

@@ -19,7 +19,7 @@ fn candidate(id: &str, level: Level, freshness: Freshness) -> Candidate<'_> {
     }
 }
 
-/// 一台失联的 Device：一条 Endpoint 都没读到。**它不是一份 Unknown 的读数**
+/// 一台取数失败的 Device：这一次交不出读数（失联只是来路之一）。**它不是一份 Unknown 的读数**
 /// （`CONTEXT.md`：「Unknown 不等于 0%，也不等于设备离线」）。
 fn lost(id: &str) -> Candidate<'_> {
     Candidate { id, reading: None }

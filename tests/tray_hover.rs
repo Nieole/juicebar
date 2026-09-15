@@ -180,7 +180,7 @@ fn a_paused_device_without_a_value_says_it_is_paused() {
 
     assert_eq!(
         hover_of("dragonfly3", paused),
-        "Dragonfly 3 Master+\n暂停中 —— VGN VHUB.exe 正在运行，Dongle24G 让开（同时发命令会互相覆盖对方的应答），关掉它之后这几条才试得到"
+        "Dragonfly 3 Master+\n暂停中 —— VGN VHUB.exe 正在运行，Dongle24G 让开（同时发命令会互相覆盖对方的应答），关掉它之后才试得到"
     );
 }
 

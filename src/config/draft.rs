@@ -101,7 +101,8 @@ pub fn draft(collections: &[HidInfo]) -> String {
             if let Some(identity) = present {
                 out.push_str(&endpoint_block(kind, identity));
                 // `address` 是 Dongle24G 那张表里的一个可选键，所以它只跟在这一块后面
-                // （TOML 里空行不结束一张表，取消注释后它落在上面那个块里）。
+                // （TOML 里空行不结束一张表）。自动补空块会把后补的 Wired 块插在这一块与这段注释之间
+                // （parking lot Q271），所以那段注释点名它属于哪张表，不说"上面那张"。
                 if explain && kind == EndpointKind::Dongle24G {
                     out.push_str(OPTIONAL_ADDRESS);
                 }
@@ -198,7 +199,7 @@ const OPTIONAL_LOW_BATTERY: &str = "
 const OPTIONAL_ADDRESS: &str = "\
 \x20 # 可选。设备自己的无线地址（鼠标 cmd 3 能问出来，厂商 HUB 也拿它当缓存键）。
   # 只有同时接了两台**同型号**设备、VID/PID 完全相同时才需要写，用来区分谁是谁。
-  # 取消注释后它属于上面那张表（TOML 里空行不结束一张表）。
+  # 它是 [device.wireless_24g] 那张表的键；取消注释时把它放回那张表底下（TOML 里空行不结束一张表）。
   # address = \"97d435\"
 ";
 
