@@ -7,7 +7,7 @@
 //!
 //! **加一台设备只改这一个文件。**
 
-use crate::config::{Device, HidEndpoint};
+use crate::config::{Config, Device, HidEndpoint};
 use crate::endpoints::EndpointKind;
 use crate::hid::HidInfo;
 
@@ -185,4 +185,45 @@ pub(super) fn recognise(device: &Device) -> Option<&'static KnownDevice> {
         })
     });
     by_identity.or_else(|| KNOWN_DEVICES.iter().find(|known| known.id == device.id))
+}
+
+/// 身份表认得、本机此刻在场、配置里却没有的一台 HID 设备（[`Config::unregistered_known_devices`]）：菜单"登记设备"里点得到
+/// "新建一台 Device"的那一组。
+pub struct UnregisteredHid {
+    /// 身份表里的那一台。
+    pub known: &'static KnownDevice,
+    /// 本机此刻在场的那几条 Endpoint，按 [`EndpointKind::PRIORITY`] 排，至少有一条。
+    pub present: Vec<EndpointKind>,
+}
+
+impl Config {
+    /// 身份表认得、本机此刻在场（`collections` 里枚举得到它至少一条 Endpoint 的身份，与自动补空块同一个判法 [`is_present`]）、
+    /// 配置里却没有（[`is_in_config`]）的那几台，按身份表的次序。
+    pub fn unregistered_known_devices(&self, collections: &[HidInfo]) -> Vec<UnregisteredHid> {
+        KNOWN_DEVICES
+            .iter()
+            .filter(|known| !is_in_config(self, known))
+            .filter_map(|known| {
+                let present: Vec<EndpointKind> = EndpointKind::PRIORITY
+                    .into_iter()
+                    .filter(|kind| {
+                        known
+                            .identity(*kind)
+                            .is_some_and(|identity| is_present(identity, collections))
+                    })
+                    .collect();
+                (!present.is_empty()).then_some(UnregisteredHid { known, present })
+            })
+            .collect()
+    }
+}
+
+/// 配置里有没有哪一台认得出是这台设备（[`recognise`]）。菜单"登记设备"列不列它（[`Config::unregistered_known_devices`]）与
+/// 新建时写不写它（`edit::add_device`）问的是同一件事，只在这里判一次：两处各判一遍，改岔了菜单就会列出一项点了什么都不写的
+/// "新建一台 Device"。
+pub(super) fn is_in_config(config: &Config, known: &KnownDevice) -> bool {
+    config
+        .devices
+        .iter()
+        .any(|device| recognise(device).is_some_and(|recognised| recognised.id == known.id))
 }

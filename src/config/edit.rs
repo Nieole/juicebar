@@ -11,9 +11,10 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::config::draft::bluetooth_block;
 use crate::config::draft::endpoint_block;
+use crate::config::known_devices::{KNOWN_DEVICES, is_in_config};
 use crate::config::known_devices::{is_present, recognise, same_scanned_identity};
 use crate::config::tray::Literal;
-use crate::config::{Config, HidEndpoint, TraySetting};
+use crate::config::{Config, Device, HidEndpoint, TraySetting};
 use crate::endpoints::EndpointKind;
 use crate::hid::HidInfo;
 use crate::primary::PrimaryRule;
@@ -629,4 +630,167 @@ fn block_lines(parsed: &toml_edit::Document<&str>, text: &str, index: usize) -> 
     });
     lines.extend(blank_above);
     Ok(lines)
+}
+
+// ---------------------------------------------------------------
+// 新建一台 Device：菜单"登记设备"里点的"新建一台 Device"
+// ---------------------------------------------------------------
+
+/// 菜单"登记设备"里点了"新建一台 Device"的那一台（spec「菜单」"登记设备 ›"）。两种都是**用户亲手点的**，没有"是删掉的还是
+/// 没加过的"那个歧义，所以这里可以新增 `[[device]]`，而自动补空块（[`refresh`]）不行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NewDevice {
+    /// 本机扫到、还没登记的一台蓝牙设备：名字取它的蓝牙名，只写蓝牙块，不写 `driver`（[`Device::driver`]）。
+    Ble {
+        /// 蓝牙名，照 Windows 报的写。
+        name: String,
+        /// 蓝牙地址，照 Windows 报的写法。
+        address: String,
+    },
+    /// 身份表认得、本机在场、配置里却没有的一台 HID 设备：名字、id、`driver` 照身份表写，Endpoint 块只写此刻在场的那几条。
+    Hid {
+        /// 它在身份表里的 id（`KnownDevice::id`）。
+        known_id: String,
+        /// 点的那一刻本机在场的那几条 Endpoint。
+        present: Vec<EndpointKind>,
+    },
+}
+
+/// 把菜单里点的那一台新建成一条 `[[device]]`，**追加在文件末尾**，原有的一个字节都不动（ADR-0003）。交回写好的全文；那一台
+/// 已经在配置里了（托盘还没重读到上一次新建时又点了一下）是 `None`，一个字节都不必写（理由同 [`Pinned`]）。
+///
+/// 触发它的是托盘菜单"登记设备"里点的"新建一台 Device"（`crate::tray::config::Action::NewDevice`），落盘在外壳，与
+/// [`register_ble`] 同一条路。与 [`pin_primary`] 一样是纯函数。
+///
+/// - **名字**取蓝牙名，或者身份表里的名字。
+/// - **id**：蓝牙设备的由名字派生（[`id_from_name`]）；HID 设备的取身份表里那一个——草稿写的也是它，删掉一台再从菜单加回来，
+///   `primary` 钉的、状态文件记的还是这个 id（parking lot Q330）。撞了已有的 id 就加后缀（[`free_id`]）。
+/// - **块**：蓝牙设备只写蓝牙块；HID 设备照身份表写 `driver` 与此刻在场的那几条 Endpoint 块。不在场的不写：身份表里的身份
+///   可能没实测过（`KnownDevice::wired_caveat`），自动补空块只在它真的枚举得到时才补成真块，这里守同一条规矩——它插上之后，
+///   自动补空块照样补得上。
+///
+/// 块照草稿那一套写（[`endpoint_block`]、[`bluetooth_block`]），新建出来的与草稿写的逐字一致。追加的是文本、不经
+/// `toml_edit`：原文一个字节都不会被重排。
+pub fn add_device(text: &str, new: &NewDevice) -> Result<Option<String>> {
+    // 读用 serde：要问的是"它在不在配置里、哪些 id 被占了"。写不必用 toml_edit，追加在末尾碰不到原文。
+    let config = Config::parse(text)?;
+    let (name, id, driver, blocks) = match new {
+        NewDevice::Ble { name, address } => {
+            if !address.chars().any(|c| c.is_ascii_alphanumeric()) {
+                return Err(anyhow!(
+                    "蓝牙地址 \"{address}\" 里没有地址：新建不了 {name}"
+                ));
+            }
+            if config.device_with_bluetooth_address(address).is_some() {
+                return Ok(None);
+            }
+            let id = free_id(&config, &id_from_name(name));
+            (name.as_str(), id, None, vec![bluetooth_block(address)])
+        }
+        NewDevice::Hid { known_id, present } => {
+            let known = KNOWN_DEVICES
+                .iter()
+                .find(|known| known.id == known_id.as_str())
+                .ok_or_else(|| anyhow!("身份表里没有 id 是 \"{known_id}\" 的设备，新建不了"))?;
+            if is_in_config(&config, known) {
+                return Ok(None);
+            }
+            let blocks: Vec<String> = EndpointKind::PRIORITY
+                .into_iter()
+                .filter(|kind| present.contains(kind))
+                .filter_map(|kind| {
+                    known
+                        .identity(kind)
+                        .map(|identity| endpoint_block(kind, identity))
+                })
+                .collect();
+            if blocks.is_empty() {
+                return Err(anyhow!(
+                    "{} 一条在场的 HID Endpoint 都没有，新建不了",
+                    known.name
+                ));
+            }
+            let id = free_id(&config, known.id);
+            (known.name, id, Some(known.driver), blocks)
+        }
+    };
+
+    let mut device = format!(
+        "\n[[device]]\nid = {}\nname = {}\n",
+        toml_string(&id),
+        toml_string(name)
+    );
+    if let Some(driver) = driver {
+        device.push_str(&format!("driver = {}\n", toml_string(driver)));
+    }
+    for block in &blocks {
+        device.push('\n');
+        device.push_str(block);
+    }
+    let written = format!("{text}{device}");
+
+    // **自检**，与 [`register_ble`] 同一个道理：拿启动时那条读法读回来，末尾多了一台、正是这一台，别的一台不多一台不少。
+    let after = Config::parse(&written)
+        .context("新建之后的配置自己解析不动了，这是程序的错，不是配置的错")?;
+    let is_this_one = |device: &Device| {
+        device.id == id
+            && device.name == name
+            && device.driver.as_deref() == driver
+            && match new {
+                NewDevice::Ble { address, .. } => device
+                    .bluetooth
+                    .as_ref()
+                    .is_some_and(|bluetooth| bluetooth.matches(address)),
+                NewDevice::Hid { known_id, .. } => {
+                    recognise(device).is_some_and(|known| known.id == known_id.as_str())
+                }
+            }
+    };
+    if after.devices.len() != config.devices.len() + 1
+        || !after.devices.last().is_some_and(is_this_one)
+    {
+        return Err(anyhow!("{name} 新建不进配置：写进去再读回来不是这一台"));
+    }
+    Ok(Some(written))
+}
+
+/// 由名字派生的 id：小写，字母数字以外的每一段连成一个 `-`，首尾不留 `-`；名字里一个字母数字都没有时是 `device`。
+fn id_from_name(name: &str) -> String {
+    let mut id = String::new();
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() {
+            id.push(c);
+        } else if !id.is_empty() && !id.ends_with('-') {
+            id.push('-');
+        }
+    }
+    match id.trim_end_matches('-') {
+        "" => "device".to_string(),
+        id => id.to_string(),
+    }
+}
+
+/// `base` 没被哪台 Device 占着就是它，占着就依次试 `base-2`、`base-3`……`lowest` 也算占着：它是 `primary` 里规则的写法，id
+/// 叫它的 Device 钉不住（[`pin_primary`]）。
+fn free_id(config: &Config, base: &str) -> String {
+    let taken = |id: &str| {
+        id == PrimaryRule::Lowest.config_value()
+            || config.devices.iter().any(|device| device.id == id)
+    };
+    if !taken(base) {
+        return base.to_string();
+    }
+    let mut suffix = 2;
+    loop {
+        let id = format!("{base}-{suffix}");
+        if !taken(&id) {
+            return id;
+        }
+        suffix += 1;
+    }
+}
+
+/// 一个字符串写成 TOML 里的值：蓝牙名是 Windows 报的，里面有引号、反斜杠也写得对。
+fn toml_string(value: &str) -> String {
+    toml_edit::Value::from(value).to_string()
 }

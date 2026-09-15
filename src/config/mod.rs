@@ -33,18 +33,20 @@ mod tray;
 
 pub use draft::draft;
 pub use edit::{Fill, Pinned, Refreshed, pin_primary, refresh};
+pub use edit::{NewDevice, add_device, register_ble, unregister_ble};
 pub use edit::{TrayWritten, write_tray};
-pub use edit::{register_ble, unregister_ble};
-pub use known_devices::{KNOWN_DEVICES, KnownDevice};
+pub use known_devices::{KNOWN_DEVICES, KnownDevice, UnregisteredHid};
 pub use tray::{PrimaryMark, TraySetting, TraySettings, Unrecognised};
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 
+use crate::endpoints::EndpointKind;
 use crate::primary::PrimaryRule;
 use crate::sources::level::LevelSource;
+use crate::sources::{Driver, driver_for};
 
 /// 一份配置文件的全部内容。
 #[derive(Debug, Clone, Deserialize)]
@@ -204,12 +206,15 @@ pub struct Device {
     pub id: String,
     /// 人类可读的名字，就是界面上显示的那一个。
     pub name: String,
-    /// 用哪个协议驱动，见 `src/sources/`。只作用于 HID Endpoint。
+    /// 用哪个协议驱动，见 `src/sources/`。只作用于 HID Endpoint，所以**配了 Wired 或 Dongle24G 才必填**，缺了是配置
+    /// 错误（[`Config::parse`] 读的时候就核）；只走蓝牙的 Device 不写它——给它编一个驱动名，等于在配置里说假话
+    /// （spec「Device 的 schema」）。取数要驱动时问 [`Self::protocol_driver`]。
     ///
     /// 存成字符串而不是枚举：配置里可以出现本次编译还没实现的驱动名，那该是取数时
     /// 那一行报"尚未实现"，而不是让整份配置读不动。认得哪些名字见
     /// `sources::driver_for`。
-    pub driver: String,
+    #[serde(default)]
+    pub driver: Option<String>,
     /// 这台设备的电量数值取自哪里，缺省 `"auto"`。
     ///
     /// **每个 Device 一项，没有全局默认**（spec「电量数值」）：想切成 `"reported"` 的
@@ -285,10 +290,45 @@ fn normalized_address(address: &str) -> String {
         .collect()
 }
 
+impl Device {
+    /// 这台 Device 的协议驱动（`sources::driver_for`）。没写 `driver`、或者写的名字本次编译还没实现，交回说得出原因的错误
+    /// ——取数那一行照写那一句。
+    pub fn protocol_driver(&self) -> Result<&'static dyn Driver> {
+        let name = self
+            .driver
+            .as_deref()
+            .ok_or_else(|| anyhow!("没写 driver"))?;
+        driver_for(name).ok_or_else(|| anyhow!("驱动 {name} 尚未实现"))
+    }
+
+    /// 配了 HID Endpoint（Wired、Dongle24G）却没写 `driver`：那两条要靠驱动才读得出电量，读的时候就说，不留到取数时。
+    fn check_driver(&self) -> Result<()> {
+        let hid: Vec<String> = EndpointKind::PRIORITY
+            .into_iter()
+            .filter(|kind| kind.hid_config_in(self).is_some())
+            .map(|kind| kind.to_string())
+            .collect();
+        if self.driver.is_some() || hid.is_empty() {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "Device \"{}\" 配了 {}，却没写 driver：HID Endpoint 要靠它挑协议驱动（见 src/sources/），只走蓝牙的 Device 才不写",
+            self.id,
+            hid.join("、")
+        ))
+    }
+}
+
 impl Config {
     /// 解析一段 TOML 文本。
+    ///
+    /// 类型对得上之外还核一件事：配了 Wired 或 Dongle24G 的 Device 写了 `driver`（[`Device::driver`]）。
     pub fn parse(text: &str) -> Result<Self> {
-        toml::from_str(text).context("配置解析失败")
+        let config: Self = toml::from_str(text).context("配置解析失败")?;
+        for device in &config.devices {
+            device.check_driver().context("配置解析失败")?;
+        }
+        Ok(config)
     }
 
     /// 从磁盘读一份配置。

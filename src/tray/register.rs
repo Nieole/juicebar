@@ -1,24 +1,30 @@
-//! 登记设备：本机扫到、还没登记的蓝牙设备，登记到已有的 Device 上；解除某台 Device 的蓝牙登记（spec「菜单」"登记设备 ›"，
-//! 结构照设计稿，`tests/menu_baselines/register*.txt`）。
+//! 登记设备：本机扫到、还没登记的蓝牙设备，登记到已有的 Device 上或者新建一台；身份表认得、本机在场、配置里却没有的 HID
+//! 设备，新建一台；解除某台 Device 的蓝牙登记（spec「菜单」"登记设备 ›"，结构照设计稿，`tests/menu_baselines/register*.txt`）。
 //!
 //! 子菜单里是几组，组与组之间一条分隔线，哪一组没有就不列；一组都没有时只有一行灰字。
 //!
-//! **点了之后只交出写回**（[`on_command`]）：外壳读此刻文件的全文、照配置那道缝格式保留地写（`crate::config::register_ble`），
-//! 写完靠重读生效——手上那一份配置不当场改（parking lot Q312）。
+//! **点了之后只交出写回**（[`on_command`]）：外壳读此刻文件的全文、照配置那道缝格式保留地写（`crate::config::register_ble`、
+//! `crate::config::add_device`），写完靠重读生效——手上那一份配置不当场改（parking lot Q312）。
+//!
+//! 本机在场的 HID 设备不另扫：借启动时、插拔时自动补空块那一遍扫描（`crate::tray::config::Event::Scanned`）。
 
 use crate::bluetooth::BleBattery;
 use crate::clock::Timestamp;
-use crate::config::Config;
+use crate::config::{Config, NewDevice};
 use crate::endpoints::EndpointKind;
+use crate::hid::HidInfo;
 
 use super::Tray;
 use super::menu::{Entry, Item, Kind};
 
-/// "登记设备"子菜单那一行的字。
-const REGISTER: &str = "登记设备";
+/// "登记设备"子菜单那一行的字。一台 Device 都没有时一级那句说明指向它（`super::menu`），两处说的得是同一个名字。
+pub(super) const REGISTER: &str = "登记设备";
 
 /// 一台未登记的蓝牙设备子菜单里，"登记到"那一项的字。
 const REGISTER_TO: &str = "登记到";
+
+/// "新建一台 Device"那一项的字。一台 Device 都没有时一级那句说明指向它。
+pub(super) const NEW_DEVICE: &str = "新建一台 Device";
 
 /// "解除蓝牙登记"子菜单那一行的字。
 const UNREGISTER: &str = "解除蓝牙登记";
@@ -57,6 +63,8 @@ pub enum Command {
         /// 菜单上它右列写着的那个地址（点的那一刻配置里登记的）：只进日志，登记错了照着日志还登记得回去。
         address: String,
     },
+    /// 一台未登记的蓝牙设备、或者一台认得但没登记的 HID 设备里点了"新建一台 Device"：把它新建成一条 `[[device]]`。
+    NewDevice(NewDevice),
 }
 
 /// 登记设备这一块手上的东西。
@@ -64,6 +72,8 @@ pub enum Command {
 pub(super) struct Register {
     /// 上一遍扫到的本机蓝牙设备；还没扫回来过是空的。
     found: Vec<BleBattery>,
+    /// 上一遍扫到的本机 HID collection（自动补空块那一遍，[`Register::hid_scanned`]）；还没扫回来过是空的。
+    present: Vec<HidInfo>,
     /// 上一次要扫一遍的那一刻；还没要过是 `None`。
     asked_at: Option<Timestamp>,
     /// 要了的那一遍还没交回来。
@@ -113,6 +123,12 @@ impl Register {
             }
         }
     }
+
+    /// 外壳扫了一遍本机的 HID 设备、扫成了（启动时与插拔时那一遍，自动补空块借的也是它）：换上这一遍。扫不了的那一遍不交到这里，
+    /// "认得但没登记的"那一组照上一遍扫到的列；完整原因自动补空块那一侧已经记进日志。
+    pub(super) fn hid_scanned(&mut self, collections: &[HidInfo]) {
+        self.present = collections.to_vec();
+    }
 }
 
 /// "登记设备"里点了一项：记一行日志说点了什么，交给外壳写回。写不写得进只有外壳知道，写不进由它再记一行。
@@ -135,6 +151,21 @@ pub(super) fn on_command(command: Command, out: &mut Vec<super::Action>) {
                 super::config::Action::UnregisterBle { device_id },
             ));
         }
+        Command::NewDevice(new) => {
+            out.push(super::Action::Log(match &new {
+                NewDevice::Ble { name, address } => {
+                    format!("登记设备 —— 把蓝牙设备 {name}（{address}）新建成一台 Device")
+                }
+                NewDevice::Hid { known_id, present } => {
+                    let present: Vec<String> = present.iter().map(ToString::to_string).collect();
+                    format!(
+                        "登记设备 —— 把身份表里的 {known_id}（本机在场的是 {}）新建成一台 Device",
+                        present.join("、")
+                    )
+                }
+            }));
+            out.push(super::Action::Config(super::config::Action::NewDevice(new)));
+        }
     }
 }
 
@@ -146,7 +177,10 @@ impl Tray {
         if !unregistered.is_empty() {
             groups.push(unregistered);
         }
-        // 票 12：认得但没登记的 HID 设备那一组排在这里。
+        let known = known_group(&self.config, &self.register.present);
+        if !known.is_empty() {
+            groups.push(known);
+        }
         groups.extend(unregister_submenu(&self.config).map(|item| vec![item]));
         let items = if groups.is_empty() {
             vec![Item::Entry(Entry {
@@ -162,7 +196,7 @@ impl Tray {
 
 /// 未登记的蓝牙设备那一组：本机扫到、带电量属性、地址不在任何 Device 里的，每一台一个子菜单，右列写扫到它的那条通路
 /// （Ble），里面是"登记到 ›"——**只列还没有蓝牙地址的 Device**，已经有地址的不列：换地址是先解除、再登记，一点不会悄悄
-/// 覆盖旧地址。
+/// 覆盖旧地址——与"新建一台 Device"（只走蓝牙的耳机也能出现在托盘里）。
 fn unregistered_group(config: &Config, found: &[BleBattery]) -> Vec<Item> {
     found
         .iter()
@@ -194,16 +228,50 @@ fn unregistered_group(config: &Config, found: &[BleBattery]) -> Vec<Item> {
             } else {
                 Entry::new(Kind::Submenu(devices), REGISTER_TO)
             };
-            // 票 12："新建一台 Device"跟在"登记到"后面。
+            let new_device = new_device_entry(NewDevice::Ble {
+                name: found.friendly_name.clone(),
+                address: found.address.clone(),
+            });
             Item::Entry(Entry {
                 right: Some(EndpointKind::Ble.to_string()),
                 ..Entry::new(
-                    Kind::Submenu(vec![Item::Entry(register_to)]),
+                    Kind::Submenu(vec![Item::Entry(register_to), new_device]),
                     found.friendly_name.clone(),
                 )
             })
         })
         .collect()
+}
+
+/// 认得但没登记的 HID 设备那一组：身份表认得、本机在场、配置里没有的（[`Config::unregistered_known_devices`]，新建时写不写问的
+/// 也是它），每一台一个子菜单，名字取身份表里的；右列写扫到它的那条通路——在场的不止一条时写优先级最高的那条，取数时先走的
+/// 就是它（parking lot Q331）；里面是"新建一台 Device"。
+fn known_group(config: &Config, present: &[HidInfo]) -> Vec<Item> {
+    config
+        .unregistered_known_devices(present)
+        .into_iter()
+        .map(|unregistered| {
+            let right = unregistered.present.first().map(ToString::to_string);
+            let new_device = new_device_entry(NewDevice::Hid {
+                known_id: unregistered.known.id.to_string(),
+                present: unregistered.present,
+            });
+            Item::Entry(Entry {
+                right,
+                ..Entry::new(Kind::Submenu(vec![new_device]), unregistered.known.name)
+            })
+        })
+        .collect()
+}
+
+/// "新建一台 Device"那一项：点了把 `new` 那一台新建成一条 `[[device]]`。
+fn new_device_entry(new: NewDevice) -> Item {
+    Item::Entry(Entry {
+        command: Some(super::menu::Command::Register(Box::new(
+            Command::NewDevice(new),
+        ))),
+        ..Entry::new(Kind::Normal, NEW_DEVICE)
+    })
 }
 
 /// "解除蓝牙登记 ›"：有蓝牙地址的每台 Device 一项，右列写它登记的地址（照配置里的写法），登记错了看得出是哪个。一台

@@ -15,7 +15,7 @@ use crate::clock::Timestamp;
 use crate::config::{BluetoothEndpoint, Device, HidEndpoint};
 use crate::hid::{self, HidInfo};
 use crate::sources::hid_transport::{FeatureReportTransport, OutputReportTransport};
-use crate::sources::{Reading, ReportKind, Transport, driver_for};
+use crate::sources::{Reading, ReportKind, Transport};
 
 /// 一个 Device 上一条能取到读数的通路的种类。
 ///
@@ -313,10 +313,13 @@ impl SystemEndpoints {
 
     /// 这个 Device 的驱动声明它走哪种报文。
     ///
-    /// 认不出驱动名时给 `None`：配置里可以出现本次编译还没实现的驱动名，那该是取数
+    /// 认不出驱动名（或者没写）时给 `None`：配置里可以出现本次编译还没实现的驱动名，那该是取数
     /// 那一行写着"尚未实现"，而不是让这个 Device 的每条 Endpoint 都算不在场。
     fn report_kind_of(device: &Device) -> Option<ReportKind> {
-        driver_for(&device.driver).map(|driver| driver.report_kind())
+        device
+            .protocol_driver()
+            .ok()
+            .map(|driver| driver.report_kind())
     }
 }
 
@@ -363,8 +366,7 @@ impl Endpoints for SystemEndpoints {
         let configured = endpoint
             .hid_config_in(device)
             .ok_or_else(|| anyhow!("这个 Device 没有配置 {endpoint}"))?;
-        let report_kind = Self::report_kind_of(device)
-            .ok_or_else(|| anyhow!("驱动 {} 尚未实现", device.driver))?;
+        let report_kind = device.protocol_driver()?.report_kind();
         let collection = self.find_collection(configured, report_kind).ok_or_else(|| {
             anyhow!(
                 "本机没有 VID {:04X} PID {:04X} UP {:04X} U {:04X} 这条发得出 {} 的通路（设备没插？）",
