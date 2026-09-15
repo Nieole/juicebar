@@ -15,8 +15,8 @@ use crate::hid::HidInfo;
 
 /// 一条 Endpoint 的块名那一行，缩进两格。
 ///
-/// 单独抽出来是因为它有两个写处：[`endpoint_block`] 那几行真块，以及身份表里没有身份时
-/// 那个只剩块名的占位。手抄第二遍就是给"块该长什么样只有一处写法"开一个口子——而那条
+/// 单独抽出来是因为它有几个写处：[`endpoint_block`] 那几行真块、[`bluetooth_block`] 那两行，以及身份表里
+/// 没有身份时那个只剩块名的占位。手抄第二遍就是给"块该长什么样只有一处写法"开一个口子——而那条
 /// 规矩正是 [`blank_endpoint_block`] 的文档立下来的。
 fn block_header(kind: EndpointKind) -> String {
     format!("  [device.{}]\n", kind.config_key())
@@ -37,6 +37,17 @@ pub(super) fn endpoint_block(kind: EndpointKind, endpoint: &HidEndpoint) -> Stri
         endpoint.usage_page,
         endpoint.usage,
         endpoint.report_id,
+    )
+}
+
+/// Ble 的配置块：块名，加一个蓝牙地址，缩进两格跟在它的 `[[device]]` 下面。
+///
+/// 两个写处，一种写法：草稿里那段注释掉的占位，与菜单"登记设备"里点了"登记到"之后写进配置的真块
+/// （`edit::register_ble`）。用户把占位的 `#` 去掉得到的，正是程序自己会写的那两行。
+pub(super) fn bluetooth_block(address: &str) -> String {
+    format!(
+        "{}  address = \"{address}\"\n",
+        block_header(EndpointKind::Ble)
     )
 }
 
@@ -410,20 +421,17 @@ fn commented_placeholder(
         // 射频是另一颗芯片，与 dongle 之间没有能缝合的字段。
         //
         // 这里也**不给草稿加一次 BLE 扫描**：扫出来的地址没有能归属到某一台 Device 的
-        // 字段，只能整份列出来，而那正是 `juicebar scan` 已经在印的东西。
+        // 字段，只能整份列出来，而那正是托盘菜单"登记设备"已经在列的东西。
         EndpointKind::Ble => Unfillable {
             why: format!("{kind} 要一个蓝牙地址，而程序猜不出来"),
             provenance: "身份表里没有 BLE 身份，也猜不出来：BLE 射频是另一颗芯片，\n\
                          连 VID 都和 dongle 不同，几套身份之间没有能自动缝合的字段。"
                 .to_string(),
-            remedy: "`juicebar config-refresh` 也补不上它：跑 `juicebar scan`，看「蓝牙（BLE）\n\
-                     电量」那一段，把地址抄到下面来。没有蓝牙、或者不想用它，这几行删掉即可。"
+            remedy: "插上什么程序都补不上它，得你在托盘菜单里点：登记之后程序把真正的 [device.bluetooth]\n\
+                     写进来，到那时这几行就只是历史记录了。没有蓝牙、或者不想用它，这几行删掉即可。"
                 .to_string(),
-            // 它配的不是一组 VID/PID，是一个地址，所以块里只有块名和那一个等人抄的键。
-            block: format!(
-                "{}  address = \"把 scan 里那串 12 位十六进制抄过来\"\n",
-                block_header(kind)
-            ),
+            // 它配的不是一组 VID/PID，是一个地址，所以块里只有块名和那一个键——与登记时写进来的真块同一种写法。
+            block: bluetooth_block("12 位十六进制的蓝牙地址，登记设备会替你写上"),
         },
     };
 

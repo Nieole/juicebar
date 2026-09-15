@@ -20,6 +20,7 @@
 //! | 配置 | [`config`] | `shell/config.rs` | [`config::Event`] | [`config::Action`] |
 //! | 告警 | [`warnings`] | 没有（写状态文件的结果由 `shell/worker.rs` 交回） | 看 [`Event::Fetched`]；[`warnings::Event`] | 只写日志 |
 //! | 菜单深浅 | [`menu_theme`] | `shell/menu_theme.rs` | 没有（外壳启动时问过 Windows，随 [`Look`] 交进来） | 只写日志 |
+//! | 登记设备 | [`register`] | `shell/register.rs` | 看 [`Event::Tick`]；[`register::Event`] | [`register::Action`]；写回走 [`config::Action`] |
 //!
 //! 这一层（[`Event`]、[`Action`]、[`Tray::handle`]）只做路由：每个关注点在这里占一格，往自己那一格里
 //! 加事件、加动作、加状态，只改自己的那两个文件（内核一个、外壳一个）。三样是大家共用的，所以住在
@@ -39,6 +40,7 @@ pub mod hover;
 pub mod menu;
 pub mod menu_theme;
 pub mod notify;
+pub mod register;
 pub mod round;
 pub mod warnings;
 
@@ -59,6 +61,8 @@ pub struct Tray {
     scans: config::Scans,
     /// 此刻还挂着的告警。几块共用：「一轮」合成时带上它，配置那一块往里挂"配置读不了"。
     warnings: warnings::Warnings,
+    /// 登记设备：上一遍扫到的本机蓝牙设备，"登记设备 ›"照它列（[`register`]）。
+    register: register::Register,
     /// 点过"退出"了：之后什么事件都不再有动作——不再轮询，也不再画。
     quit: bool,
 }
@@ -86,6 +90,8 @@ impl Tray {
         cadence.on_tick(&config, now, &mut out);
         let mut scans = config::Scans::default();
         scans.request(&mut out);
+        let mut register = register::Register::default();
+        register.on_tick(&config, now, &mut out);
         let tray = Self {
             config,
             cadence,
@@ -93,6 +99,7 @@ impl Tray {
             notify: notify::Notify::default(),
             scans,
             warnings: warnings::Warnings::default(),
+            register,
             quit: false,
         };
         (tray, out)
@@ -108,6 +115,7 @@ impl Tray {
             Event::Tick(now) => {
                 self.cadence.on_tick(&self.config, now, &mut out);
                 self.round.on_tick(&self.config, now, &mut out);
+                self.register.on_tick(&self.config, now, &mut out);
             }
             Event::Fetched(fetched) => {
                 let fetched = *fetched;
@@ -121,6 +129,7 @@ impl Tray {
             Event::Menu(command) => self.on_menu(command, &mut out),
             Event::Config(event) => self.on_config(event, &mut out),
             Event::Warnings(event) => self.warnings.on_event(event, &mut out),
+            Event::Register(event) => self.register.on_event(event, &mut out),
         }
         out
     }
@@ -150,6 +159,8 @@ pub enum Event {
     Config(config::Event),
     /// 告警那一侧的事：一件会挂告警的事办没办成，而它不跟着一次取数来。
     Warnings(warnings::Event),
+    /// 登记设备那一侧的事：外壳扫了一遍本机的蓝牙设备。
+    Register(register::Event),
 }
 
 /// 某台 Device 的一次取数有了结果：取数线程交回来的全部东西。
@@ -181,4 +192,6 @@ pub enum Action {
     Config(config::Action),
     /// 写一条日志。日志写在配置文件旁边，大小与滚动由外壳管。
     Log(String),
+    /// 登记设备：扫一遍本机的蓝牙设备。
+    Register(register::Action),
 }

@@ -17,6 +17,7 @@ use juicebar::sources::Reading;
 use juicebar::state::{LastKnown, Provenance};
 use juicebar::tray::cadence::FetchRequest;
 use juicebar::tray::notify::Notice;
+use juicebar::tray::register;
 use juicebar::tray::round::{IconRequest, SaveState};
 use juicebar::tray::{
     Action, Event, Fetched, Look, Tray, cadence, config, menu, menu_theme, round, warnings,
@@ -79,6 +80,8 @@ pub struct Screen {
     pub scans: usize,
     /// 至今写回配置文件的每一份全文，按顺序（[`config::Action::Write`]）。
     pub written: Vec<String>,
+    /// 至今要求扫了几遍本机的蓝牙设备（[`register::Action::Scan`]）。
+    pub ble_scans: usize,
 }
 
 impl Screen {
@@ -99,6 +102,7 @@ impl Screen {
                 Action::Config(config::Action::Write(text)) => self.written.push(text),
                 Action::Config(action) => self.config.push(action),
                 Action::Log(line) => self.logs.push(line),
+                Action::Register(register::Action::Scan) => self.ble_scans += 1,
             }
         }
     }

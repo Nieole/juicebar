@@ -19,6 +19,7 @@ mod look;
 mod menu;
 mod menu_theme;
 mod notify;
+mod register;
 mod round;
 mod worker;
 
@@ -250,6 +251,9 @@ fn take_reports() {
             worker::Report::Fetched(fetched) => feed(Event::Fetched(fetched)),
             worker::Report::Warnings(event) => feed(Event::Warnings(event)),
             worker::Report::Scanned(scan) => config::scanned(scan),
+            worker::Report::BleScanned(found) => feed(Event::Register(
+                crate::tray::register::Event::Scanned(found),
+            )),
         }
     }
 }
@@ -273,6 +277,7 @@ fn route(app: &mut App, action: Action) {
         Action::Notify(notice) => notify::execute(&notice, app),
         Action::Config(action) => config::execute(action, app),
         Action::Log(line) => app.log.write(&line),
+        Action::Register(action) => register::execute(action, app),
     }
 }
 

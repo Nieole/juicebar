@@ -109,6 +109,8 @@ pub enum Command {
     Primary(PrimaryRule),
     /// 退出。
     Quit,
+    /// "登记设备"里点了一项：把一个蓝牙地址登记到某台，或者解除某台的蓝牙登记（`super::register`）。
+    Register(Box<super::register::Command>),
 }
 
 /// 菜单这一块的动作。
@@ -172,6 +174,7 @@ impl Tray {
         items.push(Item::Separator);
         items.push(which_device(&self.config));
         // "图标样式 ›""菜单显示 ›"（票 07）、"登记设备 ›"（票 11、12）、"开机自启"（票 13）依次排在这里。
+        items.push(self.register_submenu());
         items.push(Item::Separator);
         items.push(Item::Entry(Entry {
             command: Some(Command::OpenConfigFile),
@@ -209,6 +212,8 @@ impl Tray {
                 self.quit = true;
                 out.push(super::Action::Menu(Action::Quit));
             }
+            // 登记设备那一块自己的事：交给外壳写回，写完靠重读生效（`super::register`）。
+            Command::Register(command) => super::register::on_command(*command, out),
         }
     }
 }

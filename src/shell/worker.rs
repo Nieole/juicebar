@@ -6,6 +6,9 @@
 //! **扫一遍本机也排在这里**（自动补空块，[`Report::Scanned`]）：一次枚举要挨个打开本机每一条 HID collection、
 //! 问它的产品名，碰上一台不应声的设备也能等上几秒，同一个理由。
 //!
+//! **扫一遍本机的蓝牙设备也排在这里**（登记设备，[`Report::BleScanned`]）：它读的只是 Windows 攒的设备属性，但设备树
+//! 正在变时枚举要重试，放在消息循环上会让右键菜单跟着卡。
+//!
 //! **状态文件归这个线程**：取数那一层（`crate::readout::read_or_last_known`）每读到一份就当场记进手上那一份
 //! 状态、读不到时从里面取上次已知值，所以那一份得跟着取数住。内核只说什么时候存、记下哪一台是 Primary
 //! Device（[`crate::tray::round::SaveState`]），存也排在这里，与取数同一条队——不会有两个线程同时碰它。
@@ -20,6 +23,7 @@ use anyhow::anyhow;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
+use crate::bluetooth::{self, BleBattery};
 use crate::clock::{Clock, SystemClock};
 use crate::endpoints::SystemEndpoints;
 use crate::hid::{self, HidInfo};
@@ -42,6 +46,8 @@ pub(super) enum Report {
     /// 扫了一遍本机：此刻在场的 HID collection，枚举不了时是完整原因。配置文件的全文不在这里读，在消息循环那边
     /// 递进内核之前才读（`config.rs` 的 `scanned` 写了为什么）。
     Scanned(Result<Vec<HidInfo>, String>),
+    /// 扫了一遍本机的蓝牙设备：扫到的那些，枚举不了时是完整原因。原样递进内核（[`crate::tray::register::Event::Scanned`]）。
+    BleScanned(Result<Vec<BleBattery>, String>),
 }
 
 /// 排给取数线程的活。
@@ -49,6 +55,7 @@ enum Job {
     Fetch(FetchRequest),
     Save(SaveState),
     Scan,
+    ScanBle,
 }
 
 /// 取数线程的这一头。
@@ -104,6 +111,11 @@ impl Worker {
         self.send(Job::Scan);
     }
 
+    /// 排一遍扫本机的蓝牙设备。
+    pub(super) fn scan_ble(&self) {
+        self.send(Job::ScanBle);
+    }
+
     /// 取数线程交回来的下一样东西，没有了就是 `None`。
     pub(super) fn next_report(&self) -> Option<Report> {
         self.reports.try_recv().ok()
@@ -139,7 +151,7 @@ fn run(
 ) {
     for job in inbox {
         match job {
-            Job::Fetch(_) | Job::Scan if stopping.load(Ordering::SeqCst) => {}
+            Job::Fetch(_) | Job::Scan | Job::ScanBle if stopping.load(Ordering::SeqCst) => {}
             Job::Fetch(request) => {
                 tell(Report::Fetched(Box::new(fetch(&request, &mut last_known))))
             }
@@ -153,6 +165,9 @@ fn run(
             }
             Job::Scan => tell(Report::Scanned(
                 hid::enumerate().map_err(|e| format!("枚举不了本机的设备：{e:#}")),
+            )),
+            Job::ScanBle => tell(Report::BleScanned(
+                bluetooth::enumerate().map_err(|e| format!("枚举不了本机的蓝牙设备：{e:#}")),
             )),
         }
     }

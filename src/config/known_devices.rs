@@ -68,8 +68,10 @@ impl KnownDevice {
             EndpointKind::Wired => self.wired_hint,
             // Dongle24G 不在场只有一种原因，不必逐台写。
             EndpointKind::Dongle24G => "把 2.4G 接收器插上。",
-            // Ble 不是"插上就出现"的：它要先在系统蓝牙里配对，地址还得人去抄。
-            EndpointKind::Ble => "先在系统蓝牙设置里把它配对上，再跑 juicebar scan 抄地址。",
+            // Ble 不是"插上就出现"的：它要先在系统蓝牙里配对，地址还得人在托盘菜单里点一下登记。
+            EndpointKind::Ble => {
+                "先在系统蓝牙设置里把它配对上，再右键托盘图标，在\"登记设备\"里把它登记到这台。"
+            }
         }
     }
 
