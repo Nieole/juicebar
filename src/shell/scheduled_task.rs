@@ -37,18 +37,22 @@ const NORMAL_PRIORITY: i32 = 4;
 /// 消息循环那个线程上的 COM（单线程套间）：活到托盘退出，初始化成了的，丢掉时反初始化。
 ///
 /// 初始化不成不让托盘起不来：只有开机自启用得到它，问、建、删那时各自报错（记日志、菜单不勾），别的照常。
-pub(super) struct Com(bool);
+pub(super) struct Com {
+    /// 这个线程上的 COM 初始化成了没有：成了才在丢掉时反初始化。
+    initialized: bool,
+}
 
 impl Com {
     pub(super) fn init() -> Self {
         // SAFETY: 在这个线程上初始化 COM。
-        Self(unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok())
+        let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
+        Self { initialized }
     }
 }
 
 impl Drop for Com {
     fn drop(&mut self) {
-        if self.0 {
+        if self.initialized {
             // SAFETY: 与上面那一次成了的初始化配对；`drop` 只走一次。
             unsafe { CoUninitialize() };
         }
@@ -61,7 +65,7 @@ pub(super) fn exists() -> Result<bool> {
     // SAFETY: 按名字取一个已登记的任务；取回来的接口随即丢掉。
     match unsafe { root.GetTask(&BSTR::from(TASK_NAME)) } {
         Ok(_) => Ok(true),
-        Err(e) if e.code() == ERROR_FILE_NOT_FOUND.to_hresult() => Ok(false),
+        Err(e) if is_missing(&e) => Ok(false),
         Err(e) => Err(e).with_context(|| format!("问不出计划任务「{TASK_NAME}」在不在")),
     }
 }
@@ -83,9 +87,14 @@ pub(super) fn delete() -> Result<()> {
     // SAFETY: 按名字删一个已登记的任务。
     match unsafe { root.DeleteTask(&BSTR::from(TASK_NAME), 0) } {
         Ok(()) => Ok(()),
-        Err(e) if e.code() == ERROR_FILE_NOT_FOUND.to_hresult() => Ok(()),
+        Err(e) if is_missing(&e) => Ok(()),
         Err(e) => Err(e).with_context(|| format!("删不掉计划任务「{TASK_NAME}」")),
     }
+}
+
+/// 这个错误说的是"没有这个任务"：问的时候就是不在，删的时候就是删过了。
+fn is_missing(error: &windows::core::Error) -> bool {
+    error.code() == ERROR_FILE_NOT_FOUND.to_hresult()
 }
 
 /// 新建一份任务定义，照模块文档里的样子填好，登记到根下（同名的换掉）。

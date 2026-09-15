@@ -109,8 +109,10 @@ pub enum Command {
     Primary(PrimaryRule),
     /// 退出。
     Quit,
-    /// "开机自启"：点完之后该开（`true`）还是该关（`false`），照点的那一刻勾没勾排出来（`super::launch`）。
-    Autostart(bool),
+    /// 点了没勾着的"开机自启"：打开它（`super::launch`）。
+    EnableAutostart,
+    /// 点了勾着的"开机自启"：关掉它。
+    DisableAutostart,
 }
 
 /// 菜单这一块的动作。
@@ -212,8 +214,18 @@ impl Tray {
                 self.quit = true;
                 out.push(super::Action::Menu(Action::Quit));
             }
-            // 建、删计划任务是外壳的事；勾不勾以系统为准，外壳下一次弹出菜单之前再问（`super::launch`）。
-            Command::Autostart(on) => super::launch::on_autostart_clicked(on, out),
+            // 建、删计划任务是外壳的事。勾不勾不跟着改：外壳下一次弹出菜单之前再问系统，建或删没办成，菜单照实不变，而不是
+            // 勾着一个系统里不存在的任务（`super::launch`）。
+            Command::EnableAutostart => {
+                out.push(super::Action::Launch(
+                    super::launch::Action::EnableAutostart,
+                ));
+            }
+            Command::DisableAutostart => {
+                out.push(super::Action::Launch(
+                    super::launch::Action::DisableAutostart,
+                ));
+            }
         }
     }
 }

@@ -112,7 +112,7 @@ impl TrayIcon {
     }
 
     /// 图标在通知区里时，把排着的通知按先后弹出去。弹不动（通知区刚换过一个、还没收到那条广播）就照"不在"记着，剩下的
-    /// 接着排。
+    /// 接着排。弹的那一下超时报失败、而其实已经弹出去了时，这一条之后会再弹一次：宁可重一次，不丢（parking lot Q321）。
     fn pop_pending(&mut self) {
         while self.added {
             let Some(notice) = self.pending.front() else {

@@ -7,7 +7,7 @@
 //!
 //! **开机自启以系统里那个计划任务为准**（ADR-0007）：开没开不另存一份，配置里没有、状态文件里也没有。外壳每次弹出菜单
 //! 之前问一次系统那个任务在不在（[`Event::AutostartAsked`]），这里只记着这一次的答复，菜单照它勾或不勾；点了之后交出
-//! "建"或"删"（[`Action`]），由外壳去办。**缺省不开**：内核自己从不建它，只有用户点了才建。
+//! "建"或"删"（[`Action`]，`super::menu` 的 `on_menu`），由外壳去办。**缺省不开**：内核自己从不建它，只有用户点了才建。
 
 use super::menu::{Command, Entry, Item, Kind};
 use super::notify::Notice;
@@ -53,27 +53,19 @@ impl Launch {
         }
     }
 
-    /// 菜单上"开机自启"那一项：系统里那个任务在，就勾上；点了交出的是点完之后该是的样子。
+    /// 菜单上"开机自启"那一项：系统里那个任务在，就勾上；点了是勾着就关、没勾就开。
     pub(super) fn autostart_entry(&self) -> Item {
+        let command = if self.autostart {
+            Command::DisableAutostart
+        } else {
+            Command::EnableAutostart
+        };
         Item::Entry(Entry {
             checked: self.autostart,
-            command: Some(Command::Autostart(!self.autostart)),
+            command: Some(command),
             ..Entry::new(Kind::Check, "开机自启")
         })
     }
-}
-
-/// 点了"开机自启"：`on` 是点完之后该是的样子，交给外壳去建或删那个任务。
-///
-/// 手上那一份答复**不跟着改**：勾不勾等外壳下一次弹出菜单之前再问系统。建或删没办成，菜单照实不变，而不是勾着一个
-/// 系统里不存在的任务。
-pub(super) fn on_autostart_clicked(on: bool, out: &mut Vec<super::Action>) {
-    let action = if on {
-        Action::EnableAutostart
-    } else {
-        Action::DisableAutostart
-    };
-    out.push(super::Action::Launch(action));
 }
 
 /// 第二个实例来敲门之后弹的那一条：它已经退出了，用户要找的就是托盘里这一个。

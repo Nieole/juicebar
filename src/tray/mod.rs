@@ -20,7 +20,7 @@
 //! | 配置 | [`config`] | `shell/config.rs` | [`config::Event`] | [`config::Action`] |
 //! | 告警 | [`warnings`] | 没有（写状态文件的结果由 `shell/worker.rs` 交回） | 看 [`Event::Fetched`]；[`warnings::Event`] | 只写日志 |
 //! | 菜单深浅 | [`menu_theme`] | `shell/menu_theme.rs` | 没有（外壳启动时问过 Windows，随 [`Look`] 交进来） | 只写日志 |
-//! | 启动 | [`launch`] | `shell/launch.rs` | [`launch::Event`]；[`menu::Command::Autostart`] | [`launch::Action`]；弹通知 |
+//! | 启动 | [`launch`] | `shell/launch.rs` | [`launch::Event`]；[`menu::Command::EnableAutostart`]、[`menu::Command::DisableAutostart`] | [`launch::Action`]；弹通知 |
 //!
 //! 这一层（[`Event`]、[`Action`]、[`Tray::handle`]）只做路由：每个关注点在这里占一格，往自己那一格里
 //! 加事件、加动作、加状态，只改自己的那两个文件（内核一个、外壳一个）。三样是大家共用的，所以住在
@@ -156,7 +156,7 @@ pub enum Event {
     Config(config::Event),
     /// 告警那一侧的事：一件会挂告警的事办没办成，而它不跟着一次取数来。
     Warnings(warnings::Event),
-    /// 启动那一侧的事：第二个实例来敲门了。
+    /// 启动那一侧的事：第二个实例来敲门了；外壳弹出菜单之前问到了开机自启的计划任务在不在。
     Launch(launch::Event),
 }
 

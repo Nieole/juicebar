@@ -61,7 +61,7 @@ fn when_the_system_cannot_be_asked_autostart_is_unchecked_and_the_reason_is_logg
     let menu = tray.menu(NOW);
     let entry = autostart(&menu);
     assert!(!entry.checked, "问不出来就不勾");
-    assert_eq!(entry.command, Some(Command::Autostart(true)));
+    assert_eq!(entry.command, Some(Command::EnableAutostart));
     assert_eq!(
         screen.logs,
         [
@@ -80,7 +80,7 @@ fn autostart_is_off_by_default_and_starting_never_touches_the_task() {
 
     assert!(screen.launch.is_empty(), "启动时不建也不删");
     assert!(!entry.checked);
-    assert_eq!(entry.command, Some(Command::Autostart(true)));
+    assert_eq!(entry.command, Some(Command::EnableAutostart));
 }
 
 /// 勾上：系统说任务不在，点"开机自启"，外壳收到"建那个计划任务"。
