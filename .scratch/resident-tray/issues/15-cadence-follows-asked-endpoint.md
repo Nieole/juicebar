@@ -32,6 +32,13 @@ spec「轮询节奏」与票 05 定的是：每台 Device 按**它上一次取�
 
 **Blocked by:** None
 
-**Status:** needs-triage
+**Status:** wontfix
 
 - [ ] 修法定了之后再写验收
+
+## Comments
+
+**2026-09-15 —— 由 `follow-at-once` 接管，本票不再单独做。**修法在 2026-09-15 那次 `/grill-with-docs` 定了：
+按这一次**真被问到**的那几条 Endpoint 里间隔最长的那条走（取数那一层交回 `tried`），并且每一格按内核此刻手上
+的配置算到没到点（Q172 一并落）。退避那一条方向不做。spec 见 `.scratch/follow-at-once/spec.md`「节奏按真被
+问到的那几条」。
