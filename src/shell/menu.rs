@@ -99,8 +99,9 @@ fn fill(
             dwTypeData: PWSTR(text.as_mut_ptr()),
             ..Default::default()
         };
-        // 预览挂在勾那一格上（不设 `MNS_CHECKORBMP`，调研 8.3）：当前项靠加粗标出来，不画圆点。做不出位图就不挂、记一行
-        // 日志，菜单照样弹——少一张预览比整张菜单弹不出来好。
+        // 预览挂在勾那一格上（不设 `MNS_CHECKORBMP`，调研 8.3）：挂着位图的项即使 `MFS_CHECKED` 也不画圆点，当前项靠加粗
+        // 标出来。做不出位图就不挂、记一行日志，菜单照样弹——少一张预览比整张菜单弹不出来好；那一项于是退回画圆点，
+        // 当前值照样认得出。
         if let Some(preview) = &entry.preview {
             match preview_bitmap(preview) {
                 Ok(bitmap) => {

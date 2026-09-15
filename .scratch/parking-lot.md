@@ -1514,6 +1514,20 @@ Reported 还是 Derived 留给悬停提示与日志。代价是不是 Primary De
 
 **推荐**：补上，等 rt-11 合并之后。翻案关在 `src/config/draft.rs` 与 `tests/config.rs`。归 `/settle`。
 
+### Q304 —— Q240 拍板：两个字节函数仍只收像素切片，宽高由新的 `PreviewBitmap` 自己带着
+
+**From:** resident-tray 票 07（图标样式与菜单显示）
+
+**取的路**：几张并排的预览是 `icon::render_preview` 交出的 `PreviewBitmap`（宽、高、像素，`src/icon/mod.rs`），外壳从它取宽高填
+`BITMAPINFOHEADER`，字节照旧 `menu_preview_bytes(bitmap.pixels())`（`src/shell/menu.rs` 的 `preview_bitmap`）。两个字节函数的签名不动。
+宽高算错的那种错由 `PreviewBitmap` 自己的构造（只有 `render_preview` 造得出）与 `preview-gray` 像素基准守着：拼宽了、拼窄了，24 节网格当场红。
+
+**另一条路**：照 Q240 的推荐让 `menu_preview_bytes` 收 `&PreviewBitmap`、`tray_icon_bytes` 收 `&IconBitmap`。站得住：签名上写明"这是一张
+几乘几的图"，外壳少一处自己取宽高。代价：`tests/icon_bytes.rs` 那几条手算的字面量像素（半透明、全透明、两行两列的行序）要么改成渲染真图标
+（期望值就不再是手算的），要么给两个位图类型各开一个只为用例存在的公开构造；`src/shell/icon.rs` 那一处调用也要改，而 rt-13 正在改那个文件。
+
+**推荐**：维持。翻案关在 `src/icon/bytes.rs` 的两个签名、`src/shell/icon.rs` 与 `src/shell/menu.rs` 各一处调用、`tests/icon_bytes.rs`。归 `/settle`。
+
 ## Settled
 
 <!-- 一条记录一行：编号、它本来的那一句话、分到哪一道、去了哪儿。正文在 git 里，每一趟的收口 commit 写在那一趟的小节里。 -->

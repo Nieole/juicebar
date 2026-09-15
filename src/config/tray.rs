@@ -1,7 +1,8 @@
 //! `[tray]` 表：ADR-0005 的八项设置——托盘图标怎么画（六项，[`IconSettings`]）、菜单里写什么（两项）。
 //!
-//! **键与取值是对外契约**（ADR-0005）：发出去之后改名或删掉一个取值，写过它的配置就读不动了。所以每个键的取值
-//! 与它落到类型上的样子在这里各写一张表，读与写（`super::edit::write_tray`）共用同一张。
+//! **键与取值是对外契约**（ADR-0005）：发出去之后改名或删掉一个取值，写过它的配置就读不动了。所以键名只在
+//! [`TraySetting::key`] 写一次，每个键的取值与它落到类型上的样子在这里各写一张表，读与写（`super::edit::write_tray`）
+//! 共用这两样。
 //!
 //! **认不出的取值按缺省值处理，不让整份配置读不动**，与 `primary` 写错时的处置一致（`crate::primary`）：一个画法
 //! 写错了，托盘照样该画、设备照样该读。每一处认不出记一句（[`Unrecognised`]），托盘把它写进日志——不说出来，
@@ -41,6 +42,17 @@ pub enum PrimaryMark {
 /// `[tray]` 里认不出的一处：一整句话，说清是哪个键、写的是什么、按什么处理。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unrecognised(String);
+
+impl Unrecognised {
+    /// `raw` 认不出，按 `fallback`（那个键的缺省值）处理。
+    fn value(raw: &toml::Value, fallback: TraySetting) -> Self {
+        Self(format!(
+            "[tray] 里的 {} = {raw} 认不出，按缺省值 {} 处理",
+            fallback.key(),
+            fallback.literal()
+        ))
+    }
+}
 
 impl fmt::Display for Unrecognised {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -116,6 +128,13 @@ pub(super) fn name_of<T: PartialEq>(values: &[(&'static str, T)], value: &T) -> 
         .expect("取值表穷举了这个类型的每一个值")
 }
 
+impl TraySettings {
+    /// 设备行上打不打 Primary Device 的勾（`primary_mark = "both"`）。
+    pub fn marks_primary_device_row(&self) -> bool {
+        self.primary_mark == PrimaryMark::Both
+    }
+}
+
 impl<'de> Deserialize<'de> for TraySettings {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Ok(Self::from_toml(&toml::Value::deserialize(deserializer)?))
@@ -134,32 +153,30 @@ impl TraySettings {
         };
         let notes = &mut settings.unrecognised;
         let icon = &mut settings.icon;
-        icon.style = pick(table, "style", STYLE, icon.style, notes);
-        icon.glyph = pick(table, "glyph", GLYPH, icon.glyph, notes);
-        icon.full = pick(table, "full", FULL, icon.full, notes);
-        icon.gray = pick(table, "gray", GRAY, icon.gray, notes);
+        icon.style = pick(table, TraySetting::Style, STYLE, icon.style, notes);
+        icon.glyph = pick(table, TraySetting::Glyph, GLYPH, icon.glyph, notes);
+        icon.full = pick(table, TraySetting::Full, FULL, icon.full, notes);
+        icon.gray = pick(table, TraySetting::Gray, GRAY, icon.gray, notes);
         icon.no_last_known = pick(
             table,
-            "no_last_known",
+            TraySetting::NoLastKnown,
             NO_LAST_KNOWN,
             icon.no_last_known,
             notes,
         );
-        icon.charging = pick(table, "charging", CHARGING, icon.charging, notes);
-        settings.menu_source = match table.get("menu_source") {
+        icon.charging = pick(table, TraySetting::Charging, CHARGING, icon.charging, notes);
+        let menu_source = TraySetting::MenuSource(settings.menu_source);
+        settings.menu_source = match table.get(menu_source.key()) {
             None => settings.menu_source,
             Some(toml::Value::Boolean(on)) => *on,
             Some(other) => {
-                notes.push(Unrecognised(format!(
-                    "[tray] 里的 menu_source = {other} 认不出，按缺省值 {} 处理",
-                    settings.menu_source
-                )));
+                notes.push(Unrecognised::value(other, menu_source));
                 settings.menu_source
             }
         };
         settings.primary_mark = pick(
             table,
-            "primary_mark",
+            TraySetting::PrimaryMark,
             PRIMARY_MARK,
             settings.primary_mark,
             notes,
@@ -168,15 +185,15 @@ impl TraySettings {
     }
 }
 
-/// 表里 `key` 那一项：没写是缺省值；写了表里有的取值就是它；别的（笔误、类型不对）按缺省值，记一句。
+/// 表里 `setting` 那个键：没写是缺省值；写了表里有的取值就是它；别的（笔误、类型不对）按缺省值，记一句。
 fn pick<T: Copy + PartialEq>(
     table: &toml::Table,
-    key: &str,
+    setting: fn(T) -> TraySetting,
     values: &[(&'static str, T)],
     default: T,
     notes: &mut Vec<Unrecognised>,
 ) -> T {
-    let Some(raw) = table.get(key) else {
+    let Some(raw) = table.get(setting(default).key()) else {
         return default;
     };
     let known = raw
@@ -185,10 +202,7 @@ fn pick<T: Copy + PartialEq>(
     if let Some(&(_, value)) = known {
         return value;
     }
-    notes.push(Unrecognised(format!(
-        "[tray] 里的 {key} = {raw} 认不出，按缺省值 \"{}\" 处理",
-        name_of(values, &default)
-    )));
+    notes.push(Unrecognised::value(raw, setting(default)));
     default
 }
 
@@ -218,6 +232,16 @@ pub enum TraySetting {
 pub(super) enum Literal {
     Word(&'static str),
     Switch(bool),
+}
+
+impl fmt::Display for Literal {
+    /// 照 TOML 的写法：字符串带引号，布尔不带。
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Word(word) => write!(f, "\"{word}\""),
+            Self::Switch(on) => write!(f, "{on}"),
+        }
+    }
 }
 
 impl TraySetting {

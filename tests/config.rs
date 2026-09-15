@@ -1,6 +1,6 @@
-//! 配置文件这一头：解析、自举草稿、`config-refresh` 的补全、`primary` 的回写。
+//! 配置文件这一头：解析（连同 `[tray]` 表）、自举草稿、`config-refresh` 的补全、`primary` 与 `[tray]` 的回写。
 //!
-//! 四样东西各住一个文件（`src/config/`），而公开面仍然是一处，所以用例也在同一个文件里。
+//! 这几样东西各住一个文件（`src/config/`），而公开面仍然是一处，所以用例也在同一个文件里。
 
 use juicebar::config::{self, Config};
 use juicebar::config::{PrimaryMark, TraySetting, TraySettings};

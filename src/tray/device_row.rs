@@ -13,7 +13,7 @@
 //!
 //! 设备行没有点击动作。措辞归代码，设计稿基准里只占位（parking lot Q283）。
 
-use crate::config::{PrimaryMark, TraySettings};
+use crate::config::TraySettings;
 use crate::icon::IconState;
 use crate::round::DeviceState;
 
@@ -35,7 +35,7 @@ impl RowDisplay {
     pub(super) fn of(settings: &TraySettings) -> Self {
         Self {
             source_and_age: settings.menu_source,
-            mark_primary: settings.primary_mark == PrimaryMark::Both,
+            mark_primary: settings.marks_primary_device_row(),
         }
     }
 }

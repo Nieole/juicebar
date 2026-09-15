@@ -2,7 +2,8 @@
 //! spec「图标样式与菜单显示」），以及点了之后内核做什么。
 //!
 //! - **"图标样式 ›"**：一级那一行右边不写字。第二层六行，右边写当前值，末尾"恢复默认"（只恢复这六项）。最里一层每个
-//!   选项前面挂一张预览（[`Preview`]），当前值那一项落圆点、加粗（`MFS_DEFAULT`；圆点与预览位图普通菜单项画不到一起，
+//!   选项前面挂一张预览（[`Preview`]），当前值那一项加粗（`MFS_DEFAULT`），**不画圆点**：模型照基准给它标上单选（`checked`），
+//!   而挂着预览位图的项 Windows 不画圆点（圆点与预览位图普通菜单项画不到一起，
 //!   调研 8.3，parking lot Q280），缺省值那一项右边写"默认"，B 电池右边写"16、20 像素不显示数字"。
 //! - **预览**：只把这一项换成该选项，其余照用户此刻的设置；电量固定 57，"满电 100"那一组画 100；画哪个图标状态照设计稿
 //!   （画法、字形、满电 → 正常；没有读数时 → 无已知值；充电标记 → 充电中；灰状态 → Stale、暂停、取数失败三张并排）；
@@ -50,15 +51,26 @@ struct Group<T: 'static> {
     percent: u8,
 }
 
+/// 预览照什么尺寸、什么调色画：托盘此刻那一档，菜单此刻实际的深浅。
+#[derive(Clone, Copy)]
+struct PreviewLook {
+    size: IconSize,
+    theme: Theme,
+}
+
 impl Tray {
     /// "图标样式 ›"：六组，一条分隔线，"恢复默认"。
     pub(super) fn icon_style_menu(&self) -> Item {
         let settings = &self.config.tray;
-        let look = (self.round.look().size, self.menu_theme());
+        // 预览的尺寸是托盘此刻那一档，调色是菜单此刻实际的深浅（不一定是任务栏的深浅）。
+        let drawn_at = PreviewLook {
+            size: self.round.look().size,
+            theme: self.menu_theme(),
+        };
         let mut rows = vec![
             group(
                 settings,
-                look,
+                drawn_at,
                 &Group {
                     title: "画法",
                     options: &[
@@ -75,7 +87,7 @@ impl Tray {
             ),
             group(
                 settings,
-                look,
+                drawn_at,
                 &Group {
                     title: "字形",
                     options: &[
@@ -91,7 +103,7 @@ impl Tray {
             ),
             group(
                 settings,
-                look,
+                drawn_at,
                 &Group {
                     title: "满电 100",
                     options: &[
@@ -107,7 +119,7 @@ impl Tray {
             ),
             group(
                 settings,
-                look,
+                drawn_at,
                 &Group {
                     title: "灰状态",
                     options: &[
@@ -123,7 +135,7 @@ impl Tray {
             ),
             group(
                 settings,
-                look,
+                drawn_at,
                 &Group {
                     title: "没有读数时",
                     options: &[
@@ -140,7 +152,7 @@ impl Tray {
             ),
             group(
                 settings,
-                look,
+                drawn_at,
                 &Group {
                     title: "充电标记",
                     options: &[
@@ -167,7 +179,7 @@ impl Tray {
     pub(super) fn menu_display_menu(&self) -> Item {
         let settings = &self.config.tray;
         let source_and_age = settings.menu_source;
-        let marks_primary = settings.primary_mark == PrimaryMark::Both;
+        let marks_primary = settings.marks_primary_device_row();
         let rows = vec![
             Item::Entry(Entry {
                 checked: source_and_age,
@@ -210,7 +222,7 @@ impl Tray {
 /// 第二层的一行（右边写当前值），连同它最里一层的全部选项。
 fn group<T: Copy + PartialEq>(
     settings: &TraySettings,
-    (size, theme): (IconSize, Theme),
+    PreviewLook { size, theme }: PreviewLook,
     group: &Group<T>,
 ) -> Item {
     let current = (group.current)(&settings.icon);

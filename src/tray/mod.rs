@@ -15,7 +15,7 @@
 //! |---|---|---|---|---|
 //! | 轮询节奏 | [`cadence`] | `shell/cadence.rs` | 看 [`Event::Tick`]、[`Event::Fetched`] | [`cadence::Action`] |
 //! | 一轮 | [`round`]，文字在 [`hover`] | `shell/round.rs` | 看 [`Event::Tick`]、[`Event::Fetched`] | [`round::Action`] |
-//! | 菜单 | [`menu`]，设备行的字在 `device_row` | `shell/menu.rs` | [`menu::Command`] | [`menu::Action`] |
+//! | 菜单 | [`menu`]，设备行的字在 `device_row`，图标样式与菜单显示在 `settings_menu` | `shell/menu.rs` | [`menu::Command`] | [`menu::Action`] |
 //! | 通知 | [`notify`] | `shell/notify.rs` | 看 [`Event::Fetched`] | [`notify::Notice`] |
 //! | 配置 | [`config`] | `shell/config.rs` | [`config::Event`] | [`config::Action`] |
 //! | 告警 | [`warnings`] | 没有（写状态文件的结果由 `shell/worker.rs` 交回） | 看 [`Event::Fetched`]；[`warnings::Event`] | 只写日志 |
