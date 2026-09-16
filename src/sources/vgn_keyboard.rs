@@ -31,13 +31,7 @@ pub const FRAME_LEN: usize = 64;
 /// 不适用；HUB 按 `productName.includes("2.4G")` 分流到 `getDongleData()` 才发这一条。
 const CMD_GET_DONGLE_DATA: [u8; 7] = [0xF7, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
-/// 回包 `[0]`：dongle 还没准备好，把命令再发一遍。
-const NOT_READY: u8 = 0;
-
-/// 回包 `[0]`：这一帧是本次请求的应答。实测恒为 `0x01`。
-const READY: u8 = 1;
-
-/// 就绪标志为 0 时最多试几次。
+/// 就绪尝试上界：未收到有效无线数据时最多试几次。
 ///
 /// HUB 的 `getDongleData()` 是**无界递归**重试，这里要个上界：一条读不到的 Endpoint
 /// 该及时让位给下一条，而不是把这一轮轮询卡死在自己身上。
@@ -76,33 +70,28 @@ pub fn read_battery(transport: &dyn Transport) -> Result<Reading> {
 /// 解析 `0xF7` 的回包。`Ok(None)` 是"dongle 还没准备好，把命令再发一遍"。
 fn parse_dongle_data(frame: &[u8]) -> Result<Option<Reading>> {
     require_frame_len(frame, FRAME_LEN)?;
-    // `[0]` 是就绪标志，不是 cmd 回显。未就绪的帧里 `[1]` 照样躺着一个像模像样的
-    // 百分比，采信它就是凭空发明一个读数。
-    if frame[0] == NOT_READY {
-        return Ok(None);
-    }
-    // 到这里比 HUB 严：它只判 `result[0] == 0`，非零一律当就绪。这条通路上的 feature
-    // 缓冲区保存的是"最近一次应答"，而 `0xF7` 的回包里**没有 cmd 回显可以对**——
-    // 就绪标志是唯一能认出"这不是本次的应答"的字节，所以它得是个真正的标志位而不是
-    // "非零即真"。实测抓到过一帧别的命令的残留 `F4 01 F4 01 …`，放行它就读出 1%。
-    if frame[0] != READY {
+
+    // 结构性检验：回包首字节正常为 0x00 或 0x01（2026-09-16 抓包证实官方 Hub 接收到的帧首字节即为 0x00）。
+    // 实测抓到过别的命令残留 `F4 01 F4 01 …`，首字节非 0/1 时属于读取异常。
+    if frame[0] > 1 {
         bail!(
-            "回包的就绪标志是 {:#04X}，既不是 {NOT_READY:#04X}（未就绪）也不是 {READY:#04X}（就绪）—— 这一帧不是本次请求的应答",
+            "回包首字节就绪标志是 {:#04X}，既不是 0x00 也不是 0x01 —— 这一帧不是本次请求的应答",
             frame[0]
         );
     }
+
+    // 全零帧表示接收器刚初始化或尚未收到键盘无线数据，返回 None 触发重试
+    if frame[1] == 0 && frame[4] == 0 && frame[5] == 0 {
+        return Ok(None);
+    }
+
     let reading = Reading {
         reported_level: frame[1],
-        // 充电位在 `[9]`，但**至今没有实测样本**：实测期间电池一直满电，插线只亮了很短
-        // 的红灯就转绿，从没抓到过 `!= 0`（`docs/protocol.md` 第 7 节仍把它挂在待实测
-        // 清单上）。spec 因此明写「键盘暂不显示充电态」——所以这里既不交 `true` 也不交
-        // `false`，而是说"不知道"。等哪天电量掉下来复测过，这里换成 `Some(frame[9] != 0)`。
+        // 充电位在 `[9]`，但 spec 明写「键盘暂不显示充电态」——保持 None。
         charging: None,
         // 键盘的回包里没有电压。见 `Reading::voltage_mv` 那条文档注释。
         voltage_mv: None,
     };
-    // 就绪标志是这条通路上唯一的**结构性**判据（回包既没有 cmd 回显也没有校验和），
-    // 所以值域这一道不是重复劳动：一帧残留只要 `[0]` 恰好是 `0x01`，就只剩它了。
     require_plausible(&reading)?;
     Ok(Some(reading))
 }

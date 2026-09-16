@@ -6,8 +6,8 @@ mod common;
 
 use common::FakeTransport;
 use common::fixtures::{
-    KEYBOARD_DONGLE_DATA_REQUEST, KEYBOARD_NOT_READY, KEYBOARD_REPORT_ID, KEYBOARD_RESTING_FULL,
-    KEYBOARD_RESTING_FULL_BEFORE_CHARGE, KEYBOARD_STALE_RESIDUE,
+    KEYBOARD_CAPTURED_98, KEYBOARD_DONGLE_DATA_REQUEST, KEYBOARD_NOT_READY, KEYBOARD_REPORT_ID,
+    KEYBOARD_RESTING_FULL, KEYBOARD_RESTING_FULL_BEFORE_CHARGE, KEYBOARD_STALE_RESIDUE,
 };
 use juicebar::sources::{ReportKind, driver_for, vgn_keyboard};
 
@@ -148,6 +148,15 @@ fn rejects_a_ready_frame_whose_level_is_impossible() {
 #[test]
 fn rejects_a_truncated_frame() {
     assert!(read(&[0x01, 0x64, 0x00]).is_err());
+}
+
+/// 2026-09-16 抓包实测回包：首字节 0x00，电量 98%，必须成功解析。
+#[test]
+fn parses_captured_real_dongle_frame_with_zero_header() {
+    let reading = read(&KEYBOARD_CAPTURED_98).unwrap();
+    assert_eq!(reading.reported_level, 98);
+    assert_eq!(reading.charging, None);
+    assert_eq!(reading.voltage_mv, None);
 }
 
 /// 喂一帧回包，取一次数。

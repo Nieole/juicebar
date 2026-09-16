@@ -60,7 +60,8 @@ cargo build --release
 ```
 cargo run --example scan              # 列出所有 HID collection 和带电量属性的 BLE 设备（-- --all 连不含厂商通道的也列）
 cargo run --example caps -- ...       # 打印一条 collection 声明的 Report ID，不向设备发任何字节
-cargo run --example probe -- ...      # 向指定 collection 发原始帧并打印回包（-- --listen 只听不发）
+cargo run --example probe -- ...      # 向指定 collection 发原始帧并打印回包（支持 --vgn-keyboard-crc、--reads、--watch、--parse）
+cargo run --example neon75_probe --   # Neon75 专用抓包调试工具（query 连通性测试 / diff-watch 差分抓包 / send / verify-offline）
 ```
 
 **在管理员终端里跑。**它们不带程序清单，从没提权的终端里跑，`probe` 发给 2.4G 接收器的帧会被上面那样静默吞掉，看起来就是读超时；只枚举、不发帧的 `scan` 在普通终端里也行。
@@ -76,13 +77,10 @@ cargo run --example probe -- ...      # 向指定 collection 发原始帧并打�
 | 设备 | 2.4G | 蓝牙 |
 |---|---|---|
 | VGN Dragonfly 3 Master+ | ✓ 实测可读（程序以管理员身份运行时） | ✓ |
-| VGN Neon75 | 🔴 协议**存疑**、读不到（见下） | ✓ |
+| VGN Neon75 | ✓ 实测可读 | ✓ |
 | 任何 BLE 设备 | — | ✓（只要 Windows 缓存了电量属性；在"登记设备"里新建一台 Device） |
 
-**Neon75 走 2.4G 读不到，而且这条路可能从来没真正工作过**：dongle 的就绪位恒为 0，而同一时刻
-HUB 显示 100% 正常——设备与 dongle 都是好的。权限、睡眠、初始化、重启、时机全排掉了（细节见
-`docs/gaps.md`）。最可能的解释是当初那次"实测通过"读到的是 HUB 放进缓冲区的应答，不是我们请求
-换来的。下一步是 USB 抓包。在那之前键盘靠蓝牙兜底：在右键菜单"登记设备"里，把本机扫到的它登记到键盘那台 Device 上。
+**Neon75 2.4G 协议已彻底收口（2026-09-16）**：通过真机 USB 抓包与 VGN Hub 源码对齐，查明此前所谓的"就绪位恒为 0"实为有效回报（首字节本来即为 `0x00`，电量在 `frame[1]`，休眠位在 `frame[3]`）。修复解析逻辑后，真机实测首读直接秒读命中 98%。
 
 ATK、雷柏等后续接入。协议细节见 [`docs/protocol.md`](docs/protocol.md)。
 
@@ -94,8 +92,7 @@ ATK、雷柏等后续接入。协议细节见 [`docs/protocol.md`](docs/protocol
 - [x] 蓝牙数据源（CfgMgr 读 DEVPKEY_Bluetooth_Battery，含新鲜度）
 - [x] 诊断工具 `scan`、`caps`、`probe`（示例程序；`probe` 含 VGN 鼠标校验和、feature 模式、`--listen` 纯监听）
 - [x] 鼠标经 Dongle24G 与 Wired 取数 —— **真机实测可读**；读数合理性校验（`docs/adr/0004`）与电量来源选择（`docs/adr/0002`）
-- [ ] 键盘经 Dongle24G 取数 —— **代码写完了，但这条路到底通不通存疑**（见"支持的设备"；
-      当初那次"实测通过"很可能读到的是 HUB 的应答，不是我们请求换来的）
+- [x] 键盘经 Dongle24G 取数 —— **真机实测可读**（2026-09-16 抓包与源码对齐后彻底收口）
 - [x] 设备模型与身份合并
 - [x] 配置自举、改了自动重读、插上之后自动补空块
 - [x] 托盘图标渲染（8 项设置，`docs/adr/0005`）

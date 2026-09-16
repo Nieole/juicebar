@@ -98,13 +98,16 @@ pub const KEYBOARD_RESTING_FULL: [u8; KEYBOARD_FRAME_LEN] =
 pub const KEYBOARD_RESTING_FULL_BEFORE_CHARGE: [u8; KEYBOARD_FRAME_LEN] =
     keyboard_frame(&[0x01, 0x64, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00]);
 
-/// 键盘 `0xF7` 回包：dongle 还没准备好。`[0]` 是 `00`。
+/// 键盘 `0xF7` 回包：全零未就绪帧。
 ///
-/// 出处是票 02 点名的那一帧（票写成含 Report ID 的 `00 00 64 00 00 01 01 01 …`），
-/// 也就是上面那帧充电前的回包把就绪位清成 0。**`[1]` 照样是 `0x64`**——这正是它要守的
-/// 那件事：未就绪的帧里也躺着一个看起来很像 100% 的字节，采信它就等于凭空发明一个读数。
-pub const KEYBOARD_NOT_READY: [u8; KEYBOARD_FRAME_LEN] =
-    keyboard_frame(&[0x00, 0x64, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00]);
+/// 2026-09-16 抓包证实：此前以为 `00 64 00 00 01 01 01` 是未就绪帧，而抓包实测表明
+/// 该格式（`[0] == 0`，`[4..6] == 01`）正是官方 VGN Hub 每 2 秒正常读取并采信的电量帧。
+/// 全零帧才是接收器尚未就绪或未收到无线数据时的状态。
+pub const KEYBOARD_NOT_READY: [u8; KEYBOARD_FRAME_LEN] = [0u8; KEYBOARD_FRAME_LEN];
+
+/// 2026-09-16 真机抓包实测回包：电量 98%（0x62），首字节为 0x00。
+pub const KEYBOARD_CAPTURED_98: [u8; KEYBOARD_FRAME_LEN] =
+    keyboard_frame(&[0x00, 0x62, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00]);
 
 /// 键盘那条 feature 通路上实测抓到过的**别的命令的残留**：`00 | F4 01 F4 01 …`。
 ///
